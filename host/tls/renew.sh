@@ -312,7 +312,8 @@ main() {
   local want reason
   want=$(final_active "$STATE_current" "$STATE_standby")
   if [[ $want == current ]]; then reason="current: $WHY_current"; else reason="current: $WHY_current; standby: $WHY_standby"; fi
-  if [[ "$STATE_current" == invalid && "$STATE_standby" == invalid ]]; then note "**both slots are unusable**"; failed=1; fi
+  # staging publishes nothing, so the slots stay as they were: only a real run must end with one usable
+  if [[ "$STAGING" != true && "$STATE_current" == invalid && "$STATE_standby" == invalid ]]; then note "**both slots are unusable**"; failed=1; fi
   if [[ "$want" != "$ACTIVE" ]]; then set_active "$want" "$reason"; else note "active.json stays $ACTIVE"; fi
   if [[ -n "${ACME_ACCOUNT_URI:-}" ]]; then summary "- ACME account: \`$ACME_ACCOUNT_URI\` (the accounturi of the CAA record)"; fi
   if [[ $failed == 1 ]]; then die "at least one issuance failed (see above)"; fi
