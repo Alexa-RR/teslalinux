@@ -21,8 +21,10 @@ Changes from upstream:
   * **Status** (first section, opens by default): what the device is connected to right now, refreshed
     every 3 s: the car and other clients on the hotspot (DHCP name, address, signal, link rate,
     connected time), pages showing the app, the internet uplink (LTE / Wi-Fi / Ethernet, address,
-    reachability and latency, data since start), the LTE modem (operator, technology, signal: a HiLink
-    stick's web API or ModemManager), the hotspot (SSID, band, channel, width), the car's last GPS
+    reachability and latency, data since start), the LTE modem (operator, network type, signal bars,
+    roaming, connection, radio values, data this session and month, SIM problems: a HiLink stick's web
+    API or ModemManager, read by `host/teslalinux-uplink`) and its automatic recovery (status, last
+    step, next step), the hotspot (SSID, band, channel, width), the car's last GPS
     fix, the app's state, and the device (OS, kernel, uptime, load, memory, storage, CPU temperature,
     Pi under-voltage/throttling). `GET /api/status`.
   * **Wi-Fi & LTE** replaces upstream's "Network": hotspot name, password (never sent to the page),

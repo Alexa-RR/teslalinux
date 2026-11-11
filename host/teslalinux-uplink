@@ -23,9 +23,26 @@ card with the networks saved from the settings page (host/teslalinux-network ren
 /etc/teslalinux/wpa_supplicant-client.conf); dhcpcd takes the lease. Under NetworkManager its own
 profiles do that.
 
+LTE modem recovery: a Huawei E3372 that lost the signal (underground) often never reconnects when the
+signal comes back, until it is re-plugged. When LTE has had no internet for 90 s although the stick
+reports coverage, a worker thread (the route checks go on) climbs a ladder, one step at a time, at
+least 2 minutes apart, each one given time to work:
+  1. reconnect: HiLink mobile data off and on (its web API at the gateway / 192.168.8.1);
+     ModemManager: disconnect, then NetworkManager's profile up (or mmcli --simple-connect with the APN)
+  2. reset the modem: HiLink reboot (/api/device/control); ModemManager mmcli --reset
+  3. USB re-enumeration (sysfs authorized 0/1; unbind/bind as fallback); also the first step when the
+     HiLink API does not answer or asks for a login
+  4. USB power cycle with uhubctl (a Pi 4 switches all four ports together): LTE_RECOVERY_POWER_CYCLE
+     auto (default: only when the stick is the only USB device) | on | off
+After the whole ladder it waits 15 minutes and starts again; working LTE resets it. No coverage: it
+waits. With prefer "wifi" and a working Wi-Fi/Ethernet uplink it does nothing. LTE_RECOVERY=off in
+/etc/teslalinux/env turns it off; LTE switched off in the settings (lte.env) too.
+
 Settings: /etc/teslalinux/wifi-client.json (written by teslalinux-network: enabled, prefer, iface, the
-networks). State for the settings page's Status: /run/teslalinux/uplink.json.
+networks), /etc/teslalinux/env (LTE_RECOVERY, LTE_RECOVERY_POWER_CYCLE), /etc/teslalinux/lte.env (APN).
+State for the settings page's Status: /run/teslalinux/uplink.json (with a "modem" object).
 """
+import http.client
 import json
 import os
 import re
@@ -35,6 +52,7 @@ import socket
 import subprocess
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 CONFIG = os.environ.get("TESLALINUX_WIFI_CLIENT", "/etc/teslalinux/wifi-client.json")
 WPA_CONF = os.environ.get("TESLALINUX_WPA_CONF", "/etc/teslalinux/wpa_supplicant-client.conf")
@@ -50,6 +68,8 @@ MODEM_DRIVERS = {"cdc_ether", "cdc_ncm", "huawei_cdc_ncm", "rndis_host", "qmi_ww
 ORDER = {"lte": ("lte", "phone", "ethernet", "wifi"), "wifi": ("wifi", "ethernet", "lte", "phone")}
 WPA_PID = "/run/teslalinux-wpa-client.pid"
 WPA_CTRL = "/run/teslalinux-wpa"
+LTE_ENV = os.environ.get("TESLALINUX_LTE_ENV", "/etc/teslalinux/lte.env")
+SYSFS = os.environ.get("TESLALINUX_SYSFS", "/sys")
 
 
 def read(path):
@@ -224,6 +244,719 @@ class Wpa:
             print("teslalinux-uplink: wpa_supplicant on %s failed: %s" % (iface, r.stderr.strip()), flush=True)
 
 
+# ---------------------------------------------------------------- LTE modem recovery
+
+HUAWEI = "12d1"
+HILINK_PIDS = {"14db", "14dc"}       # E3131/E3372h and kin in HiLink (router) mode
+MM_PIDS = {"1506", "1001", "1003"}   # stick (modem) mode: ModemManager
+HILINK_DRIVERS = {"cdc_ether", "rndis_host", "cdc_ncm"}
+HILINK_HOST = "192.168.8.1"
+HILINK_STATUS = {900: "connecting", 901: "connected", 902: "disconnected", 903: "disconnecting"}
+# 100003: no rights (a login is required); 125001-125003: wrong token / session
+HILINK_LOGIN_ERRORS = {"100003", "125001", "125002", "125003"}
+HTTP_TIMEOUT = 4
+RECOVER_AFTER = 90     # s with coverage but no internet before the first step
+ACTION_GAP = 120       # s between two steps at least
+LADDER_PAUSE = 900     # s after the whole ladder before it starts again
+OBSERVE_EVERY = 30     # s between modem state reads while LTE works (every check while it does not)
+DETAILS_EVERY = 30     # s between reads of the Status page's extras (operator, radio, data, SIM)
+DETAILS_TIMEOUT = 2
+# Huawei HiLink CurrentNetworkType(Ex): (technology, generation)
+HILINK_NET = {1: ("GSM", "2G"), 2: ("GPRS", "2G"), 3: ("EDGE", "2G"), 4: ("WCDMA", "3G"), 5: ("HSDPA", "3G"),
+              6: ("HSUPA", "3G"), 7: ("HSPA", "3G"), 8: ("TD-SCDMA", "3G"), 9: ("HSPA+", "3G"), 19: ("LTE", "4G"),
+              41: ("WCDMA", "3G"), 42: ("HSDPA", "3G"), 43: ("HSUPA", "3G"), 44: ("HSPA", "3G"), 45: ("HSPA+", "3G"),
+              46: ("DC-HSPA+", "3G"), 61: ("TD-SCDMA", "3G"), 62: ("HSDPA", "3G"), 63: ("HSUPA", "3G"),
+              64: ("HSPA", "3G"), 65: ("HSPA+", "3G"), 101: ("LTE", "4G"), 1011: ("LTE CA", "4G+"),
+              111: ("5G NSA", "5G"), 112: ("5G SA", "5G")}
+# SimState of /api/monitoring/converged-status and /api/pin/status (257 = ready)
+HILINK_SIM = {255: "no SIM card", 256: "SIM card error", 257: "ready", 258: "ready", 259: "ready",
+              260: "SIM PIN required", 261: "SIM PUK required (blocked)", 262: "SIM card blocked"}
+MM_TECH = (("5gnr", "5G"), ("lte", "4G"), ("hspa", "3G"), ("umts", "3G"), ("evdo", "3G"), ("edge", "2G"),
+           ("gprs", "2G"), ("gsm", "2G"))
+LADDER = ("reconnect", "modem-reset", "usb-reenumerate", "usb-power-cycle")
+NM_LTE_PROFILE = "teslalinux-lte"
+
+
+class HiLinkError(Exception):
+    pass
+
+
+class HiLinkLogin(HiLinkError):
+    """the web API wants a login (or refused the session token): no control without credentials"""
+
+
+class CommandFailed(Exception):
+    pass
+
+
+class _IfaceHTTP(http.client.HTTPConnection):
+    """HTTP through one interface only (SO_BINDTODEVICE): 192.168.8.1 must be the stick, never a device of
+    the same address on another uplink's network"""
+
+    def __init__(self, host, iface, timeout):
+        super().__init__(host, timeout=timeout)
+        self.iface = iface
+
+    def connect(self):
+        if not self.iface:
+            return super().connect()
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, self.iface.encode() + b"\0")
+            s.settimeout(self.timeout)
+            s.connect((self.host, self.port))
+        except OSError:
+            s.close()
+            raise
+        self.sock = s
+
+
+class HiLink:
+    """The web API of a Huawei HiLink stick, without a login (factory firmware). Every request gets a
+    fresh session cookie and token from /api/webserver/SesTokInfo (tokens are single-use on many
+    firmwares); a token the stick hands back in a response header is used when SesTokInfo is missing."""
+
+    def __init__(self, host, iface=None, timeout=HTTP_TIMEOUT):
+        self.host, self.iface, self.timeout = host, iface, timeout
+        self.cookie, self.token = None, None
+
+    def _request(self, method, path, body=None, headers=None):
+        conn = _IfaceHTTP(self.host, self.iface, self.timeout)
+        try:
+            conn.request(method, path, body=body, headers=headers or {})
+            r = conn.getresponse()
+            data = r.read(65536)
+            tok, ck, status = r.getheader("__RequestVerificationToken"), r.getheader("Set-Cookie"), r.status
+        finally:
+            conn.close()
+        if tok:
+            self.token = tok.split("#")[0]
+        if ck:
+            m = re.search(r"(SessionID=[^;]+)", ck)
+            if m:
+                self.cookie = m.group(1)
+        if status != 200:
+            raise HiLinkError("HTTP %d" % status)
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError:
+            raise HiLinkError("not an XML answer")
+        if root.tag == "error":
+            code = (root.findtext("code") or "").strip()
+            if code in HILINK_LOGIN_ERRORS:
+                raise HiLinkLogin(code)
+            raise HiLinkError("error " + code)
+        return root
+
+    def refresh(self):
+        try:
+            root = self._request("GET", "/api/webserver/SesTokInfo")
+        except HiLinkLogin:
+            raise
+        except HiLinkError:
+            return  # older firmwares: no SesTokInfo, the header token (if any) is all there is
+        ses, tok = (root.findtext("SesInfo") or "").strip(), (root.findtext("TokInfo") or "").strip()
+        if ses:
+            self.cookie = ses if ses.startswith("SessionID=") else "SessionID=" + ses
+        if tok:
+            self.token = tok
+
+    def _headers(self):
+        h = {}
+        if self.cookie:
+            h["Cookie"] = self.cookie
+        if self.token:
+            h["__RequestVerificationToken"] = self.token
+        return h
+
+    def get(self, path):
+        self.refresh()
+        root = self._request("GET", path, headers=self._headers())
+        return {c.tag: (c.text or "").strip() for c in root}
+
+    def post(self, path, inner):
+        body = ('<?xml version="1.0" encoding="UTF-8"?><request>%s</request>' % inner).encode()
+        for attempt in (0, 1):
+            self.refresh()
+            h = self._headers()
+            h["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
+            try:
+                root = self._request("POST", path, body=body, headers=h)
+            except HiLinkLogin as e:
+                if attempt == 0 and str(e).startswith("125"):
+                    continue  # a stale token: once more with a fresh one
+                raise
+            if root.tag == "response" and (root.text or "").strip() in ("OK", ""):
+                return
+            raise HiLinkError("unexpected answer %r" % (root.text or root.tag))
+
+
+def human_bytes(n):
+    """1234567 -> '1.2 MB' (decimal units, as the car page's other figures)"""
+    units = ("B", "KB", "MB", "GB", "TB")
+    v, i = float(n), 0
+    while (v >= 1000 or (i and v >= 10 and round(v) >= 1000)) and i < len(units) - 1:
+        v, i = v / 1000, i + 1
+    return "%d B" % n if i == 0 else ("%.1f %s" % (v, units[i]) if v < 10 else "%d %s" % (round(v), units[i]))
+
+
+def to_int(v):
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def data_pair(down, up):
+    d, u = to_int(down), to_int(up)
+    if d is None and u is None:
+        return None
+    return {"downBytes": d, "upBytes": u, "down": human_bytes(d) if d is not None else None,
+            "up": human_bytes(u) if u is not None else None}
+
+
+def hilink_status_fields(st):
+    """the human-readable part of /api/monitoring/status; every field optional (firmware variants)"""
+    out = {}
+    icon, strength, cs = to_int(st.get("SignalIcon")), to_int(st.get("SignalStrength")), to_int(st.get("ConnectionStatus"))
+    maxicon = to_int(st.get("maxsignal")) or 5
+    if icon is not None:
+        out["bars"] = max(0, min(5, round(icon * 5 / maxicon)))
+    elif strength is not None:
+        out["bars"] = max(0, min(5, round(strength / 20)))
+    out["signal"] = strength if strength is not None else (round(icon * 100 / maxicon) if icon is not None else None)
+    if cs is not None:
+        out["connection"] = HILINK_STATUS.get(cs, "status %d" % cs)
+    net = to_int(st.get("CurrentNetworkTypeEx"))
+    if net is None:
+        net = to_int(st.get("CurrentNetworkType"))
+    if net is not None:
+        tech, gen = HILINK_NET.get(net, (None, None))
+        out["technology"], out["networkType"] = tech, gen if net else "no service"
+    service = st.get("ServiceStatus")
+    if service not in (None, ""):
+        out["service"] = service == "2"
+    roaming = st.get("RoamingStatus")
+    if roaming not in (None, ""):
+        out["roaming"] = roaming == "1"
+    if st.get("SimStatus") in ("0", "1"):
+        out["simValid"] = st["SimStatus"] == "1"
+    out["coverage"] = not (out.get("service") is False or icon == 0 or net == 0)
+    return out
+
+
+def radio_value(v):
+    """'-95dBm' -> '-95 dBm'; '' or None -> None"""
+    v = (v or "").strip()
+    return re.sub(r"^([-+]?[\d.]+)\s*([A-Za-z]+)$", r"\1 \2", v) if v else None
+
+
+def env_get(text, key, default):
+    m = re.search(r"^\s*(?:export\s+)?%s=(?:'([^']*)'|\"([^\"]*)\"|([^\s#]*))" % key, text or "", re.M)
+    return next((g for g in m.groups() if g is not None), default) if m else default
+
+
+def mm_quote(v):
+    return '"%s"' % v if '"' not in v else "'%s'" % v
+
+
+class ModemRecovery:
+    """Watches the LTE stick and climbs the recovery ladder (module docstring) when it is stuck. tick()
+    is called from a worker thread; everything outside (sysfs, commands, clock, sleep) is injectable."""
+
+    def __init__(self, sysfs=SYSFS, env=ENV, lte_env=LTE_ENV, clock=time.monotonic, wall=time.time,
+                 sleep=time.sleep, run=None, which=shutil.which, log=None, hilink_hosts=None):
+        self.sysfs, self.env, self.lte_env = sysfs, env, lte_env
+        self.clock, self.wall, self.sleep, self.which = clock, wall, sleep, which
+        self.run = run or self._run
+        self.log = log or (lambda msg: print("teslalinux-uplink: " + msg, flush=True))
+        self.hilink_hosts = hilink_hosts  # tests: fixed API addresses instead of gateway / 192.168.8.1
+        self.obs, self.observed_at = None, None
+        self.hilink, self.models = None, {}
+        self.details, self.details_at, self.details_host = {}, None, None
+        self.step, self.stuck_since, self.pause_from, self.ladder_last_at = 0, None, None, None
+        self.blocked = False  # the HiLink API refused control (login)
+        self.last = None      # (action, monotonic time, wall time, result)
+        self.said = set()
+        self.public = {"type": "none"}
+        self.worker, self.lock = None, threading.Lock()
+
+    # -------------------------------------------------- helpers
+
+    @staticmethod
+    def _run(cmd, timeout=30):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            return r.returncode, r.stdout + r.stderr
+        except (OSError, subprocess.SubprocessError) as e:
+            return 127, str(e)
+
+    def cmd(self, cmd, timeout=30):
+        rc, out = self.run(cmd, timeout=timeout)
+        if rc != 0:
+            lines = (out or "").strip().splitlines()
+            raise CommandFailed("%s: %s" % (" ".join(cmd[:4]), lines[-1] if lines else "exit %d" % rc))
+        return out
+
+    def say_once(self, key, msg):
+        if key not in self.said:
+            self.said.add(key)
+            self.log(msg)
+
+    def sys(self, *parts):
+        return os.path.join(self.sysfs, *parts)
+
+    def write(self, path, value):
+        with open(path, "w") as f:
+            f.write(value)
+
+    def settings(self):
+        text = read(self.env) or ""
+        rec = env_get(text, "LTE_RECOVERY", "on").strip().lower()
+        pc = env_get(text, "LTE_RECOVERY_POWER_CYCLE", "auto").strip().lower()
+        if rec not in ("on", "off", "1", "0", "yes", "no", "true", "false"):
+            self.say_once("bad-rec", "LTE_RECOVERY=%s is not on|off: on" % rec)
+        if pc not in ("auto", "on", "off"):
+            self.say_once("bad-pc", "LTE_RECOVERY_POWER_CYCLE=%s is not auto|on|off: auto" % pc)
+            pc = "auto"
+        lte = {}
+        for line in (read(self.lte_env) or "").splitlines():
+            m = re.match(r"^LTE_([A-Z]+)=(.*)$", line.strip())
+            if m:
+                v = m.group(2)
+                if len(v) >= 2 and v[0] == v[-1] == "'":
+                    v = v[1:-1].replace("'\\''", "'")
+                lte[m.group(1).lower()] = v
+        return {"recovery": rec not in ("off", "0", "no", "false"), "powerCycle": pc,
+                "lteEnabled": lte.get("enabled", "1") != "0", "apn": lte.get("apn", ""),
+                "user": lte.get("user", ""), "password": lte.get("password", "")}
+
+    # -------------------------------------------------- what is plugged in
+
+    def lte_ifaces(self):
+        try:
+            names = sorted(os.listdir(self.sys("class", "net")))
+        except OSError:
+            return []
+        return [n for n in names if self.iface_driver(n) in MODEM_DRIVERS or n.startswith("wwan")]
+
+    def iface_driver(self, name):
+        return os.path.basename(os.path.realpath(self.sys("class", "net", name, "device", "driver")))
+
+    def iface_usb(self, name):
+        """the USB device (1-1.3) behind a network interface"""
+        p = os.path.realpath(self.sys("class", "net", name, "device"))
+        for _ in range(4):
+            if os.path.exists(os.path.join(p, "idVendor")):
+                return os.path.basename(p)
+            p = os.path.dirname(p)
+        return None
+
+    def usb_devices(self):
+        """[(name, vendor, product, class)] of the USB devices (interfaces and root hubs left out)"""
+        base = self.sys("bus", "usb", "devices")
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            return []
+        out = []
+        for n in names:
+            if ":" in n or n.startswith("usb"):
+                continue
+            d = os.path.join(base, n)
+            out.append((n, read(os.path.join(d, "idVendor")) or "", read(os.path.join(d, "idProduct")) or "",
+                        read(os.path.join(d, "bDeviceClass")) or ""))
+        return out
+
+    def usb_id(self, dev):
+        d = self.sys("bus", "usb", "devices", dev or "")
+        return read(os.path.join(d, "idVendor")) or "", read(os.path.join(d, "idProduct")) or ""
+
+    def mm_modem(self):
+        """(index, modem JSON) of the first ModemManager modem, or None"""
+        if not self.which("mmcli"):
+            return None
+        rc, out = self.run(["mmcli", "-L", "-J"], timeout=5)
+        try:
+            paths = (json.loads(out) if rc == 0 else {}).get("modem-list") or []
+        except ValueError:
+            return None
+        if not paths:
+            return None
+        idx = paths[0].rsplit("/", 1)[-1]
+        rc, out = self.run(["mmcli", "-m", idx, "-J"], timeout=5)
+        try:
+            return idx, (json.loads(out) if rc == 0 else {}).get("modem") or {}
+        except ValueError:
+            return idx, {}
+
+    def observe(self, gateways):
+        o = {"type": "none", "model": None, "interface": None, "usb": None, "api": None, "signal": None,
+             "connection": None, "coverage": None, "sim": None, "mm": None}
+        usb = self.usb_devices()
+        # HiLink first: a network interface of a HiLink driver or product, else the stick alone on USB
+        cands = []
+        for i in self.lte_ifaces():
+            dev = self.iface_usb(i)
+            vid, pid = self.usb_id(dev) if dev else ("", "")
+            if self.iface_driver(i) in HILINK_DRIVERS or (vid == HUAWEI and pid in HILINK_PIDS):
+                cands.append((i, dev, vid == HUAWEI))
+        if not cands:
+            cands = [(None, n, True) for n, vid, pid, _ in usb if vid == HUAWEI and pid in HILINK_PIDS]
+        for iface, dev, huawei in cands:
+            # a Huawei stick: its gateway and the factory address; another cdc_ether device (an Ethernet
+            # adapter, maybe another vendor's HiLink stick): only its gateway, and only a HiLink API counts
+            hosts = self.hilink_hosts or [h for h in dict.fromkeys([gateways.get(iface), HILINK_HOST if huawei else None]) if h]
+            if iface is None and not self.hilink_hosts:
+                hosts = []  # the stick is on USB without its network interface: no way to its API
+            elif not hosts:
+                continue
+            self.observe_hilink(o, hosts, None if self.hilink_hosts else iface)
+            if o["api"] in ("ok", "login-required") or huawei:
+                o.update(type="hilink", interface=iface, usb=dev)
+                return o
+            o["api"] = None  # an Ethernet adapter on cdc_ether, not a modem: leave it alone
+        mm = self.mm_modem()
+        if mm:
+            idx, m = mm
+            gen, g3 = m.get("generic") or {}, m.get("3gpp") or {}
+            sig = (gen.get("signal-quality") or {}).get("value")
+            state, reg = gen.get("state") or "", g3.get("registration-state") or ""
+            ports = [p.split()[0] for p in gen.get("ports") or [] if "(net)" in p]
+            dev = os.path.basename(gen.get("device") or "") or None
+            o.update(type="modemmanager", mm=idx, interface=ports[0] if ports else None, usb=dev, connection=state or None,
+                     model=" ".join(x for x in (gen.get("manufacturer"), gen.get("model")) if x and x != "--") or None,
+                     signal=int(sig) if str(sig).isdigit() else None)
+            techs = [t.lower() for t in gen.get("access-technologies") or []]
+            for key, generation in MM_TECH:
+                if any(key in t for t in techs):
+                    o["networkType"] = generation
+                    break
+            o["technology"] = ", ".join(t.upper() for t in techs) or None
+            if o["signal"] is not None:
+                o["bars"] = max(0, min(5, round(o["signal"] / 20)))
+            op = g3.get("operator-name")
+            o["operator"] = op if op and op != "--" else None
+            o["roaming"] = reg.startswith("roaming") if reg else None
+            reason = gen.get("state-failed-reason") or ""
+            if state == "locked":
+                o["sim"] = "the SIM card is locked (PIN)"
+            elif state == "failed" and "sim" in reason:
+                o["sim"] = "SIM card problem (%s)" % reason
+            elif reg in ("home", "roaming") or reg.startswith(("home-", "roaming-")) \
+                    or state in ("registered", "connecting", "connected", "disconnecting"):
+                o["coverage"] = True
+            elif state == "searching" or reg in ("searching", "idle", "denied") or o["signal"] == 0:
+                o["coverage"] = False
+            return o
+        for n, vid, pid, _ in usb:
+            if vid == HUAWEI and pid in MM_PIDS:
+                o.update(type="modemmanager", usb=n)  # stick mode, but ModemManager does not see it
+                return o
+        return o
+
+    def observe_hilink(self, o, hosts, iface):
+        o["api"] = "unreachable"
+        for host in hosts:
+            h = HiLink(host, iface)
+            try:
+                st = h.get("/api/monitoring/status")
+                o["api"] = "ok"
+                o.update(hilink_status_fields(st))
+            except HiLinkLogin:
+                o["api"] = "login-required"  # the extras below may still answer without a login
+            except (OSError, HiLinkError, http.client.HTTPException):
+                continue
+            self.hilink = h
+            now = self.clock()
+            if self.details_at is None or now - self.details_at >= DETAILS_EVERY or self.details_host != host:
+                self.details, self.details_at, self.details_host = self.hilink_details(host, iface), now, host
+            for k, v in self.details.items():
+                if v is not None and (k not in o or o[k] is None):
+                    o[k] = v
+            if self.details.get("simState") and not self.details.get("simReady"):
+                o["simState"] = self.details["simState"]
+                # recovery stops only for a SIM problem no reset fixes: PIN/PUK, or no SIM (255) when the
+                # status does not say the SIM is valid either (some firmwares answer 255 for "unknown")
+                code = self.details.get("simCode")
+                if code in (260, 261, 262) or (code == 255 and o.get("simValid") is not True):
+                    o["sim"] = o["simState"]
+            elif self.details.get("simReady"):
+                o["simState"] = "ready"
+            elif o.get("simValid") is False:
+                o["simState"] = o["sim"] = "no valid SIM card"
+            return
+
+    def hilink_details(self, host, iface):
+        """What the Status page shows besides the status: model, operator, radio values, data this session and
+        month, SIM state. Short timeouts, every call optional; a login-only endpoint is left out quietly; the
+        first timeout ends the round (the stick is busy, recovery must not wait for it)."""
+        h = HiLink(host, iface, timeout=DETAILS_TIMEOUT)
+        d = {"model": self.models.get(host)}
+
+        def get(path):
+            try:
+                return h.get(path)
+            except (HiLinkError, http.client.HTTPException):
+                return None  # login required, not on this firmware
+
+        try:
+            if not d["model"]:
+                for path, tag in (("/api/device/basic_information", "devicename"), ("/api/device/information", "DeviceName")):
+                    r = get(path)
+                    if r and r.get(tag):
+                        d["model"] = self.models[host] = r[tag]
+                        break
+            r = get("/api/net/current-plmn")
+            if r:
+                d["operator"] = r.get("FullName") or r.get("ShortName") or None
+            r = get("/api/device/signal")
+            if r:
+                radio = {k: radio_value(r.get(k)) for k in ("rsrp", "rsrq", "sinr", "rssi")}
+                radio["cellId"] = (r.get("cell_id") or "").strip() or None
+                band = (r.get("band") or "").strip()
+                radio["band"] = ("B" + band if band.isdigit() else band) or None
+                radio = {k: v for k, v in radio.items() if v}
+                if radio:
+                    d["radio"] = radio
+            r = get("/api/monitoring/traffic-statistics")
+            if r:
+                d["connectedSeconds"] = to_int(r.get("CurrentConnectTime"))
+                d["session"] = data_pair(r.get("CurrentDownload"), r.get("CurrentUpload"))
+            r = get("/api/monitoring/month_statistics")
+            if r:
+                d["month"] = data_pair(r.get("CurrentMonthDownload"), r.get("CurrentMonthUpload"))
+            sim = None
+            for path in ("/api/monitoring/converged-status", "/api/pin/status"):
+                r = get(path)
+                if r and to_int(r.get("SimState")) is not None:
+                    sim = to_int(r.get("SimState"))
+                    break
+            if sim is not None:
+                d["simState"] = HILINK_SIM.get(sim, "SIM state %d" % sim)
+                d["simReady"], d["simCode"] = d["simState"] == "ready", sim
+        except OSError:
+            pass
+        return d
+
+    # -------------------------------------------------- deciding
+
+    def reset(self):
+        self.step, self.stuck_since, self.pause_from, self.ladder_last_at = 0, None, None, None
+        self.blocked = False
+        self.said.clear()
+
+    def next_at(self):
+        if self.step >= len(LADDER):
+            start = self.pause_from if self.pause_from is not None else (self.last[1] if self.last else self.clock())
+            return start + LADDER_PAUSE
+        return self.last[1] + ACTION_GAP if self.last else None
+
+    def only_usb_device(self, dev):
+        others = [n for n, _, _, cls in self.usb_devices() if cls != "09" and n != dev]
+        return not others, others
+
+    def unavailable(self, name, o, cfg):
+        """why a step cannot run now (None: it can)"""
+        if name in ("reconnect", "modem-reset"):
+            if o["type"] == "hilink":
+                if o["api"] == "login-required" or self.blocked:
+                    return "the HiLink web API asks for a login"
+                if o["api"] != "ok":
+                    return "the HiLink web API does not answer"
+            elif o["mm"] is None:
+                return "ModemManager does not see the modem"
+            return None
+        if not o["usb"]:
+            return "the stick was not found on USB"
+        if name == "usb-power-cycle":
+            if cfg["powerCycle"] == "off":
+                return "off (LTE_RECOVERY_POWER_CYCLE=off)"
+            if cfg["powerCycle"] == "auto":
+                only, others = self.only_usb_device(o["usb"])
+                if not only:
+                    return "other USB devices are plugged in (%s): set LTE_RECOVERY_POWER_CYCLE=on to allow it" % ", ".join(others)
+            if not self.which("uhubctl"):
+                return "uhubctl is not installed"
+        return None
+
+    def act(self, name, o, cfg):
+        """run one step: 'done', 'login' (refused by the HiLink API, nothing done) or 'failed: ...'"""
+        try:
+            if name == "reconnect" and o["type"] == "hilink":
+                self.hilink.post("/api/dialup/mobile-dataswitch", "<dataswitch>0</dataswitch>")
+                self.sleep(3)
+                self.hilink.post("/api/dialup/mobile-dataswitch", "<dataswitch>1</dataswitch>")
+            elif name == "modem-reset" and o["type"] == "hilink":
+                self.hilink.post("/api/device/control", "<Control>1</Control>")
+            elif name == "reconnect":
+                self.run(["mmcli", "-m", o["mm"], "--simple-disconnect"], timeout=30)  # fails when not connected
+                if self.nm_profile():
+                    # NetworkManager owns the bearer's IP setup: let it bring its profile up again
+                    self.cmd(["nmcli", "--wait", "45", "connection", "up", NM_LTE_PROFILE], timeout=60)
+                else:
+                    kv = ["apn=" + mm_quote(cfg["apn"])]
+                    if cfg["user"]:
+                        kv.append("user=" + mm_quote(cfg["user"]))
+                    if cfg["password"]:
+                        kv.append("password=" + mm_quote(cfg["password"]))
+                    self.cmd(["mmcli", "-m", o["mm"], "--simple-connect=" + ",".join(kv)], timeout=60)
+            elif name == "modem-reset":
+                self.cmd(["mmcli", "-m", o["mm"], "--reset"], timeout=30)
+            elif name == "usb-reenumerate":
+                self.reenumerate(o["usb"])
+            elif name == "usb-power-cycle":
+                self.power_cycle(o["usb"])
+            return "done"
+        except HiLinkLogin:
+            return "login"
+        except (OSError, HiLinkError, CommandFailed, http.client.HTTPException) as e:
+            return "failed: %s" % e
+
+    def nm_profile(self):
+        if not self.which("nmcli"):
+            return False
+        rc, out = self.run(["nmcli", "-t", "-f", "RUNNING", "general"], timeout=5)
+        if rc != 0 or out.strip() != "running":
+            return False
+        rc, out = self.run(["nmcli", "-t", "-f", "NAME", "connection", "show"], timeout=5)
+        return rc == 0 and NM_LTE_PROFILE in out.splitlines()
+
+    def reenumerate(self, dev):
+        """the kernel forgets the stick and enumerates it again, as if it was re-plugged (no power cut)"""
+        auth = self.sys("bus", "usb", "devices", dev, "authorized")
+        try:
+            self.write(auth, "0")
+        except OSError:
+            drv = self.sys("bus", "usb", "drivers", "usb")
+            self.write(os.path.join(drv, "unbind"), dev)
+            self.sleep(2)
+            self.write(os.path.join(drv, "bind"), dev)
+            return
+        self.sleep(2)
+        try:
+            self.write(auth, "1")
+        except OSError:
+            self.sleep(1)
+            self.write(auth, "1")
+
+    def power_cycle(self, dev):
+        """VBUS off and on with uhubctl. A Pi 4's VL805 switches all four ports together, and only when the
+        USB 2 hub (1-1) and the USB 3 hub (2) are both off."""
+        if "Raspberry Pi 4" in (read(self.sys("firmware", "devicetree", "base", "model")) or ""):
+            hubs = [["-l", "1-1"], ["-l", "2"]]
+        else:
+            hub, port = dev.rsplit(".", 1) if "." in dev else dev.split("-", 1)
+            hubs = [["-l", hub, "-p", port]]
+        try:
+            for h in hubs:
+                self.cmd(["uhubctl"] + h + ["-a", "off", "-r", "3"], timeout=30)
+            self.sleep(5)
+        finally:
+            for h in reversed(hubs):
+                self.cmd(["uhubctl"] + h + ["-a", "on"], timeout=30)
+
+    def decide(self, snap, cfg, o, now):
+        """the status text; runs at most one step"""
+        if o["type"] == "none":
+            # no reset: a stick that restarts (step 2) is gone from USB for a while, and the ladder must
+            # go on from where it was when it is back
+            return "no LTE stick"
+        if snap.get("lte_ok"):
+            if self.step and self.last:
+                self.log("LTE works again (last recovery step: %s)" % self.last[0])
+            self.reset()
+            return "working"
+        if not cfg["recovery"]:
+            return "no internet; automatic recovery is off (LTE_RECOVERY=off)"
+        if not cfg["lteEnabled"]:
+            return "LTE is switched off in the settings"
+        if snap.get("wifi_preferred_ok"):
+            self.stuck_since = None
+            return "no internet; the preferred Wi-Fi is online, no recovery"
+        if o["sim"]:
+            self.stuck_since = None
+            self.say_once("sim", "LTE: %s; recovery cannot help" % o["sim"])
+            return o["sim"]
+        if o["coverage"] is False:
+            self.stuck_since = None
+            self.say_once("coverage", "LTE: no coverage, waiting for the signal")
+            return "no coverage: waiting for the signal"
+        self.said.discard("coverage")
+        if self.stuck_since is None:
+            self.stuck_since = now
+        if now - self.stuck_since < RECOVER_AFTER:
+            return "no internet: waiting for the stick to reconnect"
+        nxt = self.next_at()
+        if nxt is not None and now < nxt:
+            if self.step >= len(LADDER):
+                return "no internet: every recovery step tried, trying again later"
+            return "no internet: waiting for the last step (%s) to work" % (self.last[0] if self.last else "")
+        if self.step >= len(LADDER):
+            self.log("LTE: still no internet; recovery starts again from the first step")
+            self.step, self.pause_from, self.ladder_last_at = 0, None, None
+        while self.step < len(LADDER):
+            name = LADDER[self.step]
+            self.step += 1
+            why = self.unavailable(name, o, cfg)
+            if why:
+                self.say_once("skip-" + name, "LTE recovery: %s skipped: %s" % (name, why))
+                continue
+            self.log("LTE: coverage but no internet for %d s: %s (%s)" % (now - self.stuck_since, name, o["type"]))
+            result = self.act(name, o, cfg)
+            if result == "login":
+                self.blocked = True
+                self.say_once("login", "LTE recovery: the HiLink web API asks for a login; using the USB steps")
+                continue
+            self.last = (name, now, self.wall(), result)
+            self.ladder_last_at = now
+            if result != "done":
+                self.log("LTE recovery: %s %s" % (name, result))
+            return "no internet: tried %s" % name
+        self.pause_from = self.ladder_last_at if self.ladder_last_at is not None else now
+        return "no internet: every recovery step tried, trying again later"
+
+    def tick(self, snap):
+        now = self.clock()
+        cfg = self.settings()
+        if self.obs is None or not snap.get("lte_ok") or now - self.observed_at >= OBSERVE_EVERY:
+            self.obs, self.observed_at = self.observe(snap.get("gateways") or {}), now
+        o = self.obs
+        status = self.decide(snap, cfg, o, now)
+        nxt = self.next_at() if o["type"] != "none" and not snap.get("lte_ok") and cfg["recovery"] else None
+        wall = self.wall()
+        self.public = {
+            "type": o["type"], "model": o["model"], "interface": o["interface"], "usb": o["usb"], "api": o["api"],
+            "signal": o["signal"], "bars": o.get("bars"), "networkType": o.get("networkType"),
+            "technology": o.get("technology"), "operator": o.get("operator"), "roaming": o.get("roaming"),
+            "connection": o["connection"], "coverage": o["coverage"], "connectedSeconds": o.get("connectedSeconds"),
+            "session": o.get("session"), "month": o.get("month"), "radio": o.get("radio"),
+            "simState": o.get("simState"), "simProblem": o["sim"],
+            "recovery": "on" if cfg["recovery"] else "off", "powerCycle": cfg["powerCycle"], "status": status,
+            "step": LADDER[self.step] if o["type"] != "none" and self.step < len(LADDER) else None,
+            "lastAction": self.last[0] if self.last else None, "lastActionAt": int(self.last[2]) if self.last else None,
+            "lastResult": self.last[3] if self.last else None,
+            "nextActionAt": int(wall + nxt - now) if nxt is not None and nxt > now else None,
+        }
+
+    def kick(self, snap):
+        """tick() in a worker thread unless the last one still runs (a step can take a minute)"""
+        with self.lock:
+            if self.worker and self.worker.is_alive():
+                return
+            self.worker = threading.Thread(target=self._safe_tick, args=(snap,), daemon=True)
+            self.worker.start()
+
+    def _safe_tick(self, snap):
+        try:
+            self.tick(snap)
+        except Exception as e:  # never let the modem take the route checks down
+            self.log("modem recovery: %r" % e)
+
+    def state(self):
+        return dict(self.public)
+
+
 def write_state(st):
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     tmp = STATE + ".tmp"
@@ -237,6 +970,7 @@ def main():
     health = {}  # iface -> {"ok": bool, "streak": +good/-bad, "latencyMs", "lastOk"}
     active, since = None, time.time()
     wpa = Wpa()
+    modem = ModemRecovery()
     managed = nm_running()
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -305,6 +1039,17 @@ def main():
                 clear_route()
             active = None
 
+        # the LTE stick: recovery when it has coverage but stays without internet (in a worker thread)
+        lte_ifs = [i for i in ranked if kind(i) == "lte"]
+        lte_rank = order.index("lte")
+        modem.kick({
+            "lte_ok": any(health.get(i, {}).get("ok") for i in lte_ifs),
+            "gateways": {i: cands[i][0] for i in lte_ifs},
+            # prefer "wifi" and an uplink ranked above LTE works: resets would burn for nothing
+            "wifi_preferred_ok": prefer == "wifi" and any(
+                health.get(i, {}).get("ok") for i in ranked if kind(i) in order and order.index(kind(i)) < lte_rank),
+        })
+
         ssid, sig = wifi_link(wifi_if)
         write_state({
             "time": int(time.time()), "prefer": prefer, "active": active, "activeKind": kind(active) if active else None,
@@ -314,6 +1059,7 @@ def main():
                            for i in ranked],
             "wifi": {"iface": wifi_if, "enabled": cfg.get("enabled", True), "ssid": ssid, "signalDbm": sig,
                      "managedBy": "networkmanager" if managed else ("wpa_supplicant" if wpa.pid() else None)},
+            "modem": modem.state(),
         })
         stop.wait(INTERVAL)
     clear_route()

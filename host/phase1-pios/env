@@ -19,6 +19,13 @@ AP_COUNTRY=US
 AP_CHANNEL=44          # 5 GHz. Use 1-11 with HW_MODE=g for 2.4 GHz.
 AP_HW_MODE=a
 AP_SUBNET=172.16.0
+# LTE stick recovery (host/teslalinux-uplink): when the stick has coverage but no internet for 90 s,
+# reconnect, restart the modem, re-enumerate it on USB, then (if allowed) cut USB power; at least
+# 2 minutes between steps, 15 minutes of rest after the last one. on | off
+LTE_RECOVERY=on
+# The USB power cycle (uhubctl; a Pi 4 switches all four ports together):
+#   auto  only when the stick is the only USB device   on  always   off  never
+LTE_RECOVERY_POWER_CYCLE=auto
 # Android display
 DISPLAY_W=1088
 DISPLAY_H=832

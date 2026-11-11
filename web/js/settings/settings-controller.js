@@ -448,7 +448,68 @@
         }
       }
       const modem = st.modem;
-      if (modem) {
+      // teslalinux-uplink's view of the stick (HiLink web API or ModemManager, every field optional) and its
+      // automatic recovery; the API's own modem reading is the fallback when the daemon has none
+      const mr = fo && fo.modem && fo.modem.type && fo.modem.type !== "none" ? fo.modem : null;
+      if (mr) {
+        const bars = typeof mr.bars === "number" ? mr.bars : null;
+        const tech = mr.networkType && mr.technology && mr.technology !== mr.networkType ? mr.networkType + " (" + mr.technology + ")" : mr.networkType || mr.technology;
+        const conn = mr.connection ? mr.connection.charAt(0).toUpperCase() + mr.connection.slice(1) : "";
+        this._appendTile({
+          icon: mr.simProblem ? "signal_cellular_no_sim" : bars === 0 ? "signal_cellular_0_bar" : bars !== null && bars >= 4 ? "signal_cellular_4_bar" : "signal_cellular_alt",
+          title: (mr.operator || "LTE modem") + (mr.model ? " · " + mr.model : ""),
+          subtitle: [tech, conn, mr.roaming ? "Roaming" : "", typeof mr.connectedSeconds === "number" && mr.connection === "connected" ? "for " + fmt.duration(mr.connectedSeconds) : ""]
+            .filter(Boolean)
+            .join(" · "),
+          trailing: this._createTrailingText(bars !== null ? "Signal " + bars + "/5" : typeof mr.signal === "number" ? "Signal " + mr.signal + " %" : ""),
+          dense: false,
+        });
+        if (mr.simProblem) {
+          this._appendTile({ icon: "sim_card_alert", title: "SIM card", subtitle: mr.simProblem, dense: false });
+        }
+        const radio = mr.radio || {};
+        const radioBits = [
+          radio.rsrp ? "RSRP " + radio.rsrp : "",
+          radio.rsrq ? "RSRQ " + radio.rsrq : "",
+          radio.sinr ? "SINR " + radio.sinr : "",
+          radio.rssi && !radio.rsrp ? "RSSI " + radio.rssi : "",
+          radio.band ? "band " + radio.band : "",
+          radio.cellId ? "cell " + radio.cellId : "",
+        ].filter(Boolean);
+        if (radioBits.length) {
+          this._appendTile({ icon: "cell_tower", title: "Radio", subtitle: radioBits.join(" · "), dense: false });
+        }
+        const data = (d) => (d ? "↓ " + (d.down || "?") + "  ↑ " + (d.up || "?") : "");
+        if (mr.session || mr.month) {
+          this._appendTile({
+            icon: "data_usage",
+            title: "Mobile data",
+            subtitle: [mr.session ? "This session " + data(mr.session) : "", mr.month ? "This month " + data(mr.month) : ""].filter(Boolean).join(" · "),
+            dense: false,
+          });
+        }
+        const actionNames = {
+          reconnect: mr.type === "hilink" ? "mobile data off and on" : "reconnect",
+          "modem-reset": "modem restart",
+          "usb-reenumerate": "USB re-enumeration",
+          "usb-power-cycle": "USB power cycle",
+        };
+        if (mr.lastAction || (mr.status && mr.status !== "working")) {
+          const last = mr.lastAction
+            ? "Last: " + (actionNames[mr.lastAction] || mr.lastAction) + ", " + fmt.duration(Math.max(0, st.time - mr.lastActionAt)) + " ago" +
+              (mr.lastResult && mr.lastResult !== "done" ? " (" + mr.lastResult + ")" : "")
+            : "";
+          this._appendTile({
+            icon: "restart_alt",
+            title: "Modem recovery" + (mr.recovery === "off" ? " (off)" : ""),
+            subtitle: [mr.status ? mr.status.charAt(0).toUpperCase() + mr.status.slice(1) : "", last].filter(Boolean).join(" · "),
+            trailing: this._createTrailingText(
+              typeof mr.nextActionAt === "number" && mr.nextActionAt > st.time ? "Next step in " + fmt.duration(mr.nextActionAt - st.time) : "",
+            ),
+            dense: false,
+          });
+        }
+      } else if (modem) {
         const bits = [modem.technology, modem.state].filter(Boolean);
         this._appendTile({
           icon: "signal_cellular_alt",

@@ -11,7 +11,8 @@
 #   --sha256 HEX         the tarball's expected sha256 (default: the release's SHA256SUMS; a URL needs
 #                        one or a SHA256SUMS next to it)
 #   --config FILE        settings as KEY=VALUE lines: the keys of /etc/teslalinux/env (AP_SSID, AP_PSK,
-#                        AP_COUNTRY, DEVICE_HOST, ...) plus LTE_APN, LTE_USER, LTE_PASSWORD, LTE_ROAMING
+#                        AP_COUNTRY, DEVICE_HOST, LTE_RECOVERY, ...) plus LTE_APN, LTE_USER, LTE_PASSWORD,
+#                        LTE_ROAMING (those four go to /etc/teslalinux/lte.env)
 #   --set KEY=VALUE      one setting (repeatable; wins over --config)
 #   --apk PATH           install Waze from this split-APK bundle (.apkm/.xapk/.apks/zip) or directory
 #   --waze apkpure|none  apkpure: download Waze now (verified against Waze's signing certificate; it
@@ -66,10 +67,11 @@ UNITS=(teslalinux-netconfig.service teslalinux-dbus.service teslalinux-uplink.se
 APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.service teslalinux-api.service
   teslalinux-pipewire-pulse.service teslalinux-wireplumber.service teslalinux-pipewire.service tacomp.service teslalinux-dbus.service)
 # runtime packages next to the dist's MANIFEST list (tools/debian/carstack.sh, host/phase1-pios/provision.sh)
-# (bind9-dnsutils: delv/dig, teslalinux-tls reads the certificate's DNS version pointer with them)
+# (bind9-dnsutils: delv/dig, teslalinux-tls reads the certificate's DNS version pointer with them;
+# uhubctl: teslalinux-uplink's last LTE stick recovery step, a USB power cycle)
 RUNTIME_PKGS=(nginx python3 python3-websockets openssl curl ca-certificates bind9-dnsutils rsync ffmpeg dbus
   pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd
-  hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data iw rfkill iproute2
+  hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data uhubctl iw rfkill iproute2
   libgl1-mesa-dri libegl-mesa0 libgbm1 libgles2 v4l-utils
   fonts-roboto fonts-noto-core i2c-tools util-linux-extra unzip sudo zstd xz-utils)
 
@@ -506,7 +508,7 @@ step_config() {
   # every key: --set > --config > the installed env > the template
   local all=(); mapfile -t all < <({ env_keys "$tpl"; env_keys "$ENVF"; [[ -n "$CONFIG" ]] && env_keys "$CONFIG"; for v in "${SETS[@]}"; do echo "${v%%=*}"; done; } | awk 'NF && !seen[$0]++')
   for k in "${all[@]}"; do
-    case "$k" in LTE_*) continue ;; esac
+    case "$k" in LTE_APN|LTE_USER|LTE_PASSWORD|LTE_ROAMING|LTE_ENABLED) continue ;; esac
     if env_has "$tpl" "$k"; then val[$k]=$(env_get "$tpl" "$k"); fi
     if env_has "$ENVF" "$k"; then val[$k]=$(env_get "$ENVF" "$k"); fi
     if [[ -n "$CONFIG" ]] && env_has "$CONFIG" "$k"; then val[$k]=$(env_get "$CONFIG" "$k"); fi
@@ -528,6 +530,8 @@ step_config() {
   [[ "${val[AP_COUNTRY]:-}" =~ ^[A-Z]{2}$ ]] || die "AP_COUNTRY must be a two-letter country code"
   [[ "${val[DEVICE_HOST]:-}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || die "DEVICE_HOST is not a host name"
   [[ "${val[AP_SUBNET]:-}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || die "AP_SUBNET must be the first three octets (172.16.0)"
+  [[ "${val[LTE_RECOVERY]:-on}" =~ ^(on|off)$ ]] || die "LTE_RECOVERY must be on or off"
+  [[ "${val[LTE_RECOVERY_POWER_CYCLE]:-auto}" =~ ^(auto|on|off)$ ]] || die "LTE_RECOVERY_POWER_CYCLE must be auto, on or off"
   # the template's text, with the lines whose value differs replaced; keys it lacks appended
   out=$(mktemp)
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -541,7 +545,7 @@ step_config() {
   declare -A in_tpl=()
   for k in "${keys[@]}"; do in_tpl[$k]=1; done
   for k in "${all[@]}"; do
-    case "$k" in LTE_*) continue ;; esac
+    case "$k" in LTE_APN|LTE_USER|LTE_PASSWORD|LTE_ROAMING|LTE_ENABLED) continue ;; esac
     [[ -n "${in_tpl[$k]:-}" ]] || extra+=("$k")
   done
   if [[ ${#extra[@]} -gt 0 ]]; then

@@ -101,6 +101,18 @@ Upstream has no RIL; modems are USB-Ethernet. Same here:
 * `host/teslalinux-uplink` checks every uplink (LTE, a second Wi-Fi card, Ethernet, a phone on USB)
   through that interface alone and routes through the best one that reaches the internet; the car's
   NAT follows the route.
+* **Stuck-stick recovery** (same daemon): a Huawei E3372 that lost the signal (a garage, a tunnel)
+  often stays offline after the signal returns until it is re-plugged. When LTE has no internet for
+  90 s while the stick reports coverage, it climbs a ladder, one step per 2 minutes at most:
+  reconnect (HiLink mobile data off/on through the stick's web API; ModemManager disconnect and
+  reconnect), modem restart (HiLink `/api/device/control`; `mmcli --reset`), USB re-enumeration
+  (sysfs `authorized`; straight away when the web API is dead or wants a login), USB power cycle
+  with `uhubctl` (a Pi 4 switches all four ports at once, so `LTE_RECOVERY_POWER_CYCLE=auto` only
+  does it when the stick is the only USB device). Then 15 minutes of rest and the ladder again;
+  working LTE resets it. No coverage, a SIM problem, or `prefer wifi` with a working Wi-Fi: nothing
+  is done. `LTE_RECOVERY=off` in `/etc/teslalinux/env` turns it off. The stick's state (signal bars,
+  network type, operator, data used, SIM, the last step) is the `modem` object of
+  `/run/teslalinux/uplink.json`, shown on the car page's Status.
 
 ## 4. Data path
 

@@ -28,7 +28,7 @@ apt-get install -y -q --no-install-recommends \
   hostapd dnsmasq nftables nginx \
   python3 python3-websockets \
   pipewire pipewire-pulse pipewire-alsa wireplumber ffmpeg curl openssl bind9-dnsutils \
-  modemmanager network-manager usb-modeswitch usb-modeswitch-data \
+  modemmanager network-manager usb-modeswitch usb-modeswitch-data uhubctl \
   mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 libgbm1 \
   seatd \
   v4l-utils i2c-tools rtc-tools \
