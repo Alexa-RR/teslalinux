@@ -18,6 +18,11 @@ const FRAME_DURATION_US = 33333;
 const MAX_RENDER_QUEUE_SIZE = 4;
 const MAX_DECODE_QUEUE_SIZE = 8;
 
+// teslalinux: the map colour remap (js/display/map-tone.js), when the page loaded it
+let program = null;
+let mapToneLocations = null;
+let mapTone = null;
+
 let positionLocation = null;
 let texcoordLocation = null;
 let positionBuffer = null;
@@ -343,21 +348,34 @@ function initializeGL(glContext) {
     "  gl_Position = vec4(a_position, 0, 1);\n" +
     "  v_texCoord = a_texCoord;\n" +
     "}";
-  const fragmentSource =
-    "precision mediump float;\n" +
-    "uniform sampler2D u_image;\n" +
-    "varying vec2 v_texCoord;\n" +
-    "void main() {\n" +
-    "  gl_FragColor = texture2D(u_image, v_texCoord);\n" +
-    "}";
+  // teslalinux: the frame through the map colour remap, when it is loaded (off until set)
+  const tone = typeof self.MapTone === "object" && self.MapTone;
+  const fragmentSource = tone
+    ? "precision mediump float;\n" +
+      tone.GLSL +
+      "uniform sampler2D u_image;\n" +
+      "varying vec2 v_texCoord;\n" +
+      "void main() {\n" +
+      "  gl_FragColor = vec4(mapTone(texture2D(u_image, v_texCoord).rgb), 1.0);\n" +
+      "}"
+    : "precision mediump float;\n" +
+      "uniform sampler2D u_image;\n" +
+      "varying vec2 v_texCoord;\n" +
+      "void main() {\n" +
+      "  gl_FragColor = texture2D(u_image, v_texCoord);\n" +
+      "}";
 
   const vertexShader = createShader(glContext, glContext.VERTEX_SHADER, vertexSource);
   const fragmentShader = createShader(glContext, glContext.FRAGMENT_SHADER, fragmentSource);
 
-  const program = glContext.createProgram();
+  program = glContext.createProgram();
   glContext.attachShader(program, vertexShader);
   glContext.attachShader(program, fragmentShader);
   glContext.linkProgram(program);
+  if (tone) {
+    mapToneLocations = tone.locate(glContext, program);
+    tone.apply(glContext, program, mapToneLocations, mapTone);
+  }
 
   positionLocation = glContext.getAttribLocation(program, "a_position");
   texcoordLocation = glContext.getAttribLocation(program, "a_texCoord");
@@ -417,6 +435,15 @@ self.onmessage = function (event) {
     event.data.displayHeight !== undefined
   ) {
     offscreenCanvas = event.data.canvas;
+    // teslalinux: the map colour remap's code and setting (none: frames drawn as they come)
+    mapTone = event.data.mapTone || null;
+    if (event.data.mapToneUrl) {
+      try {
+        importScripts(event.data.mapToneUrl);
+      } catch (error) {
+        self.postMessage({ error: "map colours: " + String(error) });
+      }
+    }
     applyRuntimeConfig({
       displayWidth: event.data.displayWidth,
       displayHeight: event.data.displayHeight,
@@ -454,6 +481,15 @@ self.onmessage = function (event) {
     });
   } else if (event.data.config) {
     applyRuntimeConfig(event.data.config);
+  } else if (event.data.mapTone !== undefined) {
+    // teslalinux: the map colours changed: the last frame (still in the texture) again with them
+    mapTone = event.data.mapTone || null;
+    if (gl && program && mapToneLocations) {
+      self.MapTone.apply(gl, program, mapToneLocations, mapTone);
+      gl.bindTexture(gl.TEXTURE_2D, frameTexture);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    }
   } else if (event.data.h264Data) {
     handleEncodedData(event.data.h264Data);
   }

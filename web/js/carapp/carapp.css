@@ -626,3 +626,420 @@
   .carapp-action.default-action.counting::before { animation-duration: var(--countdown-ms, 10s); }
   .carapp-strip.map.open .carapp-fab, .carapp-pill { animation: none; }
 }
+
+/* ==== the graphite look (Settings > Waze interface > Car interface style) ====================
+   A second look for the same templates, in the manner of current in-car navigation screens:
+   frosted light (day) or dark (night) cards with a 12 px radius, hairline dividers instead of
+   row fills, big distance numerals, frosted tile columns for the map buttons at the right edge,
+   blue only for primary actions. The renderer sets .carapp-graphite (and .carapp-night) on its
+   roots and changes structure in a few places (trip card, tile groups, lanes row, search card).
+   Sizes are in --g units: 1 px of a 1472x768 car display at 213 dpi, scaled with the density.
+   Text is Inter (fonts/Inter-*-car.woff2, OFL 1.1, fonts/Inter-OFL.txt). */
+@font-face {
+  font-family: "Inter Car";
+  src: url("../../fonts/Inter-Regular-car.woff2") format("woff2");
+  font-weight: 100 549;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter Car";
+  src: url("../../fonts/Inter-Bold-car.woff2") format("woff2");
+  font-weight: 550 900;
+  font-display: swap;
+}
+
+.carapp-root.carapp-graphite {
+  /* day */
+  --gr-card: rgba(250, 250, 251, 0.86);
+  --gr-card-solid: #f4f4f5;
+  --gr-tile: rgba(20, 20, 30, 0.055);
+  --gr-tile-strong: rgba(20, 20, 30, 0.09);
+  --gr-sel: rgba(20, 20, 30, 0.07);
+  --gr-text: #1d1d1f;
+  --gr-text-2: #5c5e63;
+  --gr-text-3: #8e9095;
+  --gr-icon: #6f7176;
+  --gr-divider: rgba(0, 0, 0, 0.085);
+  --gr-glyph: #1d1d1f;
+  --gr-blue: #3b6cf0;
+  --gr-blue-soft: #8fabf5;
+  --gr-blue-text: #2d61e6;
+  --gr-orange: #e08a00;
+  --gr-toggle-off: #d0d1d5;
+  --gr-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 18px rgba(0, 0, 0, 0.08);
+  --gr-blur: blur(24px) saturate(1.2);
+  /* the rounded look's names, so its shared rules draw in these colours */
+  --surface: var(--gr-card);
+  --surface-raised: var(--gr-tile-strong);
+  --surface-pressed: var(--gr-sel);
+  --on-surface: var(--gr-text);
+  --on-surface-dim: var(--gr-text-3);
+  --accent: var(--gr-blue);
+  --on-accent: #fff;
+  --lift: var(--gr-shadow);
+  font-family: "Inter Car", "Roboto", Arial, sans-serif;
+  color: var(--gr-text);
+}
+.carapp-root.carapp-graphite.carapp-night {
+  --gr-card: rgba(38, 38, 40, 0.88);
+  --gr-card-solid: #242426;
+  --gr-tile: rgba(255, 255, 255, 0.07);
+  --gr-tile-strong: rgba(255, 255, 255, 0.11);
+  --gr-sel: rgba(255, 255, 255, 0.08);
+  --gr-text: #f3f3f4;
+  --gr-text-2: #b0b2b7;
+  --gr-text-3: #85878c;
+  --gr-icon: #b7b9bd;
+  --gr-divider: rgba(255, 255, 255, 0.085);
+  --gr-glyph: #f3f3f4;
+  --gr-blue-soft: #2f4c94;
+  --gr-blue-text: #7aa0ff;
+  --gr-orange: #f5a524;
+  --gr-toggle-off: #5a5b5f;
+  --gr-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 22px rgba(0, 0, 0, 0.35);
+}
+/* the host's sizes (set on the root by the renderer) in graphite measures, for everything under it */
+.carapp-root.carapp-graphite > * {
+  --card-start: calc(var(--g) * 16);
+  --card-top: calc(var(--g) * 16);
+  --card-bottom: calc(var(--g) * 16);
+  --card-width: calc(var(--g) * 456);
+  --routing-card-width: calc(var(--g) * 456);
+  --card-min-height: 0px;
+  --radius-card: calc(var(--g) * 12);
+  --radius-row: calc(var(--g) * 8);
+  --touch-target: calc(var(--g) * 60);
+  --action-height: calc(var(--g) * 60);
+  --action-icon: calc(var(--g) * 30);
+  --action-min-width: calc(var(--g) * 120);
+  --action-text-pad: calc(var(--g) * 20);
+  --row-min-height: calc(var(--g) * 72);
+  --row-icon: calc(var(--g) * 28);
+  --row-image-small: calc(var(--g) * 30);
+  --row-image-large: calc(var(--g) * 56);
+  --nav-large-image: calc(var(--g) * 64);
+  --nav-small-image: calc(var(--g) * 30);
+  --pill-glyph: calc(var(--g) * 36);
+  --body1: calc(var(--g) * 24);
+  --body2: calc(var(--g) * 20);
+  --body3: calc(var(--g) * 16);
+  --pad-0: calc(var(--g) * 4);
+  --pad-1: calc(var(--g) * 8);
+  --pad-2: calc(var(--g) * 12);
+  --pad-3: calc(var(--g) * 16);
+  --pad-4: calc(var(--g) * 24);
+  --pad-5: calc(var(--g) * 32);
+  --pad-6: calc(var(--g) * 48);
+  --row-list-max: calc(var(--g) * 900);
+}
+.carapp-graphite .carapp-nav-title, .carapp-graphite .carapp-trip-top, .carapp-graphite .carapp-pill b,
+.carapp-graphite .carapp-row-text { font-variant-numeric: tabular-nums; }
+
+/* ---- cards: frosted, one radius, soft shadow ---- */
+.carapp-graphite .carapp-card, .carapp-graphite .carapp-tiles, .carapp-graphite .carapp-strip > .carapp-fab,
+.carapp-graphite .carapp-pill, .carapp-graphite .carapp-toast, .carapp-graphite .carapp-alert {
+  background: var(--gr-card);
+  box-shadow: var(--gr-shadow);
+  -webkit-backdrop-filter: var(--gr-blur);
+  backdrop-filter: var(--gr-blur);
+}
+.carapp-graphite .carapp-card.content { padding: 0; }
+.carapp-graphite .disabled { opacity: 0.4; }
+
+/* header: title at the start, plain icon buttons, a hairline under it */
+.carapp-graphite .carapp-header {
+  min-height: calc(var(--g) * 64);
+  gap: calc(var(--g) * 8);
+  padding: 0 calc(var(--g) * 8) 0 calc(var(--g) * 20);
+  border-bottom: 1px solid var(--gr-divider);
+}
+.carapp-graphite .carapp-header-title { font-size: calc(var(--g) * 22); font-weight: 600; letter-spacing: 0; }
+.carapp-graphite .carapp-header .header-action { margin-left: calc(var(--g) * -12); }
+.carapp-graphite .carapp-action.back, .carapp-graphite .carapp-header .header-end {
+  background: transparent;
+  width: calc(var(--g) * 52);
+  min-width: calc(var(--g) * 52);
+  min-height: calc(var(--g) * 52);
+  border-radius: calc(var(--g) * 8);
+  color: var(--gr-icon);
+}
+.carapp-graphite .carapp-header .header-end.with-title { width: auto; padding: 0 calc(var(--g) * 12); color: var(--gr-blue-text); font-weight: 600; }
+
+/* rows: no fill, a hairline between them */
+.carapp-graphite .carapp-list { gap: 0; }
+.carapp-graphite .carapp-row {
+  position: relative;
+  gap: calc(var(--g) * 16);
+  padding: calc(var(--g) * 14) calc(var(--g) * 16) calc(var(--g) * 14) calc(var(--g) * 20);
+  border-radius: 0;
+}
+.carapp-graphite .carapp-row + .carapp-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(var(--g) * 20);
+  right: calc(var(--g) * 20);
+  height: 1px;
+  background: var(--gr-divider);
+}
+.carapp-graphite .carapp-layer.fullscreen .carapp-row { background: transparent; }
+.carapp-graphite .carapp-row-title { font-size: calc(var(--g) * 20); font-weight: 600; line-height: 1.25; letter-spacing: 0; }
+.carapp-graphite .carapp-row-text { font-size: calc(var(--g) * 16); font-weight: 400; line-height: 1.3; color: var(--gr-text-3); }
+.carapp-graphite .carapp-row .row-image {
+  padding: 0;
+  border-radius: 0;
+  background-color: transparent;
+  color: var(--gr-icon);
+}
+.carapp-graphite .carapp-row .row-image:not(.tinted) { border-radius: calc(var(--g) * 6); }
+.carapp-graphite .carapp-chevron::before { color: var(--gr-text-3); }
+.carapp-graphite .carapp-section-header {
+  font-size: calc(var(--g) * 14);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gr-text-3);
+  padding: calc(var(--g) * 22) calc(var(--g) * 20) calc(var(--g) * 6);
+}
+.carapp-graphite .carapp-row > .row-action.with-title:not(.primary) { color: var(--gr-blue-text); font-weight: 600; }
+.carapp-graphite .selectable.selected, .carapp-graphite .carapp-list.routes .carapp-row.selected {
+  background: var(--gr-sel);
+  border-radius: calc(var(--g) * 8);
+}
+.carapp-graphite .selectable.selected::before, .carapp-graphite .selectable.selected + .carapp-row::before { display: none; }
+.carapp-graphite .carapp-list.routes { padding: calc(var(--g) * 10); }
+.carapp-graphite .carapp-list.routes .carapp-row-title { font-size: calc(var(--g) * 24); }
+.carapp-graphite .carapp-action.route-go { border-radius: calc(var(--g) * 8); padding: calc(var(--g) * 6) calc(var(--g) * 18); font-weight: 600; }
+.carapp-graphite .carapp-radio { border-width: 2px; border-color: var(--gr-text-3); }
+.carapp-graphite .carapp-decoration {
+  background: var(--gr-orange);
+  color: #fff;
+  border: 2px solid #fff;
+  font-size: calc(var(--g) * 14);
+}
+
+/* toggle: a 52 x 30 switch, white knob, blue when on */
+.carapp-graphite .carapp-toggle { width: calc(var(--g) * 52); height: calc(var(--g) * 30); background: var(--gr-toggle-off); }
+.carapp-graphite .carapp-toggle::after {
+  top: calc(var(--g) * 3);
+  left: calc(var(--g) * 3);
+  width: calc(var(--g) * 24);
+  height: calc(var(--g) * 24);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.carapp-graphite .carapp-toggle.on { background: var(--gr-blue); }
+.carapp-graphite .carapp-toggle.on::after { left: calc(var(--g) * 25); background: #fff; }
+
+/* grids: soft tiles, the icon on the tile, its label under it */
+.carapp-graphite .carapp-list.grid {
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--g) * 96), 1fr));
+  gap: calc(var(--g) * 10);
+  padding: calc(var(--g) * 12) calc(var(--g) * 16) calc(var(--g) * 16);
+}
+.carapp-graphite .carapp-grid-item {
+  justify-content: center;
+  min-height: calc(var(--g) * 104);
+  padding: calc(var(--g) * 12) calc(var(--g) * 8);
+  border-radius: calc(var(--g) * 8);
+  background: var(--gr-tile);
+}
+.carapp-graphite .carapp-grid-item .carapp-icon { padding: 0; background-color: transparent; border-radius: 0; }
+.carapp-graphite .carapp-grid-item .carapp-icon.tinted { color: var(--gr-text); }
+.carapp-graphite .carapp-grid-item .carapp-row-title { font-size: calc(var(--g) * 15); font-weight: 500; color: var(--gr-text-2); }
+
+/* buttons: square-ish, 8 px radius; blue only for the primary action */
+.carapp-graphite .carapp-action {
+  border-radius: calc(var(--g) * 8);
+  background: var(--gr-tile-strong);
+  color: var(--gr-text);
+  font-size: calc(var(--g) * 20);
+  font-weight: 600;
+}
+.carapp-graphite .carapp-action.primary { background: var(--gr-blue); color: #fff; }
+.carapp-graphite .carapp-actions { gap: calc(var(--g) * 10); padding: calc(var(--g) * 12) calc(var(--g) * 20) calc(var(--g) * 20); }
+.carapp-graphite .carapp-actions .carapp-action.round { width: calc(var(--g) * 76); min-width: calc(var(--g) * 76); border-radius: calc(var(--g) * 8); }
+.carapp-graphite .carapp-action.default-action { background: var(--fill, var(--gr-blue)); color: #fff; }
+.carapp-graphite .carapp-action.default-action.counting { background: var(--gr-blue-soft); color: #fff; }
+.carapp-graphite .carapp-action.default-action.counting::before { opacity: 1; }
+.carapp-graphite .carapp-clickable:active { background-color: var(--gr-sel); }
+.carapp-graphite .carapp-action.primary.carapp-clickable:active { background-color: var(--gr-blue); }
+
+/* panes and messages */
+.carapp-graphite .carapp-pane-rows { gap: calc(var(--g) * 14); padding: calc(var(--g) * 16) calc(var(--g) * 20) calc(var(--g) * 4); }
+.carapp-graphite .carapp-pane-rows .carapp-row::before { display: none; }
+.carapp-graphite .carapp-pane-rows .carapp-row-title { font-size: calc(var(--g) * 18); }
+.carapp-graphite .carapp-pane-rows .carapp-row-text { font-size: calc(var(--g) * 17); color: var(--gr-text-2); }
+.carapp-graphite .carapp-pane-rows .carapp-row:first-child .carapp-row-title { font-size: calc(var(--g) * 26); }
+.carapp-graphite .carapp-empty, .carapp-graphite .carapp-message-text { font-size: calc(var(--g) * 20); color: var(--gr-text-2); }
+.carapp-graphite .carapp-content.message .carapp-header { border-bottom: 0; }
+
+/* full-screen templates: a plain solid page */
+.carapp-graphite .carapp-layer.fullscreen {
+  background: var(--gr-card-solid);
+  padding: calc(var(--g) * 16) calc(var(--g) * 48) calc(var(--g) * 8);
+}
+.carapp-graphite .carapp-layer.fullscreen .carapp-header-title { font-size: calc(var(--g) * 28); }
+.carapp-graphite .carapp-page { border-radius: calc(var(--g) * 12); background: var(--gr-tile-strong); }
+
+/* the search field: a plain line in the card's head, a blue caret */
+.carapp-graphite .carapp-search-box {
+  height: calc(var(--g) * 76);
+  padding: 0 calc(var(--g) * 4) 0 calc(var(--g) * 2);
+  border-radius: 0;
+  background: transparent;
+}
+.carapp-graphite .carapp-search-box:focus-within { box-shadow: none; }
+.carapp-graphite .carapp-search-glyph { width: calc(var(--g) * 32); height: calc(var(--g) * 32); color: var(--gr-icon); }
+.carapp-graphite .carapp-search { font-size: calc(var(--g) * 25); font-weight: 500; caret-color: var(--gr-blue); }
+.carapp-graphite .carapp-search::placeholder { color: var(--gr-text-3); }
+.carapp-graphite .carapp-card.search .carapp-header { padding-left: calc(var(--g) * 12); }
+
+/* ---- navigation: one turn card (maneuver, lanes, then-step), the trip card ---- */
+.carapp-graphite .carapp-card.steps { padding: 0; --nav-large-image: calc(var(--g) * 72); }
+.carapp-graphite .carapp-step.detailed {
+  min-height: calc(var(--g) * 132);
+  gap: calc(var(--g) * 22);
+  padding: calc(var(--g) * 14) calc(var(--g) * 24) calc(var(--g) * 14) calc(var(--g) * 26);
+  box-sizing: border-box;
+}
+.carapp-graphite .carapp-maneuver {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  color: var(--gr-glyph);
+}
+.carapp-graphite .carapp-maneuver .carapp-glyph { color: var(--gr-glyph); }
+.carapp-graphite .carapp-step-text { gap: calc(var(--g) * 2); }
+.carapp-graphite .carapp-nav-title { font-size: calc(var(--g) * 46); font-weight: 600; line-height: 1.13; letter-spacing: -0.01em; }
+.carapp-graphite .carapp-step-cue { font-size: calc(var(--g) * 23); font-weight: 500; line-height: 1.3; color: var(--gr-text-2); }
+.carapp-graphite .carapp-lanes, .carapp-graphite .carapp-step.compact { margin: 0 calc(var(--g) * 20); border-top: 1px solid var(--gr-divider); }
+.carapp-graphite .carapp-lanes { padding: calc(var(--g) * 10) 0; }
+.carapp-graphite .carapp-lanes .carapp-icon.lanes { margin: 0; height: calc(var(--g) * 56); }
+.carapp-graphite .carapp-step.compact {
+  gap: calc(var(--g) * 18);
+  min-height: calc(var(--g) * 64);
+  padding: 0 calc(var(--g) * 4) 0 calc(var(--g) * 6);
+  border-radius: 0;
+  background: none;
+  color: var(--gr-glyph);
+}
+.carapp-graphite .carapp-step.compact > .carapp-row-text:first-child { display: none; }
+.carapp-graphite .carapp-step.compact > .carapp-row-text {
+  font-size: calc(var(--g) * 21);
+  font-weight: 500;
+  color: var(--gr-text-2);
+  -webkit-line-clamp: 1;
+}
+.carapp-graphite .carapp-icon.junction { width: auto; margin: calc(var(--g) * 4) calc(var(--g) * 20) calc(var(--g) * 20); border-radius: calc(var(--g) * 8); }
+.carapp-graphite .carapp-nav-message { padding: calc(var(--g) * 24); }
+.carapp-graphite .carapp-glyph-badge { background: var(--gr-text); color: var(--gr-card-solid); font-family: inherit; }
+/* the app's own maneuver and lane pictures are drawn for dark car screens: on a light card their
+   lightness is turned over, hues kept (a single-colour glyph is tinted instead) */
+.carapp-graphite:not(.carapp-night) .carapp-maneuver .carapp-icon:not(.tinted),
+.carapp-graphite:not(.carapp-night) .carapp-step.compact .carapp-icon:not(.tinted),
+.carapp-graphite:not(.carapp-night) .carapp-pill .carapp-icon:not(.tinted),
+.carapp-graphite:not(.carapp-night) .carapp-icon.lanes:not(.tinted) { filter: invert(1) hue-rotate(180deg); }
+
+.carapp-graphite .carapp-card.travel.trip {
+  width: var(--card-width);
+  min-width: 0;
+  padding: 0;
+  border-radius: var(--radius-card);
+}
+.carapp-trip-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--g) * 16);
+  padding: calc(var(--g) * 16) calc(var(--g) * 22);
+  white-space: nowrap;
+}
+.carapp-trip-eta { font-size: calc(var(--g) * 26); font-weight: 600; }
+.carapp-trip-rest { display: flex; align-items: baseline; gap: calc(var(--g) * 18); font-size: calc(var(--g) * 21); color: var(--gr-text-2); }
+.carapp-trip-rest b { font-weight: 600; color: var(--gr-text); }
+.carapp-trip-end {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--g) * 62);
+  border-top: 1px solid var(--gr-divider);
+  font-size: calc(var(--g) * 20);
+  font-weight: 500;
+}
+
+/* ---- map buttons: frosted tile columns at the right edge ---- */
+.carapp-graphite .carapp-strip { gap: calc(var(--g) * 16); padding: var(--card-top) var(--card-start); align-items: flex-end; }
+.carapp-graphite .carapp-strip.top.column { flex-direction: column; }
+.carapp-tiles {
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--g) * 4) 0;
+  border-radius: calc(var(--g) * 12);
+  overflow: hidden;
+}
+.carapp-tiles:empty { display: none; }
+.carapp-graphite .carapp-fab {
+  min-width: calc(var(--g) * 64);
+  height: calc(var(--g) * 60);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--gr-icon);
+}
+.carapp-graphite .carapp-fab.primary { background: transparent; color: var(--gr-blue); }
+.carapp-graphite .carapp-tiles > .carapp-fab.with-title, .carapp-graphite .carapp-strip > .carapp-fab {
+  height: calc(var(--g) * 64);
+}
+.carapp-graphite .carapp-tiles:has(> .with-title) { padding: 0; }
+.carapp-graphite .carapp-fab.with-title { padding: 0 calc(var(--g) * 22); font-size: calc(var(--g) * 20); font-weight: 600; color: var(--gr-text); }
+.carapp-graphite .carapp-strip > .carapp-fab { border-radius: calc(var(--g) * 12); }
+.carapp-graphite .carapp-fab.carapp-clickable:active { background-color: var(--gr-sel); }
+
+/* ---- the next step over side panels, toasts, alerts ---- */
+.carapp-graphite .carapp-pill {
+  align-items: center;
+  height: calc(var(--g) * 68);
+  box-sizing: border-box;
+  gap: calc(var(--g) * 16);
+  padding: 0 calc(var(--g) * 26) 0 calc(var(--g) * 20);
+  max-width: calc(100% - var(--card-start) * 4 - var(--card-width) - var(--g) * 64);
+  border-radius: calc(var(--g) * 12);
+  font-size: calc(var(--g) * 22);
+  font-weight: 500;
+  color: var(--gr-glyph);
+}
+.carapp-graphite .carapp-pill b { font-size: calc(var(--g) * 26); font-weight: 600; color: var(--gr-text); }
+.carapp-graphite .carapp-pill .dot { display: none; }
+.carapp-graphite .carapp-pill span:last-child { color: var(--gr-text-2); }
+
+.carapp-graphite .carapp-toast {
+  bottom: var(--card-bottom);
+  padding: calc(var(--g) * 15) calc(var(--g) * 24);
+  border-radius: calc(var(--g) * 12);
+  font-size: calc(var(--g) * 18);
+  font-weight: 500;
+}
+.carapp-graphite .carapp-alert {
+  width: calc(var(--g) * 440);
+  padding: 0;
+  border-radius: calc(var(--g) * 12);
+}
+.carapp-graphite .carapp-alert-top { gap: calc(var(--g) * 16); padding: calc(var(--g) * 14) calc(var(--g) * 12) calc(var(--g) * 14) calc(var(--g) * 20); }
+.carapp-graphite .carapp-alert-top > .carapp-icon { color: var(--gr-text); }
+.carapp-graphite .carapp-alert .carapp-row-title { font-size: calc(var(--g) * 21); }
+.carapp-graphite .carapp-alert .carapp-actions { gap: 0; padding: 0; border-top: 1px solid var(--gr-divider); flex-wrap: nowrap; }
+.carapp-graphite .carapp-alert .carapp-actions .carapp-action {
+  flex: 1 1 0;
+  min-height: calc(var(--g) * 60);
+  border-radius: 0;
+  background: transparent;
+  color: var(--gr-text);
+  font-size: calc(var(--g) * 19);
+  font-weight: 500;
+}
+.carapp-graphite .carapp-alert .carapp-actions .carapp-action.primary { color: var(--gr-blue-text); font-weight: 600; }
+.carapp-graphite .carapp-alert .carapp-actions .carapp-action + .carapp-action { border-left: 1px solid var(--gr-divider); }
+.carapp-graphite .carapp-alert-timer { height: calc(var(--g) * 3); background: var(--gr-blue); }
+.carapp-graphite .carapp-progress { border-color: var(--gr-tile-strong); border-top-color: var(--gr-blue); }

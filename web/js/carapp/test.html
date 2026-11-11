@@ -6,66 +6,149 @@
 <title>Car app renderer test</title>
 <!-- teslalinux: renders test-templates.json with carapp-renderer.js over a stand-in map, at the
      car display's size (1472x768) scaled to the window. Clicks are listed below the display.
-     Open through a web server (fetch of the JSON files): python3 -m http.server in web/. -->
+     Open through a web server (fetch of the JSON files): python3 -m http.server in web/.
+     URL parameters: t=TEMPLATE, look=rounded|graphite, night=1, nav=1 (the app navigates),
+     alert=1, toast=1, shot=1 (the display alone at 1:1, for screenshots). -->
 <style>
   @font-face { font-family: "Roboto"; src: url("../../fonts/Roboto-Regular.ttf"); }
   @font-face { font-family: "Material Icons"; src: url("../../fonts/MaterialIcons-Regular.otf"); }
   :root { color-scheme: dark; }
   body { margin: 0; background: #111; color: #ddd; font: 14px "Roboto", sans-serif; }
-  #bar { display: flex; gap: 8px; padding: 8px 16px; flex-wrap: wrap; }
+  #bar { display: flex; gap: 8px; padding: 8px 16px; flex-wrap: wrap; align-items: center; }
   #bar button { font: inherit; padding: 4px 10px; }
+  #bar button[aria-pressed="true"] { background: #ddd; color: #111; }
+  #bar .sep { width: 1px; height: 20px; background: #444; }
   #stage { position: relative; margin: 0 16px; }
   #display {
-    position: absolute; left: 0; top: 0; width: 1472px; height: 768px; transform-origin: 0 0;
-    /* stand-in for the app's map stream */
-    background: repeating-linear-gradient(35deg, #2b3440 0 60px, #26303a 60px 120px);
+    position: absolute; left: 0; top: 0; width: 1472px; height: 768px; transform-origin: 0 0; overflow: hidden;
+    /* stand-in for the app's map stream: blocks and streets, light by day, dark by night */
+    background-color: #e4e5e7;
+    background-image:
+      linear-gradient(90deg, transparent 0 96px, #c6c8cc 96px 98px, #fff 98px 108px, #c6c8cc 108px 110px, transparent 110px),
+      linear-gradient(0deg, transparent 0 96px, #c6c8cc 96px 98px, #fff 98px 108px, #c6c8cc 108px 110px, transparent 110px),
+      linear-gradient(90deg, transparent 0 30px, #dadbde 30px 80px, transparent 80px),
+      linear-gradient(0deg, transparent 0 30px, #dadbde 30px 80px, transparent 80px);
+    background-size: 110px 110px;
   }
+  #display.night {
+    background-color: #2f3032;
+    background-image:
+      linear-gradient(90deg, transparent 0 96px, #414245 96px 98px, #242426 98px 108px, #414245 108px 110px, transparent 110px),
+      linear-gradient(0deg, transparent 0 96px, #414245 96px 98px, #242426 98px 108px, #414245 108px 110px, transparent 110px),
+      linear-gradient(90deg, transparent 0 30px, #353639 30px 80px, transparent 80px),
+      linear-gradient(0deg, transparent 0 30px, #353639 30px 80px, transparent 80px);
+  }
+  #display > div { position: absolute; left: 0; top: 0; width: 1472px; height: 768px; }
   #log { margin: 8px 16px; font-family: monospace; white-space: pre-wrap; max-height: 20vh; overflow: auto; }
+  body.shot #bar, body.shot #log { display: none; }
+  body.shot #stage { margin: 0; }
 </style>
 <link rel="stylesheet" href="carapp.css">
 </head>
 <body>
 <div id="bar"></div>
-<div id="stage"><div id="display"></div></div>
+<div id="stage"><div id="display"><div id="templates"></div><div id="popups" class="carapp-popups"></div></div></div>
 <div id="log"></div>
 <script src="carapp-renderer.js"></script>
 <script>
   "use strict";
-  // icons 0-6 of the test templates (0: the app icon): simple shapes drawn here (the real ones
-  // are the app's PNGs)
+  // icons 0-21 of the test templates (0: the app icon): simple shapes drawn here (the real ones
+  // are the app's PNGs). The white ones stand for single-colour glyphs (tinted by the renderer,
+  // as the car page's controller finds them), the others for pictures (7: a lanes picture drawn
+  // for dark screens, white and grey).
+  const W = 'fill="#fff"';
+  const SHAPES = {
+    0: '<rect x="2" y="2" width="20" height="20" rx="6" fill="#33ccff"/><circle cx="12" cy="12" r="5" fill="#fff"/>',
+    1: '<circle cx="12" cy="12" r="8" ' + W + '/>',
+    2: '<path d="M4 12 12 4 20 12v8h-5v-5H9v5H4z" ' + W + '/>',
+    3: '<rect x="4" y="7" width="16" height="12" rx="2" ' + W + '/>',
+    4: '<path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" ' + W + '/>',
+    5: '<path d="M5 11h14v2H5z" ' + W + '/>',
+    6: '<path d="M6 20V10h8V6l6 6-6 6v-4H9v6z" ' + W + '/>',
+    7: '<g fill="none" stroke-width="2.2"><path d="M6 22V12q0-4-4-4" stroke="#888"/><path d="M14 22V5" stroke="#888"/><path d="M22 22V5" stroke="#888"/><path d="M30 22V12q0-4 4-4" stroke="#fff"/></g><path d="M2 5 0 8l2 3z" fill="#888"/><path d="M11.5 6 14 2l2.5 4zM19.5 6 22 2l2.5 4z" fill="#888"/><path d="M34 5l2 3-2 3z" fill="#fff"/>',
+    8: '<circle cx="12" cy="12" r="10" fill="#1e63d6"/><path d="M12 6l5 2v4c0 3-2 5-5 6-3-1-5-3-5-6V8z" fill="#fff"/>',
+    9: '<path d="M12 3 22 20H2z" fill="#f29d1b"/><path d="M11 9h2v6h-2zM11 16h2v2h-2z" fill="#fff"/>',
+    10: '<path d="M7 3h10v18l-5-4-5 4z" ' + W + '/>',
+    11: '<path d="M12 4a8 8 0 1 1-8 8h2a6 6 0 1 0 6-6zM11 8h2v4l3 2-1 1.5-4-2.5z" ' + W + '/>',
+    13: '<path d="M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zm0 2a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM15 16.4l1.4-1.4 4.6 4.6-1.4 1.4z" ' + W + '/>',
+    14: '<path d="M7 21V12L3 8l1.4-1.4L7 9.2V3h2v9l-2 2zm8 0v-6l4-4V7h-2l3-4 3 4h-2v5l-4 4v5z" ' + W + '/>',
+    15: '<path d="M4 9h4l5-4v14l-5-4H4zm12-1q3 4 0 8l-1.4-1.4q2-2.6 0-5.2z" ' + W + '/>',
+    16: '<path d="M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z" ' + W + '/>',
+    17: '<path d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z" ' + W + '/>',
+    18: '<path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1A17 17 0 0 1 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1z" ' + W + '/>',
+    19: '<rect x="3" y="8" width="18" height="9" rx="3" fill="#e5372b"/><circle cx="7.5" cy="17.5" r="2" fill="#333"/><circle cx="16.5" cy="17.5" r="2" fill="#333"/><rect x="6" y="5" width="12" height="5" rx="2" fill="#f06b5f"/>',
+    20: '<path d="M12 3 22 20H2z" fill="#f5c400"/><path d="M11 9h2v6h-2zM11 16h2v2h-2z" fill="#333"/>',
+    21: '<circle cx="12" cy="12" r="10" fill="#f29d1b"/><path d="M7 14l3-6 3 4 2-2 2 4z" fill="#fff"/>',
+  };
+  const GLYPHS = new Set([1, 2, 3, 4, 5, 6, 10, 11, 13, 14, 15, 16, 17, 18]);
   function iconUrl(id) {
-    const shapes = {
-      1: '<circle cx="12" cy="12" r="8" fill="#fff"/>',
-      2: '<path d="M4 12 12 4 20 12v8h-5v-5H9v5H4z" fill="#fff"/>',
-      3: '<rect x="4" y="7" width="16" height="12" rx="2" fill="#fff"/>',
-      0: '<rect x="2" y="2" width="20" height="20" rx="6" fill="#33ccff"/><circle cx="12" cy="12" r="5" fill="#fff"/>',
-      4: '<path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" fill="#fff"/>',
-      5: '<path d="M5 11h14v2H5z" fill="#fff"/>',
-      6: '<path d="M6 20V10h8V6l6 6-6 6v-4H9v6z" fill="#fff"/>',
-    };
-    if (!shapes[id]) return null;
-    return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' + shapes[id] + "</svg>");
+    if (!SHAPES[id]) return null;
+    const box = id === 7 ? "0 0 36 24" : "0 0 24 24";
+    return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + box + '">' + SHAPES[id] + "</svg>");
   }
   const log = (m) => { const l = document.getElementById("log"); l.textContent = JSON.stringify(m) + "\n" + l.textContent; };
+  const params = new URLSearchParams(location.search);
+  const shot = params.get("shot") === "1";
+  document.body.classList.toggle("shot", shot);
   function fit() {
     const d = document.getElementById("display");
-    const scale = Math.min((window.innerWidth - 32) / 1472, (window.innerHeight * 0.75) / 768);
+    const scale = shot ? 1 : Math.min((window.innerWidth - 32) / 1472, (window.innerHeight * 0.75) / 768);
     d.style.transform = "scale(" + scale + ")";
     document.getElementById("stage").style.height = 768 * scale + "px";
   }
   window.addEventListener("resize", fit);
   Promise.all([fetch("host-style.json").then((r) => r.json()), fetch("test-templates.json").then((r) => r.json())]).then(([style, data]) => {
-    const r = new TLCarAppRenderer(document.getElementById("display"), style, { send: log, icon: iconUrl, density: data.density });
+    const popups = document.getElementById("popups");
+    const r = new TLCarAppRenderer(document.getElementById("templates"), style,
+      { send: log, icon: iconUrl, iconIsGlyph: (id) => GLYPHS.has(id), density: data.density });
+    r.listen(popups);
+    const state = {
+      t: params.get("t") || Object.keys(data.templates)[0],
+      look: params.get("look") === "graphite" ? "graphite" : "rounded",
+      night: params.get("night") === "1",
+    };
+    r.navigating = params.get("nav") === "1";
     const bar = document.getElementById("bar");
-    for (const name of Object.keys(data.templates)) {
+    const button = (label, onclick, pressed) => {
       const b = document.createElement("button");
-      b.textContent = name;
-      b.onclick = () => r.render(data.templates[name]);
+      b.textContent = label;
+      b.onclick = () => { onclick(); update(); };
+      b._pressed = pressed;
       bar.appendChild(b);
+    };
+    const sep = () => { const s = document.createElement("span"); s.className = "sep"; bar.appendChild(s); };
+    function update() {
+      for (const b of bar.querySelectorAll("button")) if (b._pressed) b.setAttribute("aria-pressed", b._pressed());
+      document.getElementById("display").classList.toggle("night", state.night);
+      if (r.setLook) r.setLook(state.look, state.night);
     }
-    const first = new URLSearchParams(location.search).get("t") || Object.keys(data.templates)[0];
-    r.render(data.templates[first]);
+    const show = (name) => {
+      state.t = name;
+      // the routing info of a navigation screen stays for the pill over later panels
+      if (r.navigating && !/^navigation/.test(name)) r.render(data.templates.navigationLanes);
+      r.render(data.templates[name]);
+    };
+    for (const name of Object.keys(data.templates)) button(name, () => show(name), () => state.t === name);
+    sep();
+    button("Rounded", () => (state.look = "rounded"), () => state.look === "rounded");
+    button("Graphite", () => (state.look = "graphite"), () => state.look === "graphite");
+    button("Day", () => (state.night = false), () => !state.night);
+    button("Night", () => (state.night = true), () => state.night);
+    sep();
+    button("Navigating", () => { r.navigating = !r.navigating; show(state.t); }, () => r.navigating);
+    button("Toast", () => r.toast(popups, data.toast, false));
+    button("Alert", () => r.alert(popups, data.alert));
+    update();
+    show(state.t);
+    if (params.get("alert") === "1") r.alert(popups, data.alert);
+    if (params.get("toast") === "1") {
+      r.toast(popups, data.toast, true);
+      // a screenshot keeps it (a copy, which the toast's timer does not remove)
+      const t = popups.querySelector(".carapp-toast");
+      if (shot && t) t.replaceWith(t.cloneNode(true));
+    }
     fit();
+    document.body.dataset.ready = "1";
   });
 </script>
 </body>

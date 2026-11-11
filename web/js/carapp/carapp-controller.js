@@ -8,6 +8,33 @@
 
   const RETRY_MS = 3000;
 
+  // The car interface's look (Settings > Waze interface): this browser's choice, kept in its
+  // local storage like the page's other display preferences (it changes nothing on the device but
+  // the day/night choice, which goes to the car-app host on every connection).
+  const LOOK_STYLE_KEY = "teslalinux.carInterfaceStyle";
+  const LOOK_DAY_NIGHT_KEY = "teslalinux.carDayNight";
+  const LOOK_MAP_KEY = "teslalinux.carMapColours";
+  const STYLES = ["rounded", "graphite"];
+  const DAY_NIGHT = ["auto", "day", "night"];
+  const MAP_COLOURS = ["muted", "app"];
+
+  function readPref(key, allowed, fallback) {
+    try {
+      const v = global.localStorage.getItem(key);
+      return allowed.indexOf(v) >= 0 ? v : fallback;
+    } catch (e) {
+      return fallback; // storage off (private mode): the defaults
+    }
+  }
+
+  function writePref(key, value) {
+    try {
+      global.localStorage.setItem(key, value);
+    } catch (e) {
+      // storage off: the choice lasts for this page only
+    }
+  }
+
   class CarAppController {
     constructor() {
       this.socket = null;
@@ -18,6 +45,63 @@
       this.template = null;
       this.lastArea = "";
       this.retry = null;
+      this.lookStyle = readPref(LOOK_STYLE_KEY, STYLES, "rounded");
+      this.dayNight = readPref(LOOK_DAY_NIGHT_KEY, DAY_NIGHT, "auto");
+      this.mapColours = readPref(LOOK_MAP_KEY, MAP_COLOURS, "muted");
+      this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
+    }
+
+    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours}. */
+    getLook() {
+      return { style: this.lookStyle, dayNight: this.dayNight, mapColours: this.mapColours };
+    }
+
+    /**
+     * A new choice of look: "rounded" or "graphite", and "auto", "day" or "night". The day/night
+     * choice also goes to the car-app host, which passes it to the app as the car's night mode
+     * (its map turns dark or light with it).
+     */
+    setLook(look) {
+      if (look && STYLES.indexOf(look.style) >= 0) {
+        this.lookStyle = look.style;
+        writePref(LOOK_STYLE_KEY, look.style);
+      }
+      if (look && DAY_NIGHT.indexOf(look.dayNight) >= 0 && look.dayNight !== this.dayNight) {
+        this.dayNight = look.dayNight;
+        writePref(LOOK_DAY_NIGHT_KEY, look.dayNight);
+        this.send({ type: "dayNight", mode: this.dayNight });
+      }
+      if (look && MAP_COLOURS.indexOf(look.mapColours) >= 0) {
+        this.mapColours = look.mapColours;
+        writePref(LOOK_MAP_KEY, look.mapColours);
+      }
+      this.applyLook();
+    }
+
+    /** night: the driver's choice, else the car's night mode from the host (day until it tells) */
+    isNight() {
+      if (this.dayNight === "night") return true;
+      if (this.dayNight === "day") return false;
+      return this.hostNight === true;
+    }
+
+    applyLook() {
+      if (this.renderer) this.renderer.setLook(this.lookStyle, this.isNight());
+      this.applyMapColours();
+    }
+
+    /**
+     * The app's map in the Graphite look's muted colours (js/display/map-tone.js, a shader pass of
+     * the H.264 renderers; the MJPEG one shows it as it is): only with the Graphite look, and only
+     * while the page knows whether the app draws its day or its night map (the driver's choice, or
+     * the host's night mode), since each has its own palette.
+     */
+    applyMapColours() {
+      const known = this.dayNight !== "auto" || this.hostNight !== null;
+      const tone = this.mode === "car" && this.lookStyle === "graphite" && this.mapColours === "muted" && known
+        ? (this.isNight() ? "night" : "day") : null;
+      global.displayMapTone = tone;
+      if (typeof global.setDisplayMapTone === "function") global.setDisplayMapTone(tone);
     }
 
     async start() {
@@ -35,6 +119,8 @@
         if (e.detail && e.detail !== this.mode) global.location.reload();
       });
       if (mode !== "car") return;
+      // the map colours for the display's renderer, whether it starts before or after this
+      this.applyMapColours();
       let style;
       try {
         style = await (await fetch("./js/carapp/host-style.json")).json();
@@ -75,6 +161,10 @@
       const url = TAHtml.createFlavor().displayWebSocket.replace(/\/sockets\/display$/, "/sockets/carapp");
       const ws = new WebSocket(url);
       this.socket = ws;
+      // the driver's day or night (the host starts on "auto", the sun, after each app start)
+      ws.onopen = () => {
+        if (this.dayNight !== "auto") this.send({ type: "dayNight", mode: this.dayNight });
+      };
       ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));
       ws.onclose = () => {
         if (this.socket === ws) this.socket = null;
@@ -115,6 +205,11 @@
             this.renderer.navigating = m.active;
             this.draw();
           }
+          break;
+        case "dayNight":
+          // the car's night mode (state): what the app hears as CarContext.isDarkMode
+          this.hostNight = !!m.night;
+          this.applyLook();
           break;
         case "restrictions":
           // the car's driving restrictions (state): lists capped, typing off while moving
@@ -199,6 +294,7 @@
           density: this.surface.dpi,
         });
         this.renderer.listen(this.popupsEl);
+        this.renderer.setLook(this.lookStyle, this.isNight());
         this.renderer.navigating = !!this.navigating;
         if (this.restrictions) this.renderer.setRestrictions(this.restrictions);
       }

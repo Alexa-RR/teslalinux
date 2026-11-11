@@ -130,8 +130,12 @@
       '}'
     ].join('\n');
 
+    // teslalinux: the map colour remap (js/display/map-tone.js) after the YUV conversion, when the
+    // worker loaded it (off until setMapTone)
+    var tone = typeof self !== 'undefined' && typeof self.MapTone === 'object' ? self.MapTone : null;
     var fragmentShaderScript = [
       'precision highp float;',
+      tone ? tone.GLSL : '',
       'varying highp vec2 textureCoord;',
       'varying highp vec2 uTextureCoord;',
       'varying highp vec2 vTextureCoord;',
@@ -143,7 +147,8 @@
       '  highp float y = texture2D(ySampler, textureCoord).r;',
       '  highp float u = texture2D(uSampler, uTextureCoord).r;',
       '  highp float v = texture2D(vSampler, vTextureCoord).r;',
-      '  gl_FragColor = vec4(y, u, v, 1) * YUV2RGB;',
+      tone ? '  gl_FragColor = vec4(mapTone((vec4(y, u, v, 1) * YUV2RGB).rgb), 1.0);'
+           : '  gl_FragColor = vec4(y, u, v, 1) * YUV2RGB;',
       '}'
     ].join('\n');
 
@@ -182,6 +187,21 @@
     gl.uniformMatrix4fv(YUV2RGBRef, false, YUV2RGB);
 
     this.shaderProgram = program;
+    if (tone) {
+      this.mapToneLocations = tone.locate(gl, program);
+      tone.apply(gl, program, this.mapToneLocations, null);
+    }
+  };
+
+  /**
+   * teslalinux: the map colours ("day", "night" or null), and the last picture again with them when
+   * there is one (its planes are still in the textures).
+   */
+  YUVCanvas.prototype.setMapTone = function (preset, redraw) {
+    var gl = this.contextGL;
+    if (!gl || !this.mapToneLocations) return;
+    self.MapTone.apply(gl, this.shaderProgram, this.mapToneLocations, preset || null);
+    if (redraw) gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   };
 
   YUVCanvas.prototype.initBuffers = function () {

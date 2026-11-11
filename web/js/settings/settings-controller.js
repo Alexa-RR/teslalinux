@@ -281,6 +281,56 @@
       this._appendDescription(
         "The car interface is the one Waze shows on car screens: the map fills the display, with turn cards, a search screen and large buttons on top. Your saved places and settings are the same in both.",
       );
+      // the car interface's look: kept by this browser (js/carapp/carapp-controller.js), applied
+      // at once; the day/night choice also switches Waze's map
+      const car = global.TLCarApp;
+      if (state.interface !== "car" || !car || !car.getLook) {
+        return;
+      }
+      const look = car.getLook();
+      this._appendTile({
+        icon: "palette",
+        title: "Car interface style",
+        subtitle: "Rounded: dark rounded panels. Graphite: frosted panels, light by day and dark by night",
+        trailing: this._createSelect(
+          [
+            { value: "rounded", label: "Rounded" },
+            { value: "graphite", label: "Graphite" },
+          ],
+          look.style,
+          async (value) => car.setLook({ style: value }),
+        ),
+        dense: false,
+      });
+      this._appendTile({
+        icon: "brightness_4",
+        title: "Day and night",
+        subtitle: "Automatic follows the sun at the car's position. Waze's map and the Graphite panels switch with it",
+        trailing: this._createSelect(
+          [
+            { value: "auto", label: "Automatic" },
+            { value: "day", label: "Day" },
+            { value: "night", label: "Night" },
+          ],
+          look.dayNight,
+          async (value) => car.setLook({ dayNight: value }),
+        ),
+        dense: false,
+      });
+      this._appendTile({
+        icon: "map",
+        title: "Map colours",
+        subtitle: "With Graphite: Waze's map shown in muted greys with a blue route (on this screen only; Waze is unchanged)",
+        trailing: this._createSelect(
+          [
+            { value: "muted", label: "Muted" },
+            { value: "app", label: "Waze's own" },
+          ],
+          look.mapColours,
+          async (value) => car.setLook({ mapColours: value }),
+        ),
+        dense: false,
+      });
     }
 
     _showLocaleNotice(text) {

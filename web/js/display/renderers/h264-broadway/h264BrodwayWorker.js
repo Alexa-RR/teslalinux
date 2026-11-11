@@ -38,7 +38,14 @@ function rebuildYuvCanvas() {
     type: "yuv420",
     reuseMemory: true,
   });
+  // teslalinux: the map colours on the new canvas (no picture in it yet)
+  mapToneDrawn = false;
+  if (yuvCanvas.setMapTone) yuvCanvas.setMapTone(mapTone, false);
 }
+
+// teslalinux: the map colour remap's setting (js/display/map-tone.js), "day", "night" or null
+let mapTone = null;
+let mapToneDrawn = false;
 
 function applyRuntimeConfig(config) {
   const runtimeConfig = config || {};
@@ -112,6 +119,7 @@ function drawImageToCanvas(image) {
     uData: u,
     vData: v,
   });
+  mapToneDrawn = true;
 }
 
 function splitNalUnits(data) {
@@ -238,6 +246,15 @@ self.onmessage = function (event) {
     event.data.displayHeight !== undefined
   ) {
     offscreenCanvas = event.data.canvas;
+    // teslalinux: the map colour remap's code and setting (none: pictures drawn as they come)
+    mapTone = event.data.mapTone || null;
+    if (event.data.mapToneUrl) {
+      try {
+        importScripts(event.data.mapToneUrl);
+      } catch (error) {
+        console.error("map colours: " + String(error));
+      }
+    }
     applyRuntimeConfig({
       displayWidth: event.data.displayWidth,
       displayHeight: event.data.displayHeight,
@@ -258,6 +275,10 @@ self.onmessage = function (event) {
     };
   } else if (event.data.config) {
     applyRuntimeConfig(event.data.config);
+  } else if (event.data.mapTone !== undefined) {
+    // teslalinux: the map colours changed: the last picture again with them
+    mapTone = event.data.mapTone || null;
+    if (yuvCanvas && yuvCanvas.setMapTone) yuvCanvas.setMapTone(mapTone, mapToneDrawn);
   } else if (event.data.h264Data) {
     handleEncodedData(new Uint8Array(event.data.h264Data));
   }

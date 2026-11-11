@@ -150,9 +150,36 @@
       this.style = style;
       this.ctx = ctx;
       this.dp = (ctx.density || 160) / 160;
+      // the look (setLook): the rounded panels, or graphite by day or by night
+      this.graphite = false;
+      this.night = false;
+      this.roots = [root];
       root.classList.add("carapp-root");
       this.applyTokens();
       this.listen(root);
+    }
+
+    /**
+     * The look of the panels: "rounded" (the default: dark graphite cards with large radii, the
+     * same by day and by night) or "graphite" (frosted light or dark cards, hairline dividers,
+     * square-ish tiles; night follows the car's day and night). A change redraws the screen.
+     */
+    setLook(theme, night) {
+      const graphite = theme === "graphite";
+      night = !!night;
+      if (graphite === this.graphite && night === this.night) return;
+      const structural = graphite !== this.graphite;
+      this.graphite = graphite;
+      this.night = night;
+      for (const r of this.roots) {
+        r.classList.toggle("carapp-graphite", graphite);
+        r.classList.toggle("carapp-night", graphite && night);
+      }
+      // the two looks differ in structure in a few places (trip card, tiles, search): a new draw
+      if (structural && this.lastWrapper) {
+        this.root.textContent = "";
+        this.render(this.lastWrapper);
+      }
     }
 
     /**
@@ -162,7 +189,10 @@
     listen(root) {
       if (root !== this.root) {
         root.classList.add("carapp-root");
+        root.classList.toggle("carapp-graphite", this.graphite);
+        root.classList.toggle("carapp-night", this.graphite && this.night);
         this.applyTokens(root);
+        this.roots.push(root);
       }
       // touching the panel that runs a default action's countdown stops it (the driver is choosing)
       root.addEventListener("pointerdown", (e) => {
@@ -302,6 +332,9 @@
       s.setProperty("--pad-5", px("template_padding_5"));
       s.setProperty("--divider", this.color("template_gray_846", "#2e3134"));
       s.setProperty("--blue", this.color("template_standard_blue", "#669df6"));
+      // the graphite look's unit: its sizes are drawn for a 1472x768 car display at 213 dpi, and
+      // scale with the density like the host's own sizes
+      s.setProperty("--g", (this.dp * 160 / 213).toFixed(4) + "px");
     }
 
     // ---- model helpers --------------------------------------------------------------------------
@@ -554,7 +587,32 @@
       }
       if (folding) wrap.classList.add(this.mapActionsOpen ? "open" : "folded");
       for (const a of actions) wrap.appendChild(this.action(a, true));
+      if (this.graphite) this.tiles(wrap, cls);
       return wrap;
+    }
+
+    /**
+     * The graphite look's map buttons: columns of frosted tiles at the right edge (the top strip
+     * too). A run of icon buttons shares one tile; on the map strip the persistent buttons (the
+     * app's report button) get their own tile apart from the zoom ones; a titled button is a
+     * tile of its own.
+     */
+    tiles(wrap, cls) {
+      const buttons = Array.from(wrap.children);
+      let group = null;
+      let key = null;
+      for (const b of buttons) {
+        const k = b.classList.contains("with-title") ? "title"
+          : cls === "map" && b.classList.contains("persistent") ? "persistent" : "icons";
+        if (!group || k !== key || k === "title") {
+          group = document.createElement("div");
+          group.className = "carapp-tiles";
+          wrap.appendChild(group);
+          key = k;
+        }
+        group.appendChild(b);
+      }
+      if (cls === "top") wrap.classList.add("column");
     }
 
     /** the folded map actions out (and the timer that folds them again restarted) or in */
@@ -957,7 +1015,9 @@
       if (step) {
         const d = document.createElement("div");
         d.className = "carapp-step detailed";
-        const ic = this.maneuverIcon(step.maneuver, "--nav-large-image", "#ffffff");
+        // the glyph on the rounded look's blue tile is white; graphite has no tile: the glyph
+        // takes the card's ink
+        const ic = this.maneuverIcon(step.maneuver, "--nav-large-image", this.graphite ? "currentColor" : "#ffffff");
         if (ic) {
           const tile = document.createElement("div");
           tile.className = "carapp-maneuver";
@@ -980,7 +1040,15 @@
           const lanes = this.icon(step.lanesImage, "--nav-large-image");
           if (lanes) {
             lanes.classList.add("lanes");
-            card.appendChild(lanes);
+            if (this.graphite) {
+              // graphite: a row of its own between hairlines
+              const row = document.createElement("div");
+              row.className = "carapp-lanes";
+              row.appendChild(lanes);
+              card.appendChild(row);
+            } else {
+              card.appendChild(lanes);
+            }
           }
         }
       }
@@ -1015,6 +1083,7 @@
 
     /** TravelEstimate in the travel estimate card (travel_estimate_view) */
     travelCard(est) {
+      if (this.graphite) return this.tripCard(est);
       const card = this.card("travel");
       if (!est) return card;
       // the travel estimate as car hosts lay it out: the time left large, then the arrival time
@@ -1046,11 +1115,8 @@
       }
       const sub = document.createElement("div");
       sub.className = "carapp-row-text";
-      const at = est.arrivalTimeAtDestination;
-      if (at && at.timeSinceEpochMillis) {
-        const d = new Date(at.timeSinceEpochMillis + (at.zoneOffsetSeconds || 0) * 1000);
-        sub.appendChild(document.createTextNode(String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0")));
-      }
+      const arrival = this.arrivalTime(est);
+      if (arrival) sub.appendChild(document.createTextNode(arrival));
       if (est.remainingDistance) {
         if (sub.textContent) sub.appendChild(document.createTextNode(" \u2022 "));
         const dd = document.createElement("span");
@@ -1062,6 +1128,59 @@
       if (sub.textContent) col.appendChild(sub);
       row.appendChild(col);
       card.appendChild(row);
+      return card;
+    }
+
+    /** the arrival time of a TravelEstimate at the destination's clock ("11:52"), or "" */
+    arrivalTime(est) {
+      const at = est.arrivalTimeAtDestination;
+      if (!at || !at.timeSinceEpochMillis) return "";
+      const d = new Date(at.timeSinceEpochMillis + (at.zoneOffsetSeconds || 0) * 1000);
+      return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
+    }
+
+    /**
+     * The graphite look's trip card: the arrival time large at the start, the time and distance
+     * left at the end, and while the app navigates the end-drive control as a text button across
+     * the card's foot (NavigationManagerCallback.onStopNavigation).
+     */
+    tripCard(est) {
+      const card = this.card("travel trip");
+      if (!est) return card;
+      const top = document.createElement("div");
+      top.className = "carapp-trip-top";
+      const arrival = this.arrivalTime(est);
+      if (arrival) {
+        const eta = document.createElement("div");
+        eta.className = "carapp-trip-eta";
+        eta.textContent = arrival;
+        top.appendChild(eta);
+      }
+      const rest = document.createElement("div");
+      rest.className = "carapp-trip-rest";
+      if (est.remainingTimeSeconds >= 0) {
+        const t = document.createElement("b");
+        t.textContent = formatDuration(est.remainingTimeSeconds < 60 ? 60 : est.remainingTimeSeconds);
+        const c = this.carColor(est.remainingTimeColor, null);
+        if (c) t.style.color = c;
+        rest.appendChild(t);
+      }
+      if (est.remainingDistance) {
+        const dd = document.createElement("span");
+        dd.textContent = this.distance(est.remainingDistance);
+        const c = this.carColor(est.remainingDistanceColor, null);
+        if (c) dd.style.color = c;
+        rest.appendChild(dd);
+      }
+      top.appendChild(rest);
+      card.appendChild(top);
+      if (this.navigating) {
+        const end = document.createElement("div");
+        end.className = "carapp-trip-end carapp-clickable";
+        end.dataset.act = "stop-nav";
+        end.textContent = "End drive";
+        card.appendChild(end);
+      }
       return card;
     }
 
@@ -1132,6 +1251,16 @@
           layer.appendChild(this.actionStrip(mapStrip, "map", { fold: bare }));
           break;
         }
+        case "SearchTemplate":
+          if (this.graphite) {
+            // graphite: the search is a card over the live map, the keyboard under it
+            const card = this.card("content search");
+            card.appendChild(this.content(t));
+            layer.appendChild(card);
+            layer.appendChild(this.actionStrip(t.actionStrip, "top", { skipIcons: this.headerIcons(t) }));
+            break;
+          }
+        // falls through
         default: {
           // full-screen templates (lists, panes, messages, search, grids): the host draws them on
           // its plain background, not over the map; long lists page with the arrows at the left
@@ -1275,6 +1404,11 @@
       pill.className = "carapp-pill";
       const strong = document.createElement("b");
       const cue = document.createElement("span");
+      // the graphite pill leads with the turn's glyph
+      if (this.graphite && info.$ !== "MessageInfo" && info.currentStep) {
+        const ic = this.maneuverIcon(info.currentStep.maneuver, "--pill-glyph", "currentColor");
+        if (ic) pill.appendChild(ic);
+      }
       if (info.$ === "MessageInfo") {
         this.setText(strong, info.title);
         if (info.text) this.setText(cue, info.text);
@@ -1440,11 +1574,13 @@
         const b = c.getBoundingClientRect();
         if (b.width) left = Math.max(left, (b.right - rootBox.left) / scale + margin);
       }
-      for (const s of this.root.querySelectorAll(".carapp-strip.map")) {
+      // strips standing as columns at the right edge (the map strip; the graphite top strip) narrow
+      // the area from the right, a row across the top lowers its top
+      for (const s of this.root.querySelectorAll(".carapp-strip.map, .carapp-strip.column")) {
         const b = s.getBoundingClientRect();
         if (b.width) right = Math.min(right, (b.left - rootBox.left) / scale);
       }
-      for (const s of this.root.querySelectorAll(".carapp-strip.top, .carapp-pill")) {
+      for (const s of this.root.querySelectorAll(".carapp-strip.top:not(.column), .carapp-pill")) {
         const b = s.getBoundingClientRect();
         if (b.height) top = Math.max(top, (b.bottom - rootBox.top) / scale);
       }

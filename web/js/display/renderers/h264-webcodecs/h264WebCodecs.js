@@ -106,10 +106,21 @@ if (worker) {
       displayHeight: initialRuntimeConfig.displayHeight,
       windowWidth: initialRuntimeConfig.windowWidth,
       windowHeight: initialRuntimeConfig.windowHeight,
+      // teslalinux: the map colour remap (js/display/map-tone.js) and its current setting
+      mapToneUrl: new URL("./js/display/map-tone.js", window.location.href).href,
+      mapTone: window.displayMapTone || null,
     },
     [offscreenCanvas],
   );
 }
+
+// teslalinux: the map colours ("day", "night" or null), set by the car interface
+window.setDisplayMapTone = function setDisplayMapTone(tone) {
+  window.displayMapTone = tone || null;
+  if (worker) {
+    worker.postMessage({ mapTone: window.displayMapTone });
+  }
+};
 
 window.updateDisplayRendererConfig = function updateDisplayRendererConfig(nextConfig) {
   var runtimeConfig = buildRuntimeConfig(nextConfig || {});

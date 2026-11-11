@@ -120,6 +120,33 @@ Changes from upstream:
   arrows on full-screen lists, the end-drive control, toasts and alerts, and the driving
   restrictions (lists capped, search typing off while moving). `test.html` +
   `test-templates.json` render sample templates without a device (serve `web/` over HTTP).
+  Two looks, chosen in Settings > Waze interface > Car interface style and kept in the browser's
+  local storage (`teslalinux.carInterfaceStyle`, like the page's other display preferences; the
+  device keeps nothing): "Rounded" (the default: dark graphite cards, pill buttons, round map
+  buttons) and "Graphite" (frosted light or dark cards with hairline dividers, a single turn card
+  with lanes and the next step, a trip card with an "End drive" foot, the map buttons as frosted
+  tile columns, the search as a card over the live map; `.carapp-graphite` in `carapp.css`, a few
+  structural branches in the renderer). Graphite follows day and night: the driver's choice
+  (Settings > Waze interface > Day and night, `teslalinux.carDayNight`, sent to the car-app host
+  as `dayNight`, so the app's map switches too) or, on Automatic, the host's `dayNight` state.
+  With Graphite, "Map colours: Muted" (the default; `teslalinux.carMapColours`) shows the app's
+  map in the look's colours: `js/display/map-tone.js` (new) is one function added to the H.264
+  renderers' fragment shaders (`h264-webcodecs/h264WebCodecsWorker.js` after its texture read,
+  `h264-broadway/YUVCanvas.js` after its YUV conversion; each worker loads it by the URL its page
+  script passes, `window.setDisplayMapTone("day"|"night"|null)` switches it and redraws the last
+  frame). Map surfaces turn neutral grey, the app's purple (day) or cyan (night) route the look's
+  blue; strong and warm colours (traffic, pins, reports, the speedometer) stay. No extra pass, about
+  60 shader operations per pixel; off, the shader returns at once. It runs only while the page
+  knows which of the app's two palettes is on screen (day or night chosen, or reported by the
+  host). The MJPEG renderer shows the map as it is. The app itself is not changed.
+* `fonts/Inter-Regular-car.woff2`, `fonts/Inter-Bold-car.woff2` (new): the Graphite look's text
+  face, Inter 4.001 by The Inter Project Authors (SIL Open Font License 1.1, `fonts/Inter-OFL.txt`,
+  github.com/rsms/inter), the static Regular and Bold cut to Latin, Latin-1 and Latin Extended-A
+  plus a few signs (U+0020-007E, U+00A0-017F, U+0218-021B, U+02C6, U+02DA, U+02DC, U+2013-2014,
+  U+2018-201E, U+2022, U+2026, U+2032-2033, U+2039-203A, U+20AA, U+20AC, U+2122, U+2190-2193,
+  U+2212) with fontTools (`pyftsubset --flavor=woff2 --no-hinting --desubroutinize
+  --layout-features=kern,tnum,calt,case,ccmp,locl,mark,mkmk`). Weights up to 549 use Regular,
+  heavier ones Bold. Text outside the subset (Hebrew, Arabic) falls back to the page's fonts.
 * `fonts/MaterialSymbolsRounded-car.woff2` (new): the maneuver and control glyphs of the car panels,
   a subset of Google's Material Symbols Rounded (Apache License 2.0,
   github.com/google/material-design-icons, `variablefont/MaterialSymbolsRounded*.ttf` at commit

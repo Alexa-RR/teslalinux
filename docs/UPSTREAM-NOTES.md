@@ -100,6 +100,9 @@ Host to page:
   restrictions (driving state from the GPS speed, AOSP's default restriction map); state, sent to
   every new page. While they apply the page caps lists at the host's content limits and turns the
   search field off when `noKeyboard`.
+- `{"type":"dayNight","night":B}`: the car's night mode as the app hears it (`CarContext.isDarkMode`);
+  state, sent to every new page and again when it changes. The page's Graphite look draws its
+  panels by day or by night with it (unless the driver fixed day or night on the page).
 - `{"type":"toast","text":S,"long":B}`: `CarToast` (2 s, or 3.5 s when long).
 - `{"type":"alert","alert":A}`: an `Alert` (car API 5), its callbacks valid until the next alert;
   `{"type":"alertDismiss","id":N}`: the app took it back (`AppManager.dismissAlert`).
@@ -120,7 +123,8 @@ Page to host:
   (R 1) or was closed (R 2), or went away after one of its actions (`AlertCallback`).
 - `{"type":"dayNight","mode":"day"|"night"|"auto"}`: the driver's day or night choice; "auto" (the
   default, or `ATL_CAR_DAY_NIGHT`) follows the sun at the car's position. The app hears it as the
-  configuration's night mode (`CarContext.isDarkMode`).
+  configuration's night mode (`CarContext.isDarkMode`). The page sends it when the driver changes
+  it (Settings > Waze interface > Day and night) and, when it is not "auto", on every connection.
 
 ## Config API (`/api`, port 8081)
 
