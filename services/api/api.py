@@ -19,8 +19,9 @@ so the vendored frontend in web/ runs unchanged:
 
 An addition that changes no upstream shape (a new route, read-only, public data):
 * GET /api/certificate  the state of the car's TLS certificate as written by host/tls/teslalinux-tls
-                        (served slot, expiry, per-slot status, last fetch result) plus daysLeft; the
-                        launcher warns from it. There is no write route for anything TLS.
+                        (served slot, expiry, per-slot status, last fetch result; lastCheck,
+                        lastChange, checkSource "dns" | "full") plus daysLeft; the launcher warns
+                        from it. There is no write route for anything TLS.
 
 The app updater (tools/appupdate/teslalinux-appupdate, docs/APP-UPDATES.md), new routes only:
 * GET  /api/appUpdate          settings + state: installed/latest/pending version, last check and result,

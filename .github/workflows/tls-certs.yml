@@ -2,7 +2,8 @@
 # renewed in the cloud. Every car serves the same certificate and key; host/tls/renew.sh keeps two
 # independent slots (current, standby) valid with Let's Encrypt over DNS-01 on Cloudflare, generates a
 # fresh key for every issuance, checks each new pair with the Pi's own acceptance checks and publishes
-# it to R2 (https://certs.alexahub.dev/car/), where host/tls/teslalinux-tls on every Pi fetches it.
+# it to R2 (https://certs.alexahub.dev/car/), where host/tls/teslalinux-tls on every Pi fetches it,
+# then updates the DNS TXT record _car-certs.alexahub.dev (the version pointer the Pis check first).
 # Design, threat model and setup: docs/CAR-STACK-READINESS.md, "Certificate".
 name: tls-certs
 
@@ -46,7 +47,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: host/tls
 
-      - name: Check both slots, issue what is due, verify with the Pi's checks, publish
+      - name: Check both slots, issue what is due, verify with the Pi's checks, publish, update the pointer
         env:
           ACTION: ${{ inputs.action || 'check' }}
           STAGING: ${{ inputs.staging && 'true' || 'false' }}
@@ -63,4 +64,5 @@ jobs:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           CERT_PATH_PREFIX: ${{ vars.CERT_PATH_PREFIX }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          POINTER_NAME: ${{ vars.POINTER_NAME }}
         run: bash host/tls/renew.sh

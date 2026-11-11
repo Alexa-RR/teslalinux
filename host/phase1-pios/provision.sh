@@ -27,7 +27,7 @@ apt-get install -y -q --no-install-recommends \
   hostapd dnsmasq nftables nginx \
   lxc python3 python3-gbinder python3-websockets python3-dbus \
   waydroid \
-  pipewire pipewire-pulse pipewire-alsa wireplumber ffmpeg curl openssl \
+  pipewire pipewire-pulse pipewire-alsa wireplumber ffmpeg curl openssl bind9-dnsutils \
   modemmanager network-manager usb-modeswitch usb-modeswitch-data \
   mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 libgbm1 \
   seatd \

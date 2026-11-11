@@ -16,21 +16,42 @@
 #
 #   teslalinux-tls init        boot / install: take the bundled pairs (TLS_BUNDLE_DIR, from the
 #                              release) if they pass every check, then serve the best pair
-#   teslalinux-tls fetch       one download + verify + install attempt for both slots and active.json
-#                              (exit 0 = a trusted pair is served and the download worked)
+#   teslalinux-tls fetch       one check: read the DNS version pointer (below) and download, verify and
+#                              install only what differs from what is installed; without a usable
+#                              pointer, the full download of both slots and active.json, at most every
+#                              TLS_FETCH_INTERVAL (6 h) while a trusted pair is served
+#                              (exit 0 = a trusted pair is served and the check worked)
+#   teslalinux-tls fetch --full   the full download now, whatever the pointer says
+#   teslalinux-tls pointer [TEXT] look the pointer up and print it (or parse TEXT); exit 1 = none usable
 #   teslalinux-tls select      serve the best installed pair again (no download)
 #   teslalinux-tls verify SLOT CHAIN KEY   run every acceptance check on local files, install nothing
 #                              (the cloud issuer runs this same check before it publishes)
 #   teslalinux-tls crl-status CHAIN CRL    good | revoked | unknown: the leaf's serial in a CRL
 #                              (PEM or DER) signed by the chain's issuer (used by the cloud issuer)
-#   teslalinux-tls daemon      (OpenRC) fetch at start (jittered), every TLS_FETCH_INTERVAL (6 h),
+#   teslalinux-tls daemon      (OpenRC) fetch at start (jittered), every TLS_CHECK_INTERVAL (1 h),
 #                              exponential backoff on failure, SIGUSR1 = try now
 #   teslalinux-tls kick        an uplink came up (NetworkManager dispatcher / dhcpcd hook): start
 #                              teslalinux-tls-fetch.service (systemd) or wake the daemon (OpenRC),
 #                              unless the last success is less than TLS_KICK_MIN_AGE (600 s) old
 #   teslalinux-tls status      print the state file
-# On Pi OS (systemd) teslalinux-tls-fetch.timer runs `fetch` at boot and every 6 h with a random
-# delay; the service's Restart=on-failure with RestartSteps/RestartMaxDelaySec is the backoff.
+# On Pi OS (systemd) teslalinux-tls-fetch.timer runs `fetch` at boot and every hour with a small
+# random delay; the service's Restart=on-failure with RestartSteps/RestartMaxDelaySec is the backoff.
+#
+# The version pointer: the issuer keeps one TXT record, TLS_POINTER_NAME (default
+# _car-certs.<DEVICE_HOST without its first label>, e.g. _car-certs.alexahub.dev; never under
+# DEVICE_HOST, whose whole subtree the Pi's own dnsmasq answers with HIJACK_IP), at
+#   v=1 active=<slot> current=<sha256 of current/fullchain.pem> standby=<sha256 ...> t=<unix time>
+# ("-" = that slot is not published). A check asks public resolvers (TLS_DNS_RESOLVERS) for it
+# directly, never the local dnsmasq; nothing to download costs about 200 bytes. A slot whose chain
+# differs from the pointer is downloaded (chain and key), active.json only when its slot differs.
+# The answer is untrusted by design: it only decides WHETHER to download. Every downloaded file
+# passes exactly the checks below, so a forged or withheld answer can only skip a download or
+# trigger a verified one. Where delv is installed the answer is DNSSEC-validated by this Pi itself
+# (from the root trust anchor, not trusting the resolver); dig is the unvalidated fallback.
+# Falls back to the full download (rate-limited to TLS_FETCH_INTERVAL while a trusted pair is
+# served): no usable answer (timeout, no record, malformed); a download that is not yet the
+# pointer's chain (the CDN caches) for longer than one check; a pointer that keeps saying
+# "unchanged" while the served certificate has less than a quarter of its lifetime left.
 #
 # Acceptance of a downloaded pair for SLOT (all must hold, else it is rejected and the installed one
 # stays): the chain holds only CERTIFICATE PEM blocks, 1..5 of them; the key file holds exactly one
@@ -64,7 +85,18 @@ fi
 TLS_CAFILE=${TLS_CAFILE:-/etc/ssl/certs/ca-certificates.crt}
 TLS_BUNDLE_DIR=${TLS_BUNDLE_DIR:-/usr/share/teslalinux/tls}
 TLS_MAX_BYTES=${TLS_MAX_BYTES:-65536}
+# the full download (no usable pointer) at most this often while a trusted pair is served
 TLS_FETCH_INTERVAL=${TLS_FETCH_INTERVAL:-21600}
+# the daemon's pointer check (systemd: teslalinux-tls-fetch.timer)
+TLS_CHECK_INTERVAL=${TLS_CHECK_INTERVAL:-3600}
+# unset: _car-certs.<DEVICE_HOST without its first label>; set to empty: no pointer (full downloads)
+if [ -z "${TLS_POINTER_NAME+x}" ]; then
+	case "$DEVICE_HOST" in
+		*.*.*) TLS_POINTER_NAME="_car-certs.${DEVICE_HOST#*.}" ;;
+		*) TLS_POINTER_NAME="" ;;
+	esac
+fi
+TLS_DNS_RESOLVERS=${TLS_DNS_RESOLVERS:-1.1.1.1 8.8.8.8}
 TLS_CLOCK_SKEW=${TLS_CLOCK_SKEW:-600}
 TLS_BUILD_TIME_FILE=${TLS_BUILD_TIME_FILE:-/etc/teslalinux/build-time}
 TLS_NO_RELOAD=${TLS_NO_RELOAD:-0}
@@ -324,14 +356,23 @@ slot_json() { # SLOT -> {"notAfter": N, "usable": bool}
 	if [ -s "$d/fullchain.pem" ]; then na=$(cert_date "$d/fullchain.pem" enddate); pair_usable "$1" "$d" && u=true; fi
 	printf '{"notAfter": %s, "usable": %s}' "${na:-0}" "$u"
 }
+state_num() { [ -r "$TLS_STATE" ] && sed -n "s/.*\"$1\": *\([0-9]*\).*/\1/p" "$TLS_STATE" | head -n1; }
+state_word() { [ -r "$TLS_STATE" ] && sed -n "s/.*\"$1\": *\"\([a-z]*\)\".*/\1/p" "$TLS_STATE" | head -n1; }
+# set by cmd_fetch for write_state: CHECK_SRC dns|full (a check ran), CHANGE_NOW 1 (a slot,
+# active.json or the served pair changed), FULL_NOW 1 (the full download ran)
+CHECK_SRC="" CHANGE_NOW=0 FULL_NOW=0
 write_state() { # result message
 	result=$1; msg=$(json_str "$2")
 	st_dir=$(dirname "$TLS_STATE")
 	mkdir -p "$st_dir" && chmod 0755 "$st_dir"
 	t=$(now)
-	prev_success=0
-	[ -r "$TLS_STATE" ] && prev_success=$(sed -n 's/.*"lastSuccess": *\([0-9]*\).*/\1/p' "$TLS_STATE" | head -n1)
-	case "$result" in installed|unchanged) prev_success=$t ;; esac
+	prev_success=$(state_num lastSuccess)
+	case "$result" in installed|unchanged|pending) prev_success=$t ;; esac
+	last_check=$(state_num lastCheck); last_change=$(state_num lastChange); last_full=$(state_num lastFullFetch)
+	check_src=$(state_word checkSource)
+	if [ -n "$CHECK_SRC" ]; then last_check=$t; check_src=$CHECK_SRC; fi
+	if [ "$CHANGE_NOW" = 1 ] || [ "$SERVED_CHANGED" = 1 ]; then last_change=$t; fi
+	[ "$FULL_NOW" = 1 ] && last_full=$t
 	nb=0; na=0; trusted=false; self=false; issuer=""; chain_sha=""; spki=""
 	served=$(served_slot)
 	if [ -s "$TLS_CERT" ]; then
@@ -343,9 +384,10 @@ write_state() { # result message
 		chain_sha=$(sha256_stdin <"$TLS_CERT"); spki=$(spki_of_cert "$TMP/s-leaf.pem")
 	fi
 	tmp="$TLS_STATE.tmp"
-	printf '{"host": "%s", "slot": "%s", "activeSlot": "%s", "notBefore": %s, "notAfter": %s, "trusted": %s, "selfSigned": %s, "issuer": "%s", "chainSha256": "%s", "spkiSha256": "%s", "slots": {"current": %s, "standby": %s}, "lastAttempt": %s, "lastResult": "%s", "lastMessage": "%s", "lastSuccess": %s, "baseUrl": "%s"}\n' \
+	printf '{"host": "%s", "slot": "%s", "activeSlot": "%s", "notBefore": %s, "notAfter": %s, "trusted": %s, "selfSigned": %s, "issuer": "%s", "chainSha256": "%s", "spkiSha256": "%s", "slots": {"current": %s, "standby": %s}, "lastAttempt": %s, "lastResult": "%s", "lastMessage": "%s", "lastSuccess": %s, "lastCheck": %s, "lastChange": %s, "checkSource": "%s", "lastFullFetch": %s, "pointer": "%s", "baseUrl": "%s"}\n' \
 		"$(json_str "$DEVICE_HOST")" "$served" "$(active_slot)" "${nb:-0}" "${na:-0}" "$trusted" "$self" "$issuer" "$chain_sha" "$spki" \
-		"$(slot_json current)" "$(slot_json standby)" "$t" "$result" "$msg" "${prev_success:-0}" "$(json_str "$TLS_BASE_URL")" >"$tmp" \
+		"$(slot_json current)" "$(slot_json standby)" "$t" "$result" "$msg" "${prev_success:-0}" \
+		"${last_check:-0}" "${last_change:-0}" "$check_src" "${last_full:-0}" "$(json_str "$TLS_POINTER_NAME")" "$(json_str "$TLS_BASE_URL")" >"$tmp" \
 		&& chmod 0644 "$tmp" && mv -f "$tmp" "$TLS_STATE"
 }
 
@@ -390,60 +432,254 @@ download() { # URL OUT LIMIT
 	[ "$(fsize "$2")" -le "$3" ] || { DL_ERR="larger than $3 bytes"; return 1; }
 }
 
-cmd_fetch() {
+# ---------------------------------------------------------------- the version pointer (DNS)
+# The answer is untrusted by design (see the header): it only decides whether to download, and every
+# downloaded file still passes accept_pair. Never resolved through the local dnsmasq, which owns the
+# car names: the resolvers are asked directly.
+
+with_timeout() { # SECONDS CMD...: busybox and coreutils both have timeout(1); without it, run plainly
+	if command -v timeout >/dev/null 2>&1; then timeout "$@"; else shift; "$@"; fi
+}
+# zone-file TXT data lines on stdin -> the record texts (character strings joined, quoting removed)
+txt_text() { sed -n 's/^[^"]*\(".*"\)[[:space:]]*$/\1/p' | sed 's/" "//g' | tr -d '"\\' | cut -c1-512 | head -n 8; }
+
+# pointer_txt: the TXT texts of TLS_POINTER_NAME on stdout; PTR_VIA says how they were obtained,
+# PTR_ERR why there are none. delv is preferred: it validates DNSSEC itself. Its verbose output is
+# parsed (not +short) because the trust comment ("; fully validated") is only printed there.
+PTR_VIA="" PTR_ERR=""
+pointer_txt() {
+	PTR_VIA="" PTR_ERR="no resolver answered"
+	command -v delv >/dev/null 2>&1 || command -v dig >/dev/null 2>&1 \
+		|| { PTR_ERR="neither delv nor dig is installed (Debian: bind9-dnsutils, Alpine: bind-tools)"; return 1; }
+	for r in $TLS_DNS_RESOLVERS; do
+		if command -v delv >/dev/null 2>&1; then
+			out=$(with_timeout 10 delv @"$r" TXT "$TLS_POINTER_NAME" 2>&1)
+			txt=$(printf '%s\n' "$out" | grep -v '^;' | grep "[[:space:]]IN[[:space:]][[:space:]]*TXT[[:space:]]" | txt_text)
+			if [ -n "$txt" ]; then
+				case "$out" in
+					*"; fully validated"*) PTR_VIA="delv @$r, DNSSEC validated" ;;
+					*) PTR_VIA="delv @$r, not validated (unsigned zone)" ;;
+				esac
+				printf '%s\n' "$txt"; return 0
+			fi
+			PTR_ERR="delv @$r: $(printf '%s\n' "$out" | grep -v '^$' | head -n1 | cut -c1-120)"
+		fi
+		if command -v dig >/dev/null 2>&1; then
+			out=$(dig +short +time=3 +tries=2 TXT "$TLS_POINTER_NAME" @"$r" 2>&1)
+			txt=$(printf '%s\n' "$out" | grep '^"' | txt_text)
+			if [ -n "$txt" ]; then PTR_VIA="dig @$r, not validated"; printf '%s\n' "$txt"; return 0; fi
+			out=$(printf '%s\n' "$out" | grep -v '^$' | head -n1 | cut -c1-120)
+			PTR_ERR="dig @$r: ${out:-no TXT record}"
+		fi
+	done
+	return 1
+}
+
+ptr_hash_ok() { # a full sha256 in lower-case hex, or "-" (not published)
+	[ "$1" = - ] && return 0
+	[ "${#1}" -eq 64 ] || return 1
+	case "$1" in *[!0-9a-f]*) return 1 ;; esac
+}
+# pointer_parse TEXT: sets PTR_ACTIVE, PTR_CURRENT, PTR_STANDBY, PTR_T; 1 = malformed (PTR_ERR)
+pointer_parse() {
+	PTR_ACTIVE="" PTR_CURRENT="" PTR_STANDBY="" PTR_T="" pv=""
+	recs=$(printf '%s\n' "$1" | grep '^v=' | sort -u)
+	[ -n "$recs" ] || { PTR_ERR="no v= record"; return 1; }
+	[ "$(printf '%s\n' "$recs" | wc -l | tr -d ' ')" = 1 ] || { PTR_ERR="more than one pointer record"; return 1; }
+	set -f
+	for w in $recs; do
+		case "$w" in
+			v=*) pv=${w#v=} ;;
+			active=*) PTR_ACTIVE=${w#active=} ;;
+			current=*) PTR_CURRENT=${w#current=} ;;
+			standby=*) PTR_STANDBY=${w#standby=} ;;
+			t=*) PTR_T=${w#t=} ;;
+		esac
+	done
+	set +f
+	[ "$pv" = 1 ] || { PTR_ERR="not a v=1 pointer"; return 1; }
+	valid_slot "$PTR_ACTIVE" || { PTR_ERR="active slot '$(json_str "$PTR_ACTIVE")' unknown"; return 1; }
+	ptr_hash_ok "$PTR_CURRENT" || { PTR_ERR="current= is not a sha256 or -"; return 1; }
+	ptr_hash_ok "$PTR_STANDBY" || { PTR_ERR="standby= is not a sha256 or -"; return 1; }
+	case "$PTR_T" in ''|*[!0-9]*) PTR_ERR="t= is not a unix time"; return 1 ;; esac
+	return 0
+}
+pointer_print() { printf 'active=%s current=%s standby=%s t=%s\n' "$PTR_ACTIVE" "$PTR_CURRENT" "$PTR_STANDBY" "$PTR_T"; }
+ptr_want() { if [ "$1" = standby ]; then echo "$PTR_STANDBY"; else echo "$PTR_CURRENT"; fi; }
+
+# a published pair this Pi rejected is not downloaded again for TLS_FETCH_INTERVAL (an older pair
+# put back on purpose, a trust store that lacks the root: the pointer would ask for it every hour)
+rejected_file() { echo "$(dirname "$TLS_STATE")/rejected-$1"; }
+remember_rejected() { # SLOT SHA
+	mkdir -p "$(dirname "$TLS_STATE")" && printf '%s %s\n' "$2" "$(now)" >"$(rejected_file "$1")"
+}
+rejected_recently() { # SLOT SHA
+	f=$(rejected_file "$1")
+	[ -r "$f" ] || return 1
+	read -r rsha rt <"$f" || return 1
+	[ "$rsha" = "$2" ] && [ $(( $(now) - ${rt:-0} )) -lt "$TLS_FETCH_INTERVAL" ]
+}
+
+# may the full download run now? Always when no trusted pair is served; else every TLS_FETCH_INTERVAL
+full_allowed() {
+	case "$(served_slot)" in current|standby) ;; *) return 0 ;; esac
+	last=$(state_num lastFullFetch)
+	[ $(( $(now) - ${last:-0} )) -ge "$TLS_FETCH_INTERVAL" ]
+}
+# the served certificate has less than a quarter of its lifetime left (the issuer renews at a third)
+served_nearly_expired() {
+	case "$(served_slot)" in current|standby) ;; *) return 1 ;; esac
+	[ -s "$TLS_CERT" ] || return 1
+	nb=$(cert_date "$TLS_CERT" startdate); na=$(cert_date "$TLS_CERT" enddate)
+	[ -n "$nb" ] && [ -n "$na" ] || return 1
+	[ $(( (na - $(now)) * 4 )) -lt $(( na - nb )) ]
+}
+
+# ---------------------------------------------------------------- fetch
+
+addnote() { FETCH_NOTES="${FETCH_NOTES:+$FETCH_NOTES; }$*"; }
+fetch_reset() { FETCH_NOTES="" FETCH_CHANGED="" FETCH_GOOD=0 FETCH_DLFAIL=0 FETCH_REJECTED=0 FETCH_DEFERRED=0 FETCH_PENDING=0 ACTIVE_CHANGED=0; }
+fetch_reset
+
+fetch_active() { # [WANT]: download active.json and take it; with WANT, only when it names WANT
+	fa_want=${1:-}
+	if ! download "$TLS_BASE_URL/active.json" "$TMP/active.json" 4096; then
+		FETCH_DLFAIL=1; addnote "active.json: download failed: $DL_ERR"; return
+	fi
+	fa=$(sed -n 's/.*"slot"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$TMP/active.json" | head -n1)
+	if ! valid_slot "$fa"; then addnote "active.json names no slot (kept $(active_slot))"; return; fi
+	if [ -n "$fa_want" ] && [ "$fa" != "$fa_want" ]; then
+		FETCH_PENDING=1; addnote "active.json still names $fa, the pointer $fa_want: not published yet, kept $(active_slot)"; return
+	fi
+	if ! cmp -s "$TMP/active.json" "$ACTIVE_FILE"; then
+		fa_old=$(active_slot)
+		cp "$TMP/active.json" "$ACTIVE_FILE.tmp" && chmod 0644 "$ACTIVE_FILE.tmp" && mv -f "$ACTIVE_FILE.tmp" "$ACTIVE_FILE"
+		[ "$fa_old" = "$fa" ] || ACTIVE_CHANGED=1
+	fi
+	addnote "active $fa"
+}
+
+fetch_slot() { # SLOT [WANT_SHA]: download the pair, check it, install it; with WANT_SHA, only that chain
+	fs=$1 fs_want=${2:-}
+	if ! download "$TLS_BASE_URL/$fs/fullchain.pem" "$TMP/$fs.chain" "$TLS_MAX_BYTES" \
+		|| ! download "$TLS_BASE_URL/$fs/privkey.pem" "$TMP/$fs.key" "$TLS_MAX_BYTES"; then
+		FETCH_DLFAIL=1; addnote "$fs: download failed: $DL_ERR"; log "$fs: download failed: $DL_ERR"; return
+	fi
+	fs_sha=$(sha256_stdin <"$TMP/$fs.chain")
+	if [ -n "$fs_want" ] && [ "$fs_sha" != "$fs_want" ]; then
+		# the pointer is newer than what the CDN hands out (cached): not an error, nothing is downgraded
+		FETCH_PENDING=1; addnote "$fs: the download is not the pointer's chain yet (not published or still cached): kept the installed pair"
+		log "$fs: downloaded chain $fs_sha, the pointer names $fs_want: not published yet"
+		return
+	fi
+	accept_pair "$fs" "$TMP/$fs.chain" "$TMP/$fs.key"; rc=$?
+	case $rc in
+		0) if install_slot "$fs" "$TMP/$fs.chain" "$TMP/$fs.key"; then
+				FETCH_CHANGED="$FETCH_CHANGED $fs"; FETCH_GOOD=1; addnote "$fs: installed"
+				rm -f "$(rejected_file "$fs")"
+				log "$fs: installed a new pair (notAfter $(openssl x509 -in "$TMP/$fs.chain" -noout -enddate | cut -d= -f2-))"
+			else
+				addnote "$fs: could not be written"
+			fi ;;
+		3) FETCH_GOOD=1; addnote "$fs: unchanged" ;;
+		2) FETCH_DEFERRED=1; addnote "$fs: deferred ($REASON)" ;;
+		*) FETCH_REJECTED=1; addnote "$fs: rejected ($REASON)"; remember_rejected "$fs" "$fs_sha" ;;
+	esac
+}
+
+fetch_full() {
+	fetch_active
+	for s in $SLOTS; do fetch_slot "$s"; done
+}
+
+NEED_FULL=""
+fetch_by_pointer() { # after pointer_parse: download only what differs; sets NEED_FULL for the fallback
+	log "pointer ($PTR_VIA): active=$PTR_ACTIVE current=$PTR_CURRENT standby=$PTR_STANDBY t=$PTR_T"
+	addnote "pointer via $PTR_VIA"
+	if [ "$PTR_ACTIVE" != "$(active_slot)" ]; then fetch_active "$PTR_ACTIVE"; else addnote "active $PTR_ACTIVE"; fi
+	for s in $SLOTS; do
+		want=$(ptr_want "$s") have=-
+		[ -s "$TLS_SLOTS_DIR/$s/fullchain.pem" ] && have=$(sha256_stdin <"$TLS_SLOTS_DIR/$s/fullchain.pem")
+		if [ "$want" = "$have" ] || [ "$want" = - ]; then
+			[ "$want" = - ] && addnote "$s: not published" || addnote "$s: unchanged"
+			if [ "$have" != - ] && pair_usable "$s" "$TLS_SLOTS_DIR/$s"; then FETCH_GOOD=1; fi
+		elif rejected_recently "$s" "$want"; then
+			FETCH_REJECTED=1; addnote "$s: the published pair was rejected here before, next try within ${TLS_FETCH_INTERVAL}s"
+		else
+			fetch_slot "$s" "$want"
+		fi
+	done
+	if [ "$FETCH_PENDING" = 1 ]; then
+		NEED_FULL="the pointer is ahead of the download"
+	elif [ -z "$FETCH_CHANGED" ] && served_nearly_expired; then
+		NEED_FULL="the served certificate has less than a quarter of its lifetime left and the pointer shows nothing newer"
+	fi
+}
+
+fetch_finish() { # serve the best pair, write the state; exit status of fetch
+	if ! cmd_select; then
+		for s in $FETCH_CHANGED; do restore_slot "$s"; done
+		cmd_select
+		write_state failed "nginx -t failed; previous certificate restored ($FETCH_NOTES)"
+		return 1
+	fi
+	if [ -n "$FETCH_CHANGED" ] || [ "$ACTIVE_CHANGED" = 1 ] || [ "$SERVED_CHANGED" = 1 ]; then CHANGE_NOW=1; fi
+	served=$(served_slot)
+	if [ "$FETCH_GOOD" = 1 ] && [ "$served" != selfsigned ]; then
+		if [ -n "$FETCH_CHANGED" ] || [ "$SERVED_CHANGED" = 1 ]; then result=installed
+		elif [ "$FETCH_PENDING" = 1 ]; then result=pending
+		else result=unchanged; fi
+		log "$result: serving $served ($FETCH_NOTES)"
+		write_state "$result" "serving $served; $FETCH_NOTES"
+		return 0
+	fi
+	if [ "$FETCH_REJECTED" = 1 ]; then result=rejected
+	elif [ "$FETCH_DEFERRED" = 1 ]; then result=deferred
+	elif [ "$FETCH_PENDING" = 1 ]; then result=pending
+	else result=failed; fi
+	log "$result: serving $served ($FETCH_NOTES)"
+	write_state "$result" "serving $served; $FETCH_NOTES"
+	return 1
+}
+
+cmd_fetch() { # [--full]
 	[ -n "$TLS_BASE_URL" ] || { log "TLS_BASE_URL is empty: fetching is off"; cmd_select; write_state failed "TLS_BASE_URL not configured"; return 1; }
 	case "$TLS_BASE_URL" in https://*) ;; *) log "TLS_BASE_URL must be https"; cmd_select; write_state failed "TLS_BASE_URL is not https"; return 1 ;; esac
 	mkdir -p "$TLS_DIR" && chmod 0700 "$TLS_DIR"
 	mktmp
-	notes="" changed="" good=0 dl_fail=0 rejected=0 deferred=0
-	if download "$TLS_BASE_URL/active.json" "$TMP/active.json" 4096; then
-		s=$(sed -n 's/.*"slot"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$TMP/active.json" | head -n1)
-		if valid_slot "$s"; then
-			if ! cmp -s "$TMP/active.json" "$ACTIVE_FILE"; then
-				cp "$TMP/active.json" "$ACTIVE_FILE.tmp" && chmod 0644 "$ACTIVE_FILE.tmp" && mv -f "$ACTIVE_FILE.tmp" "$ACTIVE_FILE"
-			fi
-			notes="active $s"
-		else
-			notes="active.json names no slot (kept $(active_slot))"
-		fi
+	fetch_reset
+	CHECK_SRC="" CHANGE_NOW=0 FULL_NOW=0 NEED_FULL=""
+	if [ "${1:-}" = --full ]; then
+		NEED_FULL="requested"
+	elif [ -z "$TLS_POINTER_NAME" ]; then
+		NEED_FULL="no pointer record (TLS_POINTER_NAME is empty)"
+	elif pointer_txt >"$TMP/pointer.txt" && pointer_parse "$(cat "$TMP/pointer.txt")"; then
+		CHECK_SRC=dns
+		fetch_by_pointer
 	else
-		dl_fail=1; notes="active.json: download failed: $DL_ERR"
+		NEED_FULL="pointer $TLS_POINTER_NAME: $PTR_ERR"
 	fi
-	for s in $SLOTS; do
-		if ! download "$TLS_BASE_URL/$s/fullchain.pem" "$TMP/$s.chain" "$TLS_MAX_BYTES" \
-			|| ! download "$TLS_BASE_URL/$s/privkey.pem" "$TMP/$s.key" "$TLS_MAX_BYTES"; then
-			dl_fail=1; notes="$notes; $s: download failed: $DL_ERR"; log "$s: download failed: $DL_ERR"; continue
+	if [ -n "$NEED_FULL" ]; then
+		if [ "${1:-}" != --full ] && ! full_allowed; then
+			lf=$(state_num lastFullFetch)
+			wait_s=$(( TLS_FETCH_INTERVAL - ($(now) - ${lf:-0}) ))
+			if [ "$CHECK_SRC" = dns ]; then
+				addnote "$NEED_FULL; full download in ${wait_s}s at the latest"
+				fetch_finish; return $?
+			fi
+			# no answer and a trusted pair is served: nothing is written (the last result stands)
+			log "$NEED_FULL; the last full download was less than ${TLS_FETCH_INTERVAL}s ago, the next one in ${wait_s}s at the latest"
+			cmd_select || return 1
+			return 0
 		fi
-		accept_pair "$s" "$TMP/$s.chain" "$TMP/$s.key"; rc=$?
-		case $rc in
-			0) if install_slot "$s" "$TMP/$s.chain" "$TMP/$s.key"; then
-					changed="$changed $s"; good=1; notes="$notes; $s: installed"
-					log "$s: installed a new pair (notAfter $(openssl x509 -in "$TMP/$s.chain" -noout -enddate | cut -d= -f2-))"
-				else
-					notes="$notes; $s: could not be written"
-				fi ;;
-			3) good=1; notes="$notes; $s: unchanged" ;;
-			2) deferred=1; notes="$notes; $s: deferred ($REASON)" ;;
-			*) rejected=1; notes="$notes; $s: rejected ($REASON)" ;;
-		esac
-	done
-	if ! cmd_select; then
-		for s in $changed; do restore_slot "$s"; done
-		cmd_select
-		write_state failed "nginx -t failed; previous certificate restored ($notes)"
-		return 1
+		log "full download: $NEED_FULL"
+		keep_changed=$FETCH_CHANGED keep_active=$ACTIVE_CHANGED
+		fetch_reset
+		FETCH_CHANGED=$keep_changed ACTIVE_CHANGED=$keep_active CHECK_SRC=full FULL_NOW=1
+		addnote "full download ($NEED_FULL)"
+		fetch_full
 	fi
-	served=$(served_slot)
-	if [ "$good" = 1 ] && [ "$served" != selfsigned ]; then
-		if [ -n "$changed" ] || [ "$SERVED_CHANGED" = 1 ]; then result=installed; else result=unchanged; fi
-		log "$result: serving $served ($notes)"
-		write_state "$result" "serving $served; $notes"
-		return 0
-	fi
-	if [ "$rejected" = 1 ]; then result=rejected; elif [ "$deferred" = 1 ]; then result=deferred; else result=failed; fi
-	log "$result: serving $served ($notes)"
-	write_state "$result" "serving $served; $notes"
-	return 1
+	fetch_finish
 }
 
 cmd_verify() { # SLOT CHAIN KEY: local check, no install
@@ -500,15 +736,15 @@ cmd_daemon() {
 			kill "$SLEEPER" 2>/dev/null
 		fi
 		if [ "$WAKE" = 1 ] && [ $(( $(now) - last_ok )) -lt 600 ]; then
-			WAKE=0; delay=$TLS_FETCH_INTERVAL; continue  # just succeeded; an uplink flap is no reason
+			WAKE=0; delay=$TLS_CHECK_INTERVAL; continue  # just succeeded; an uplink flap is no reason
 		fi
 		WAKE=0
 		if cmd_fetch; then
 			last_ok=$(now); fail_delay=60
-			delay=$(( TLS_FETCH_INTERVAL - TLS_FETCH_INTERVAL / 10 + $(random_below $(( TLS_FETCH_INTERVAL / 5 + 1 ))) ))
+			delay=$(( TLS_CHECK_INTERVAL - TLS_CHECK_INTERVAL / 10 + $(random_below $(( TLS_CHECK_INTERVAL / 5 + 1 ))) ))
 		else
 			delay=$(( fail_delay + $(random_below $(( fail_delay / 4 + 1 ))) ))
-			fail_delay=$(( fail_delay * 2 )); [ "$fail_delay" -gt "$TLS_FETCH_INTERVAL" ] && fail_delay=$TLS_FETCH_INTERVAL
+			fail_delay=$(( fail_delay * 2 )); [ "$fail_delay" -gt "$TLS_CHECK_INTERVAL" ] && fail_delay=$TLS_CHECK_INTERVAL
 			log "next attempt in ${delay}s"
 		fi
 	done
@@ -533,7 +769,19 @@ case "${1:-}" in
 esac
 case "${1:-}" in
 	init) cmd_init ;;
-	fetch) cmd_fetch ;;
+	fetch)
+		case "${2:-}" in ''|--full) ;; *) echo "usage: teslalinux-tls fetch [--full]" >&2; exit 2 ;; esac
+		cmd_fetch "${2:-}" ;;
+	pointer)
+		if [ $# -ge 2 ]; then
+			pointer_parse "$2" || { echo "malformed: $PTR_ERR"; exit 1; }
+		else
+			[ -n "$TLS_POINTER_NAME" ] || { echo "no pointer: TLS_POINTER_NAME is empty (or DEVICE_HOST has no parent domain)"; exit 1; }
+			mktmp
+			{ pointer_txt >"$TMP/pointer.txt" && pointer_parse "$(cat "$TMP/pointer.txt")"; } || { echo "$TLS_POINTER_NAME: $PTR_ERR"; exit 1; }
+			echo "$TLS_POINTER_NAME ($PTR_VIA)"
+		fi
+		pointer_print ;;
 	select) cmd_select && write_state selected "serving the $(served_slot) pair" ;;
 	verify) [ $# -eq 4 ] || { echo "usage: teslalinux-tls verify current|standby CHAIN KEY" >&2; exit 2; }; cmd_verify "$2" "$3" "$4" ;;
 	crl-status) [ $# -eq 3 ] || { echo "usage: teslalinux-tls crl-status CHAIN CRL" >&2; exit 2; }; cmd_crl_status "$2" "$3" ;;

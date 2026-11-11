@@ -129,7 +129,7 @@ guest_install() {
 
   log "1/7 packages"
   export DEBIAN_FRONTEND=noninteractive
-  local pkgs="nginx python3 python3-websockets openssl curl rsync ffmpeg ca-certificates dbus
+  local pkgs="nginx python3 python3-websockets openssl curl bind9-dnsutils rsync ffmpeg ca-certificates dbus
     pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd"
   [[ $radio == 1 ]] && pkgs="$pkgs hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data"
   local missing="" p

@@ -1,8 +1,9 @@
 #!/sbin/openrc-run
-# teslalinux: keep the shared car certificate current. teslalinux-tls daemon fetches both slots and
-# active.json from TLS_BASE_URL, installs a pair only when it passes every check, serves the active
-# slot (or the other valid one), at start (jittered), every 6 h, with exponential backoff, and at
-# once when an uplink comes up (dhcpcd's exit hook sends SIGUSR1). It never blocks boot or nginx:
+# teslalinux: keep the shared car certificate current. teslalinux-tls daemon checks the DNS version
+# pointer and downloads from TLS_BASE_URL only the slots (and active.json) that changed, everything
+# at most every 6 h when DNS gives no answer; installs a pair only when it passes every check, serves
+# the active slot (or the other valid one), at start (jittered), every hour, with exponential
+# backoff, and at once when an uplink comes up (dhcpcd's exit hook sends SIGUSR1). It never blocks boot or nginx:
 # nginx starts with whatever pair (or self-signed fallback) is already there, and this only reloads it.
 description="teslalinux certificate fetcher"
 command=/usr/local/bin/teslalinux-tls

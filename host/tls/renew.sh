@@ -17,6 +17,13 @@
 #   <CERT_PATH_PREFIX>/<slot>-previous/{...}                         the pair before
 #   <CERT_PATH_PREFIX>/active.json   {"slot": "current"|"standby", "reason": ..., "updated": ...}
 # Before publishing, the new pair passes the Pi's own acceptance checks (host/tls/teslalinux-tls verify).
+# Then the version pointer, a DNS TXT record the Pis read before downloading anything (POINTER_NAME,
+# default _car-certs.<DEVICE_HOST without its first label>; outside DEVICE_HOST's subtree, which every
+# Pi's dnsmasq answers itself):
+#   v=1 active=<slot> current=<sha256 of current/fullchain.pem> standby=<sha256 ...> t=<unix time>
+# ("-" = not published; t = when the record last changed). Written with the Cloudflare API (the DNS
+# token, CF_ZONE_ID) only when the slots or the active slot differ from the record, only after R2 is
+# final, never in staging; a failed write fails the run (a stale pointer would hide renewals).
 #
 # Environment (workflow env, from the `tls` GitHub Environment):
 #   ACTION    check (issue only what is due) | issue-current | issue-standby | issue-both (issue now)
@@ -24,7 +31,9 @@
 #   secrets:  ACME_ACCOUNT_KEY (PEM), CF_DNS_API_TOKEN, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
 #   vars:     DEVICE_HOST, CF_ZONE_ID, R2_ACCOUNT_ID, R2_BUCKET, CERT_PATH_PREFIX, PUBLIC_BASE_URL,
 #             CF_ACCOUNT_ID, CHALLENGE_ALIAS (the validation zone _acme-challenge.* is CNAMEd to),
-#             ACME_EMAIL (all three optional)
+#             ACME_EMAIL, POINTER_NAME (all four optional). In hardened mode (CHALLENGE_ALIAS) the
+#             token only edits the validation zone: POINTER_NAME=_car-certs.<validation zone>, and
+#             a CNAME from the default name to it (the Pis follow it)
 # Sourced with TLS_RENEW_LIB=1 it only defines its functions (host/tls/test/run.sh tests the decisions).
 set -euo pipefail
 umask 077
@@ -229,12 +238,68 @@ issue_slot() { # SLOT REASON
     put "$p/fullchain.pem" "$s-previous/fullchain.pem" application/pem-certificate-chain 300 || { note "$s: R2 upload failed"; return 1; }
     if [[ -s "$p/meta.json" ]]; then put "$p/meta.json" "$s-previous/meta.json" application/json 300 || true; fi
   fi
+  # a failure from here on may leave this slot half replaced in R2: no pointer is written for it
   put "$d/privkey.pem" "$s/privkey.pem" application/x-pem-file 300 \
     && put "$d/fullchain.pem" "$s/fullchain.pem" application/pem-certificate-chain 300 \
     && put "$d/meta.json" "$s/meta.json" application/json 300 \
-    || { note "$s: R2 upload failed"; return 1; }
+    || { R2_TORN="${R2_TORN:+$R2_TORN }$s"; note "$s: R2 upload failed"; return 1; }
   install -d -m 0700 "$p"; cp "$d/privkey.pem" "$d/fullchain.pem" "$d/meta.json" "$p/"
   note "$s: published (notAfter $(iso "$na"), serial $(jq -r .serial "$d/meta.json"), chain sha256 \`$(jq -r .chainSha256 "$d/meta.json")\`)"
+}
+
+# ---- the version pointer (DNS TXT), what every Pi checks before downloading anything
+pointer_name() {
+  if [[ -n "${POINTER_NAME:-}" ]]; then echo "$POINTER_NAME"; else echo "_car-certs.${DEVICE_HOST#*.}"; fi
+}
+pointer_hash() { # SLOT: sha256 of the published fullchain.pem, or - when the slot is not published
+  if [[ -s "$W/pub/$1/fullchain.pem" ]]; then sha256 <"$W/pub/$1/fullchain.pem"; else echo -; fi
+}
+pointer_value() { # ACTIVE CURRENT_SHA STANDBY_SHA TIME (one TXT string, about 180 bytes)
+  printf 'v=1 active=%s current=%s standby=%s t=%s\n' "$1" "$2" "$3" "$4"
+}
+pointer_key() { # a record's content -> what decides whether a write is needed (no quoting, no t=)
+  # (t= is the last field; matched with its blank, as "current=" and "standby=" end in "t=" too)
+  printf '%s\n' "$1" | tr -d '"\\' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]][[:space:]]*t=[0-9]*$//'
+}
+cf_api() { # METHOD PATH [JSON]: the response on stdout; 1 on an HTTP or API error
+  local code args
+  printf 'Authorization: Bearer %s\n' "$CF_DNS_API_TOKEN" >"$W/cf-auth"   # not on the command line
+  args=(-sS --proto '=https' --max-time 30 -X "$1" -H "@$W/cf-auth" -H 'Content-Type: application/json' -o "$W/cf.json" -w '%{http_code}')
+  if [[ -n "${3:-}" ]]; then args+=(--data "$3"); fi
+  code=$(curl "${args[@]}" "https://api.cloudflare.com/client/v4$2" 2>"$W/cf.err") || code=${code:-000}
+  rm -f "$W/cf-auth"
+  if [[ $code != 2?? || "$(jq -r '.success' "$W/cf.json" 2>/dev/null)" != true ]]; then
+    log "Cloudflare API $1 $2: HTTP $code $(jq -c '.errors // empty' "$W/cf.json" 2>/dev/null | head -c 300) $(head -c 200 "$W/cf.err" 2>/dev/null)"
+    return 1
+  fi
+  cat "$W/cf.json"
+}
+# pointer_update ACTIVE: make the TXT record say what R2 holds now. Writes only when the slots or the
+# active slot differ from the record (t= then becomes now); extra records of the same name go.
+pointer_update() {
+  local name want resp n id content data i
+  name=$(pointer_name)
+  want=$(pointer_value "$1" "$(pointer_hash current)" "$(pointer_hash standby)" "$(date +%s)")
+  resp=$(cf_api GET "/zones/$CF_ZONE_ID/dns_records?type=TXT&name=$name&per_page=20") \
+    || { note "pointer \`$name\`: could not read the record"; return 1; }
+  n=$(jq '.result | length' <<<"$resp")
+  id=$(jq -r '.result[0].id // empty' <<<"$resp")
+  content=$(jq -r '.result[0].content // empty' <<<"$resp")
+  if [[ $n == 1 && "$(pointer_key "$content")" == "$(pointer_key "$want")" ]]; then
+    note "pointer \`$name\`: unchanged (\`$(pointer_key "$content")\`)"; return 0
+  fi
+  data=$(jq -cn --arg name "$name" --arg content "\"$want\"" \
+    '{type: "TXT", name: $name, content: $content, ttl: 300, comment: "teslalinux car certificate version (host/tls/renew.sh)"}')
+  if [[ -n "$id" ]]; then
+    cf_api PATCH "/zones/$CF_ZONE_ID/dns_records/$id" "$data" >/dev/null || { note "pointer \`$name\`: update failed"; return 1; }
+  else
+    cf_api POST "/zones/$CF_ZONE_ID/dns_records" "$data" >/dev/null || { note "pointer \`$name\`: create failed"; return 1; }
+  fi
+  for ((i = 1; i < n; i++)); do
+    id=$(jq -r ".result[$i].id" <<<"$resp")
+    cf_api DELETE "/zones/$CF_ZONE_ID/dns_records/$id" >/dev/null || { note "pointer \`$name\`: could not delete the extra record $id"; return 1; }
+  done
+  note "pointer \`$name\`: \`$want\`"
 }
 
 set_active() { # SLOT REASON
@@ -273,7 +338,7 @@ main() {
       if [[ $rc == 2 ]]; then die "could not read $s/$f; not deciding blindly"; fi
     done
   done
-  ACTIVE=""
+  ACTIVE="" R2_TORN=""
   rc=0; obj_get active.json "$W/active-published.json" || rc=$?
   case $rc in
     0) ACTIVE=$(jq -r '.slot // empty' "$W/active-published.json" 2>/dev/null || true) ;;
@@ -315,8 +380,18 @@ main() {
   # staging publishes nothing, so the slots stay as they were: only a real run must end with one usable
   if [[ "$STAGING" != true && "$STATE_current" == invalid && "$STATE_standby" == invalid ]]; then note "**both slots are unusable**"; failed=1; fi
   if [[ "$want" != "$ACTIVE" ]]; then set_active "$want" "$reason"; else note "active.json stays $ACTIVE"; fi
+
+  # 6. the version pointer, last: a Pi that follows it must find these files in R2
+  if [[ "$STAGING" == true ]]; then
+    note "pointer \`$(pointer_name)\`: staging writes nothing"
+  elif [[ -n "$R2_TORN" ]]; then
+    note "pointer \`$(pointer_name)\`: not written, the R2 upload of $R2_TORN failed midway (the next run reads R2 again)"
+    failed=1
+  elif ! pointer_update "${ACTIVE:-current}"; then
+    failed=1
+  fi
   if [[ -n "${ACME_ACCOUNT_URI:-}" ]]; then summary "- ACME account: \`$ACME_ACCOUNT_URI\` (the accounturi of the CAA record)"; fi
-  if [[ $failed == 1 ]]; then die "at least one issuance failed (see above)"; fi
+  if [[ $failed == 1 ]]; then die "at least one issuance or the pointer update failed (see above)"; fi
   log "done"
 }
 

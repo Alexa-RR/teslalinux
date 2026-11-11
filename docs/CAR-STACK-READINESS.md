@@ -136,8 +136,33 @@ manager `upstream/android-external-tesla-android-configuration-manager/tesla-and
   `car/<slot>/fullchain.pem`, `privkey.pem`, `meta.json` (slot, names, serial, issuer,
   notBefore/notAfter, chain and SPKI sha256, issuedAt); the pair before under `car/<slot>-previous/`;
   `car/active.json` = `{"slot": "current" | "standby", "reason": ..., "updated": ...}`.
-* **On the Pi: `teslalinux-tls`.** `fetch` downloads `active.json` and both slots over HTTPS (system
-  CAs, 64 KiB limit, timeouts) and installs a slot's pair only if: PEM only (1 to 5 certificates;
+* **The version pointer**, a DNS TXT record the Pis read before downloading anything:
+  `_car-certs.alexahub.dev` (`_car-certs.` + `DEVICE_HOST` without its first label; never under
+  `car.alexahub.dev`, because every Pi's dnsmasq answers that whole subtree with `192.0.2.1`), one
+  string, TTL 300, DNS only:
+  `v=1 active=<slot> current=<sha256 of current/fullchain.pem> standby=<sha256 of standby/fullchain.pem> t=<unix time>`
+  (full 64-hex values; `-` for a slot that is not published; `t` = when the record last changed).
+  `renew.sh` writes it last in every non-staging run, after R2 is final, through the Cloudflare API
+  with the same DNS token (look up by name and type, PATCH, else POST; extra records of that name are
+  deleted), and only when the slots or the active slot differ from the record; the decision is in
+  the job summary. A failed write fails the run (a stale pointer would hide renewals from the Pis);
+  a run whose R2 upload of a slot broke off midway writes no pointer and fails. Staging never writes
+  it. `POINTER_NAME` (environment variable) overrides the name.
+* **On the Pi: `teslalinux-tls`.** `fetch` first resolves the pointer against public resolvers
+  directly, never the local dnsmasq: `delv @1.1.1.1` (DNSSEC validated on the Pi itself, from the
+  root trust anchor), else `dig @1.1.1.1`, then the same with `8.8.8.8` (3 s timeouts, 2 tries).
+  When the installed slots' chain sha256 values and the local `active.json` slot equal the pointer's,
+  nothing is downloaded (logged as `unchanged`, `lastCheck` updated). Otherwise only what differs is
+  downloaded: a slot's `fullchain.pem` and `privkey.pem`, `active.json` only when its slot differs. A
+  download whose sha256 (or slot) is not yet the pointer's (the CDN caches) is "not yet published":
+  the installed pair stays, the result is `pending`, the next check retries. A published pair this
+  Pi rejected is not downloaded again for 6 h. **Fallback, the full download** of `active.json` and
+  both slots (as before the pointer existed), at most every 6 h while a trusted pair is served (at
+  once when none is): no usable answer (timeout, no record, malformed), a pointer still ahead of the
+  download after that, or a pointer that keeps saying "unchanged" while the served certificate has
+  less than a quarter of its lifetime left (the issuer renews at a third). `teslalinux-tls fetch
+  --full` downloads everything now; `teslalinux-tls pointer` prints what the Pi resolves. Every
+  download goes over HTTPS (system CAs, 64 KiB limit, timeouts), and a slot's pair is installed only if: PEM only (1 to 5 certificates;
   exactly one private key), the key matches the leaf, the SANs are exactly the slot's set,
   digitalSignature + serverAuth, the chain verifies against the system store (`-purpose sslserver
   -x509_strict`), notBefore <= now + 10 min, notAfter > now, and notBefore later than the installed
@@ -154,13 +179,18 @@ manager `upstream/android-external-tesla-android-configuration-manager/tesla-and
   `teslalinux-tls init` installs them. If that download fails the release still builds (with a
   warning) and the Pi fetches at its first uplink. The Alpine image takes the same directory as
   `TLS_BUNDLE_SRC`.
-* **When it runs (Pi OS):** `teslalinux-tls-fetch.timer` (1 min after boot, then every 6 h, 15 min
+* **When it runs (Pi OS):** `teslalinux-tls-fetch.timer` (1 min after boot, then every hour, 5 min
   random delay), the NetworkManager dispatcher hook `90-teslalinux-tls` when an uplink comes up (not
   within 10 min of a success), and `teslalinux-tls-fetch.service`'s `Restart=on-failure` with
-  `RestartSteps`/`RestartMaxDelaySec` as exponential backoff from 1 min to 6 h. Never ordered before
-  nginx or anything on the boot path. (Alpine: the same tool as an OpenRC daemon, dhcpcd exit hook.)
+  `RestartSteps`/`RestartMaxDelaySec` as exponential backoff from 1 min to 1 h. Never ordered before
+  nginx or anything on the boot path. (Alpine: the same tool as an OpenRC daemon, hourly, dhcpcd
+  exit hook.) `delv` and `dig` come from `bind9-dnsutils` (Alpine: `bind-tools`).
+* **Traffic:** about 200 bytes per hourly check (one TXT query and answer); R2 and the CDN see a Pi
+  only when something changed (about 5 KB per changed slot), or every 6 h when DNS gives no answer
+  (about 11 KB, as every check cost before the pointer).
 * **Visibility:** `GET /api/certificate` (served slot, active slot, expiry, days left, per-slot
-  status, last result, self-signed or trusted); the launcher shows a small dismissable notice when
+  status, last result, self-signed or trusted, `lastCheck`, `lastChange`, `checkSource` `dns` or
+  `full`, `lastFullFetch`); the launcher shows a small dismissable notice when
   fewer than 14 days are left, the last update failed or was rejected, or the certificate is the
   self-signed fallback (`web/js/core/cert-warning.js`). There is no write route for anything TLS.
 * **Self-hosting** is optional: run the same workflow in your own fork with your own environment,
@@ -175,11 +205,13 @@ what the Tesla browser requires to open the page, not proof of whose Pi it is.
 | Event | Impact | What limits it / what to do |
 |---|---|---|
 | Someone takes the key (from a release or a Pi) | They can present a valid certificate for the car names. | The names resolve publicly to `192.0.2.1` (TEST-NET-1, never routed) and reach a Pi only inside its own hotspot. Misusing the key needs control of the victim's network and DNS as well (for example a rogue hotspot the car joins), and then it impersonates only the car page (launcher, app stream, the browser's GPS position), no other site. Tesla Android's shared certificate has the same exposure. |
-| Revocation griefing: a key holder revokes the certificate through ACME (key possession is enough; reason keyCompromise also blocks that key) | `current` becomes revoked. | The `standby` slot keeps a valid certificate; the issuer sees the revocation within 3 h (CRL, ARI), moves `active.json` to `standby`, re-issues `current` with a fresh key and moves back. Pis follow at their next fetch (6 h, or the next uplink). Chromium-based browsers check revocation of ordinary certificates only through CRLSets, so a revoked certificate often keeps working in the car meanwhile. |
+| Revocation griefing: a key holder revokes the certificate through ACME (key possession is enough; reason keyCompromise also blocks that key) | `current` becomes revoked. | The `standby` slot keeps a valid certificate; the issuer sees the revocation within 3 h (CRL, ARI), moves `active.json` to `standby`, re-issues `current` with a fresh key and moves back. Pis follow at their next check (hourly, or the next uplink; up to an hour more while the CDN cache expires). Chromium-based browsers check revocation of ordinary certificates only through CRLSets, so a revoked certificate often keeps working in the car meanwhile. |
 | Sustained griefing (revoking each new certificate) | Each slot can be re-issued 5 times per week (duplicate-certificate limit per name set). | The two slots double that; a Pi keeps serving its last good pair while nothing newer validates. If it ever becomes real: add more standby name sets, shorten the check interval, report the abuse to Let's Encrypt. |
 | Leaked Actions secret: ACME account key | An account that can request certificates. | DNS-01 still needs the DNS token; rotate the account key (new key -> new account URI -> update the CAA record). |
 | Leaked Actions secret: Cloudflare DNS token | DNS edits in the scoped zone until the token expires. | The CAA `accounturi` pins issuance to our ACME account; in hardened mode the token cannot touch alexahub.dev at all; the token expires; CT monitoring reports any issuance. |
 | Leaked R2 token, or the download URL / CDN compromised | Can publish any file. | The Pi accepts only a trusted, exactly named, current pair whose key matches and that is newer than its own. The worst case is withholding renewals (the Pi keeps its pair; the launcher warns at 14 days) or flipping `active.json` between two valid slots (harmless). |
+| Forged or withheld pointer answer (on-path attacker on the uplink, a lying resolver) | The pointer only decides whether to download. | A forged "changed" triggers a download that passes every check above or is rejected (and not fetched again for 6 h); a forged "unchanged" or no answer delays a renewal: no answer means the full download every 6 h, and "unchanged" is ignored once the served certificate has less than a quarter of its lifetime left. With DNSSEC on the zone, delv on the Pi rejects forged answers (it validates from the root itself); dig, the fallback when delv fails, does not. Withholding was already possible by blocking the download. |
+| Pointer write fails or goes stale (API outage, token expired) | Pis that see "unchanged" skip a renewal. | The run fails (GitHub mails the maintainer); the pointer is written only after R2 is final; Pis fall back to the full download near the end of the certificate's life anyway. |
 | Push access to `main` | Can change the workflow to exfiltrate secrets. | The trust boundary is the repository: 2FA, branch protection (no force pushes), the `tls` environment limited to `main`, GitHub-authored actions pinned by SHA, approval required for workflows from outside contributors. Pull requests from forks never get the environment's secrets. |
 
 ### Setup (maintainer, once; exact steps)
@@ -196,7 +228,11 @@ what the Tesla browser requires to open the page, not proof of whose Pi it is.
    five CNAMEs, DNS only: `_acme-challenge.car.alexahub.dev`, `_acme-challenge.www.car.alexahub.dev`,
    `_acme-challenge.fullscreen.car.alexahub.dev`, `_acme-challenge.www.fullscreen.car.alexahub.dev`
    and `_acme-challenge.standby.car.alexahub.dev` -> `_acme-challenge.<validation-zone>`. Then set
-   `CHALLENGE_ALIAS=<validation-zone>` and `CF_ZONE_ID` = the validation zone's ID.
+   `CHALLENGE_ALIAS=<validation-zone>` and `CF_ZONE_ID` = the validation zone's ID. The version
+   pointer then lives in the validation zone too: a sixth CNAME `_car-certs.alexahub.dev` ->
+   `_car-certs.<validation-zone>` (the Pis follow it) and the variable
+   `POINTER_NAME=_car-certs.<validation-zone>`. In the default mode the pointer needs nothing: the
+   token already edits DNS in alexahub.dev, and the first run creates `_car-certs.alexahub.dev`.
 3. **R2 bucket**: R2 -> Create bucket `teslalinux-certs` -> Settings -> Custom Domains -> Connect
    `certs.alexahub.dev` (keep the r2.dev URL disabled). R2 -> Manage R2 API Tokens -> Create API
    token: `Object Read & Write`, "Apply to specific buckets only" = `teslalinux-certs`, TTL as above
@@ -208,14 +244,15 @@ what the Tesla browser requires to open the page, not proof of whose Pi it is.
    `R2_SECRET_ACCESS_KEY` (step 3).
    Variables: `DEVICE_HOST=car.alexahub.dev`, `CF_ZONE_ID=<zone id>`, `R2_ACCOUNT_ID=<account id>`,
    `R2_BUCKET=teslalinux-certs`, `CERT_PATH_PREFIX=car`, `PUBLIC_BASE_URL=https://certs.alexahub.dev/car`;
-   optional `CHALLENGE_ALIAS`, `ACME_EMAIL`, `CF_ACCOUNT_ID`.
+   optional `CHALLENGE_ALIAS`, `ACME_EMAIL`, `CF_ACCOUNT_ID`, `POINTER_NAME`.
 5. **Repository settings**: Settings -> Actions -> General: allow only actions created by GitHub,
    require actions to be pinned to a full-length commit SHA, default workflow permissions read-only,
    require approval for workflows from outside collaborators. Branch protection on `main`: block force
    pushes and deletion.
 6. **First runs**: Actions -> tls-certs -> Run workflow with `staging: true` (the whole flow, nothing
-   published), then with `action: issue-both`. Check `https://certs.alexahub.dev/car/active.json`. The
-   job summary shows the **ACME account URI** for the CAA record.
+   published), then with `action: issue-both`. Check `https://certs.alexahub.dev/car/active.json`
+   and the pointer (`dig +short TXT _car-certs.alexahub.dev @1.1.1.1`). The job summary shows the
+   **ACME account URI** for the CAA record.
 7. **DNS** (Cloudflare DNS for alexahub.dev):
    * A records, **DNS only** (grey cloud): `car`, `www.car`, `fullscreen.car`, `www.fullscreen.car`
      -> `192.0.2.1` (`standby.car` needs none: it is only a name in the standby certificate).
@@ -231,13 +268,18 @@ what the Tesla browser requires to open the page, not proof of whose Pi it is.
    days without repository activity. The Actions page then shows a banner with "Enable workflow";
    re-enable it (or keep committing). The 3-hourly runs stop silently otherwise, and the certificates
    expire about 30 days after the last renewal.
-9. **Pi**: nothing to set up. `TLS_BASE_URL` is in `/etc/teslalinux/env`; `sudo teslalinux-tls fetch`
-   tries at once, `teslalinux-tls status` shows the result.
+9. **Pi**: nothing to set up. `TLS_BASE_URL` is in `/etc/teslalinux/env` (`TLS_POINTER_NAME`
+   overrides the pointer's name; empty = no pointer, only the 6-hourly full download);
+   `sudo teslalinux-tls fetch` checks at once, `sudo teslalinux-tls fetch --full` downloads
+   everything, `teslalinux-tls pointer` shows the pointer as the Pi resolves it, `teslalinux-tls
+   status` the result.
 
 Operations: a revoked or broken slot needs nothing (the next run, at most 3 h later, handles it; run
 the workflow with `check` to do it now, or `issue-current` / `issue-standby` to force a new
-certificate). **Rollback**: copy `<slot>-previous/` over `<slot>/` in the bucket (the Pi only accepts
-a pair newer than its own, so this matters only for Pis that never got the bad one).
+certificate). **Rollback**: copy `<slot>-previous/` over `<slot>/` in the bucket, then run the
+workflow with `check` so the pointer follows (the Pi only accepts a pair newer than its own, so this
+matters only for Pis that never got the bad one; the others reject it once and do not download it
+again for 6 h).
 
 Pinned in `host/tls/renew.sh`: acme.sh 3.1.6, commit `807da6498377ee5e0cf43a78091f46f12dc59a89`,
 sha256 `acme.sh` `c7d68b021cfd6380ea83a82962abde5b484779fee0b97d38681dfa1396bbc8d7`, `dnsapi/dns_cf.sh`

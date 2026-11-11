@@ -2,7 +2,9 @@
 # teslalinux-tls and renew.sh tests, offline: a throwaway CA (root -> intermediate), certificates and
 # keys for both slots that must be accepted or rejected, installs and fetches against a local HTTPS
 # server (python3), active.json switching and fallback, atomic install rollback, the revocation
-# decision from a CRL, and the issuer's slot decisions. Runs anywhere with OpenSSL >= 3.4 (for
+# decision from a CRL, the DNS version pointer (parsing; checks against fake delv/dig: what is
+# downloaded, pending, the 6 h full-download fallback), and the issuer's slot decisions and pointer
+# writes (a fake curl for the Cloudflare API). Runs anywhere with OpenSSL >= 3.4 (for
 # x509 -not_before/-not_after) and a POSIX sh: on the Mac (Homebrew openssl), on Alpine, on Pi OS.
 #   sh host/tls/test/run.sh        exit 0 = every case behaved (TLS_TEST_SH=dash: run the tool under dash)
 set -u
@@ -24,8 +26,9 @@ ts() { # offset seconds -> YYYYMMDDHHMMSSZ (UTC)
 }
 same() { cmp -s "$1" "$2"; }
 
+# no DNS pointer and no rate limit unless a test sets them: every fetch is the full download
 export TLS_CAFILE="$W/ca/root.pem" TLS_BUILD_TIME_FILE="$W/none" TLS_BUNDLE_DIR="$W/none" TLS_NO_RELOAD=1 \
-	TLS_PIDFILE="$W/pid" TLS_BASE_URL=""
+	TLS_PIDFILE="$W/pid" TLS_BASE_URL="" TLS_POINTER_NAME="" TLS_FETCH_INTERVAL=0
 # one Pi = one directory with its env file, TLS files and state
 mkpi() {
 	mkdir -p "$1"
@@ -141,6 +144,28 @@ echo $(( $(date +%s) + DAY )) >"$W/buildtime"
 out=$(TLS_BUILD_TIME_FILE="$W/buildtime" pi pi0 verify current cur1.chain cur1.key 2>/dev/null)
 case "$out" in defer*) ok "clock before the build time: $out" ;; *) bad "clock check" "$out" ;; esac
 
+# ---- the DNS version pointer's text
+H1=$(openssl dgst -sha256 -r <cur1.chain | cut -d' ' -f1); H2=$(openssl dgst -sha256 -r <sb1.chain | cut -d' ' -f1)
+ptr_expect() { # name want(ok|malformed) text [expected print]
+	out=$(pi pi0 pointer "$3" 2>/dev/null); rc=$?
+	case "$2" in
+		ok) [ $rc -eq 0 ] && [ "$out" = "${4:-}" ] && ok "pointer text: $1" || bad "pointer text: $1" "rc=$rc $out" ;;
+		*) [ $rc -ne 0 ] && case "$out" in malformed*) true ;; *) false ;; esac && ok "pointer text: $1 -> $out" || bad "pointer text: $1 accepted" "$out" ;;
+	esac
+}
+ptr_expect "valid" ok "v=1 active=standby current=$H1 standby=$H2 t=1762800000" "active=standby current=$H1 standby=$H2 t=1762800000"
+ptr_expect "a slot not published (-)" ok "v=1 active=current current=$H1 standby=- t=1" "active=current current=$H1 standby=- t=1"
+ptr_expect "the same record twice" ok "$(printf 'v=1 active=current current=- standby=- t=5\nv=1 active=current current=- standby=- t=5')" "active=current current=- standby=- t=5"
+ptr_expect "v=2" malformed "v=2 active=current current=$H1 standby=$H2 t=1"
+ptr_expect "unknown active slot" malformed "v=1 active=other current=$H1 standby=$H2 t=1"
+ptr_expect "short hash" malformed "v=1 active=current current=abc standby=$H2 t=1"
+ptr_expect "upper-case hash" malformed "v=1 active=current current=$(echo "$H1" | tr a-f A-F) standby=$H2 t=1"
+ptr_expect "standby missing" malformed "v=1 active=current current=$H1 t=1"
+ptr_expect "no time" malformed "v=1 active=current current=$H1 standby=$H2"
+ptr_expect "two different records" malformed "$(printf 'v=1 active=current current=- standby=- t=5\nv=1 active=standby current=- standby=- t=6')"
+ptr_expect "glob characters" malformed "v=1 active=* current=* standby=* t=*"
+ptr_expect "unrelated TXT" malformed "google-site-verification=abc"
+
 # ---- init without anything trusted: the self-signed fallback
 pi pi0 init 2>/dev/null || bad "init"
 [ "$(cat pi0/tls/served 2>/dev/null)" = selfsigned ] && [ -s pi0/tls/fullchain.pem ] && [ -s pi0/tls/privkey.pem ] \
@@ -207,12 +232,15 @@ import http.server, ssl, sys
 class Q(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k): super().__init__(*a, directory=sys.argv[1], **k)
     def log_message(self, *a): pass
+    def do_GET(self):
+        with open(sys.argv[5], "a") as f: f.write(self.path + "\n")
+        super().do_GET()
 s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Q)
 c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(sys.argv[2], sys.argv[3])
 s.socket = c.wrap_socket(s.socket, server_side=True)
 open(sys.argv[4] + ".tmp", "w").write(str(s.server_address[1]))
 import os; os.rename(sys.argv[4] + ".tmp", sys.argv[4])
-s.serve_forever()' "$W/www" "$W/srv.chain" "$W/srv.key" "$W/port" 2>/dev/null &
+s.serve_forever()' "$W/www" "$W/srv.chain" "$W/srv.key" "$W/port" "$W/req.log" 2>/dev/null &
 	SERVER=$!
 	i=0; while [ ! -s port ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
 	BASE="https://127.0.0.1:$(cat port)/car"
@@ -252,6 +280,85 @@ s.serve_forever()' "$W/www" "$W/srv.chain" "$W/srv.key" "$W/port" 2>/dev/null &
 	[ $rc -ne 0 ] && same pi3/tls/fullchain.pem cur3.chain && grep -q '"lastResult": "failed"' pi3/state.json && ok "download failure: installed pair kept, state failed" || bad "download failure"
 	# http:// is refused
 	(TLS_BASE_URL="http://127.0.0.1/car"; export TLS_BASE_URL; pi pi3 fetch 2>/dev/null) && bad "http base accepted" || ok "http base URL refused"
+
+	# ---- the DNS version pointer: fake delv/dig answer from dns/txt (delv validates when dns/signed exists)
+	mkdir -p dnsbin dns
+	printf '#!/bin/sh\necho "dig $*" >>"$FAKE_DNS/log"\n[ -f "$FAKE_DNS/txt" ] || { echo ";; connection timed out; no servers could be reached"; exit 9; }\nsed '"'"'s/.*/"&"/'"'"' "$FAKE_DNS/txt"\n' >dnsbin/dig
+	printf '#!/bin/sh\necho "delv $*" >>"$FAKE_DNS/log"\n[ -f "$FAKE_DNS/txt" ] && [ -f "$FAKE_DNS/signed" ] || { echo ";; resolution failed: timed out"; exit 1; }\necho "; fully validated"\nsed '"'"'s/.*/_car-certs.example.test. 300 IN TXT "&"/'"'"' "$FAKE_DNS/txt"\necho "_car-certs.example.test. 300 IN RRSIG TXT 13 3 300 20261201000000 20261101000000 1 example.test. AAAA"\n' >dnsbin/delv
+	chmod +x dnsbin/dig dnsbin/delv
+	sha() { openssl dgst -sha256 -r <"$1" | cut -d' ' -f1; }
+	ptr() { printf 'v=1 active=%s current=%s standby=%s t=%s\n' "$1" "$2" "$3" "$(date +%s)" >dns/txt; }
+	# one check with the pointer on; req.log collects the paths the server was asked for
+	pfetch() {
+		: >req.log; : >dns/log
+		(TLS_BASE_URL=$BASE TLS_POINTER_NAME=_car-certs.example.test TLS_FETCH_INTERVAL=21600 FAKE_DNS="$W/dns" PATH="$W/dnsbin:$PATH"
+		 export TLS_BASE_URL TLS_POINTER_NAME TLS_FETCH_INTERVAL FAKE_DNS PATH; pi "$1" fetch ${2:+"$2"} 2>/dev/null)
+	}
+	reqs() { sort req.log | tr '\n' ' ' | sed 's/ $//'; }
+	field() { sed -n "s/.*\"$2\": *\"*\([^,\"]*\)\"*,.*/\1/p" "$1/state.json"; }
+	age_full() { sed 's/"lastFullFetch": [0-9]*/"lastFullFetch": 1/' "$1/state.json" >"$1/state.tmp" && mv "$1/state.tmp" "$1/state.json"; }
+	mkpi pi5
+	publish current cur2; publish standby sb1; set_active current
+	pfetch pi5 --full; rc=$?
+	[ $rc -eq 0 ] && same pi5/tls/fullchain.pem cur2.chain && [ "$(field pi5 checkSource)" = full ] && [ "$(field pi5 lastFullFetch)" -gt 0 ] \
+		&& [ "$(reqs)" = "/car/active.json /car/current/fullchain.pem /car/current/privkey.pem /car/standby/fullchain.pem /car/standby/privkey.pem" ] \
+		&& ok "pointer: fetch --full downloads everything" || bad "fetch --full" "rc=$rc reqs=$(reqs) $(cat pi5/state.json)"
+	ptr current "$(sha cur2.chain)" "$(sha sb1.chain)"
+	pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ -z "$(reqs)" ] && [ "$(field pi5 lastResult)" = unchanged ] && [ "$(field pi5 checkSource)" = dns ] && [ "$(field pi5 lastCheck)" -gt 0 ] \
+		&& ok "pointer: unchanged -> no download, lastCheck and checkSource dns" || bad "pointer unchanged" "rc=$rc reqs=$(reqs) $(cat pi5/state.json)"
+	grep -q '^dig .*TXT _car-certs.example.test @1.1.1.1' dns/log && grep -q 'not validated' pi5/state.json \
+		&& ok "  ... asked 1.1.1.1 directly (delv failed, dig answered, not validated)" || bad "resolver use" "$(cat dns/log)"
+	mkpair cur4 current -20 $((90 * DAY))
+	publish current cur4; ptr current "$(sha cur4.chain)" "$(sha sb1.chain)"
+	pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ "$(reqs)" = "/car/current/fullchain.pem /car/current/privkey.pem" ] && same pi5/tls/fullchain.pem cur4.chain \
+		&& [ "$(field pi5 lastResult)" = installed ] && ok "pointer: changed current -> only current downloaded and installed" || bad "pointer changed slot" "rc=$rc reqs=$(reqs) $(cat pi5/state.json)"
+	ptr standby "$(sha cur4.chain)" "$(sha sb1.chain)"
+	pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ "$(reqs)" = "/car/active.json" ] && same pi5/tls/fullchain.pem cur4.chain && [ "$(field pi5 lastResult)" = pending ] \
+		&& ok "pointer: active standby, CDN still current -> pending, current kept" || bad "pointer active pending" "rc=$rc reqs=$(reqs) $(cat pi5/state.json)"
+	set_active standby
+	pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ "$(reqs)" = "/car/active.json" ] && same pi5/tls/fullchain.pem sb1.chain && [ "$(field pi5 lastResult)" = installed ] \
+		&& ok "pointer: active.json published -> only active.json downloaded, standby served" || bad "pointer active switch" "rc=$rc reqs=$(reqs) $(cat pi5/state.json)"
+	mkpair cur5 current -10 $((90 * DAY))
+	ptr standby "$(sha cur5.chain)" "$(sha sb1.chain)"
+	pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ "$(reqs)" = "/car/current/fullchain.pem /car/current/privkey.pem" ] && same pi5/tls/slots/current/fullchain.pem cur4.chain \
+		&& [ "$(field pi5 lastResult)" = pending ] && ok "pointer ahead of the CDN -> pending, installed pair kept, no full download yet" || bad "pointer mismatch" "rc=$rc reqs=$(reqs) $(cat pi5/state.json)"
+	age_full pi5; pfetch pi5
+	case " $(reqs) " in *" /car/active.json "*" /car/standby/privkey.pem "*) ok "  ... still ahead 6 h after the last full download: full download" ;; *) bad "mismatch fallback" "reqs=$(reqs)" ;; esac
+	[ "$(field pi5 checkSource)" = full ] && same pi5/tls/slots/current/fullchain.pem cur4.chain && ok "  ... checkSource full, nothing downgraded" || bad "mismatch fallback state" "$(cat pi5/state.json)"
+	publish current cur5; pfetch pi5
+	[ "$(reqs)" = "/car/current/fullchain.pem /car/current/privkey.pem" ] && same pi5/tls/slots/current/fullchain.pem cur5.chain \
+		&& ok "pointer: published later -> installed at the next check" || bad "pointer catch-up" "reqs=$(reqs) $(cat pi5/state.json)"
+	before=$(cat pi5/state.json); rm -f dns/txt
+	pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ -z "$(reqs)" ] && [ "$(cat pi5/state.json)" = "$before" ] \
+		&& ok "TXT lookup fails, full download < 6 h ago: nothing downloaded, state kept" || bad "TXT failure skip" "rc=$rc reqs=$(reqs)"
+	grep -q '@8.8.8.8' dns/log && ok "  ... both resolvers tried" || bad "second resolver" "$(cat dns/log)"
+	age_full pi5; pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ "$(sort req.log | wc -l | tr -d ' ')" = 5 ] && [ "$(field pi5 checkSource)" = full ] \
+		&& ok "TXT lookup fails, last full download 6 h ago: full download" || bad "TXT failure full" "rc=$rc reqs=$(reqs) $(cat pi5/state.json)"
+	mkpi pi6
+	pfetch pi6; rc=$?
+	[ $rc -eq 0 ] && [ "$(sort req.log | wc -l | tr -d ' ')" = 5 ] && same pi6/tls/fullchain.pem sb1.chain \
+		&& ok "TXT lookup fails on a Pi without a trusted pair: full download at once" || bad "fresh Pi fallback" "rc=$rc reqs=$(reqs)"
+	ptr standby "$(sha cur5.chain)" "$(sha sb1.chain)"; : >dns/signed
+	pfetch pi5; rc=$?
+	[ $rc -eq 0 ] && [ -z "$(reqs)" ] && grep -q 'DNSSEC validated' pi5/state.json && ! grep -q '^dig' dns/log \
+		&& ok "pointer via delv, DNSSEC validated, dig not needed" || bad "delv validated" "rc=$rc $(cat dns/log) $(cat pi5/state.json)"
+	rm -f dns/signed
+	publish current cur0; ptr standby "$(sha cur0.chain)" "$(sha sb1.chain)"
+	pfetch pi5
+	[ "$(reqs)" = "/car/current/fullchain.pem /car/current/privkey.pem" ] && same pi5/tls/slots/current/fullchain.pem cur5.chain && grep -q 'current: rejected' pi5/state.json \
+		&& ok "pointer to an older pair: downloaded once, rejected" || bad "pointer older" "reqs=$(reqs) $(cat pi5/state.json)"
+	pfetch pi5
+	[ -z "$(reqs)" ] && grep -q 'rejected here before' pi5/state.json && ok "  ... not downloaded again on the next check" || bad "rejected memo" "reqs=$(reqs) $(cat pi5/state.json)"
+	printf 'v=1 active=standby current=%s standby=%s t=x\n' "$(sha cur5.chain)" "$(sha sb1.chain)" >dns/txt
+	age_full pi5; pfetch pi5
+	[ "$(sort req.log | wc -l | tr -d ' ')" = 5 ] && [ "$(field pi5 checkSource)" = full ] && ok "malformed TXT answer: treated as no answer (full download when due)" || bad "malformed answer" "reqs=$(reqs)"
 else
 	skipped "fetch tests (need python3 and curl)"
 fi
@@ -302,6 +409,59 @@ if command -v bash >/dev/null 2>&1; then
 	dec_expect "nothing usable: current" "current" final_active invalid invalid
 	DEVICE_HOST=$HOST; export DEVICE_HOST
 	dec_expect "standby names" "$HOST www.$HOST fullscreen.$HOST www.fullscreen.$HOST standby.$HOST" slot_names standby
+	# the version pointer: its value, its name, and the Cloudflare API calls (a fake curl on PATH)
+	dec_expect "pointer value" "v=1 active=current current=$H1 standby=- t=1762800000" pointer_value current "$H1" - 1762800000
+	dec_expect "pointer name from DEVICE_HOST" "_car-certs.example.test" pointer_name
+	(POINTER_NAME=_car-certs.validation.example; export POINTER_NAME; dec_expect "pointer name set" "_car-certs.validation.example" pointer_name)
+	if command -v jq >/dev/null 2>&1; then
+		mkdir -p cfbin cf iss/pub/current iss/pub/standby
+		cat >cfbin/curl <<'EOF'
+#!/bin/sh
+# fake curl for the Cloudflare API: logs "METHOD URL", answers from $FAKE_CF/content (the record)
+m=GET out="" data="" url=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-X) m=$2; shift ;;
+		-o) out=$2; shift ;;
+		--data) data=$2; shift ;;
+		-H|-w|--max-time|--proto) shift ;;
+		https://*) url=$1 ;;
+	esac
+	shift
+done
+echo "$m $url" >>"$FAKE_CF/log"
+if [ -f "$FAKE_CF/fail" ]; then echo '{"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}' >"$out"; printf 403; exit 0; fi
+case "$m" in
+	GET) if [ -f "$FAKE_CF/content" ]; then jq -n --rawfile c "$FAKE_CF/content" '{success: true, result: [{id: "rec1", content: ($c | rtrimstr("\n"))}]}' >"$out"
+		else echo '{"success":true,"result":[]}' >"$out"; fi ;;
+	POST|PATCH) printf '%s' "$data" | jq -r .content >"$FAKE_CF/content"; printf '%s' "$data" >"$FAKE_CF/last"; echo '{"success":true,"result":{}}' >"$out" ;;
+	*) echo '{"success":true,"result":{}}' >"$out" ;;
+esac
+printf 200
+EOF
+		chmod +x cfbin/curl
+		cp cur1.chain iss/pub/current/fullchain.pem
+		pupdate() { : >cf/log; PATH="$W/cfbin:$PATH" FAKE_CF="$W/cf" CF_ZONE_ID=zone1 CF_DNS_API_TOKEN=token \
+			bash -c 'TLS_RENEW_LIB=1 . "$1"; W=$2; pointer_update "$3"' sh "$RENEW" "$W/iss" "$1" >/dev/null 2>&1; }
+		calls() { cut -d' ' -f1 cf/log | tr '\n' ' ' | sed 's/ $//'; }
+		pupdate current; rc=$?
+		[ $rc -eq 0 ] && [ "$(calls)" = "GET POST" ] && grep -q "^\"v=1 active=current current=$H1 standby=- t=[0-9]*\"\$" cf/content \
+			&& grep -q '"ttl":300' cf/last && grep -q '"name":"_car-certs.example.test"' cf/last && grep -q 'type=TXT&name=_car-certs.example.test' cf/log \
+			&& ok "issuer: no pointer record -> created (TXT, TTL 300, quoted)" || bad "issuer: pointer create" "rc=$rc $(cat cf/log) $(cat cf/content 2>/dev/null)"
+		sed 's/ t=[0-9]*/ t=1000/' cf/content >cf/c.tmp && mv cf/c.tmp cf/content
+		pupdate current; rc=$?
+		[ $rc -eq 0 ] && [ "$(calls)" = GET ] && grep -q 't=1000' cf/content && ok "issuer: same slots, older t= -> not written" || bad "issuer: pointer unchanged" "rc=$rc $(cat cf/log)"
+		cp sb1.chain iss/pub/standby/fullchain.pem
+		pupdate current; rc=$?
+		[ $rc -eq 0 ] && [ "$(calls)" = "GET PATCH" ] && grep -q "standby=$H2 " cf/content && grep -q 'dns_records/rec1' cf/log \
+			&& ok "issuer: standby published -> record patched" || bad "issuer: pointer patch" "rc=$rc $(cat cf/log) $(cat cf/content)"
+		pupdate standby; [ "$(calls)" = "GET PATCH" ] && grep -q "active=standby" cf/content && ok "issuer: active slot changed -> patched" || bad "issuer: pointer active" "$(cat cf/log)"
+		: >cf/fail
+		pupdate standby && bad "issuer: API failure not reported" || ok "issuer: Cloudflare API failure -> pointer_update fails"
+		rm -f cf/fail
+	else
+		skipped "issuer pointer API tests (need jq)"
+	fi
 else
 	skipped "issuer decision tests (need bash)"
 fi

@@ -66,7 +66,8 @@ UNITS=(teslalinux-netconfig.service teslalinux-dbus.service teslalinux-uplink.se
 APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.service teslalinux-api.service
   teslalinux-pipewire-pulse.service teslalinux-wireplumber.service teslalinux-pipewire.service tacomp.service teslalinux-dbus.service)
 # runtime packages next to the dist's MANIFEST list (tools/debian/carstack.sh, host/phase1-pios/provision.sh)
-RUNTIME_PKGS=(nginx python3 python3-websockets openssl curl ca-certificates rsync ffmpeg dbus
+# (bind9-dnsutils: delv/dig, teslalinux-tls reads the certificate's DNS version pointer with them)
+RUNTIME_PKGS=(nginx python3 python3-websockets openssl curl ca-certificates bind9-dnsutils rsync ffmpeg dbus
   pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd
   hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data iw rfkill iproute2
   libgl1-mesa-dri libegl-mesa0 libgbm1 libgles2 v4l-utils

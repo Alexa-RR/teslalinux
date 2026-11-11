@@ -41,6 +41,8 @@ OFFLINE_MODE_FIRMWARE_DOWNLOADS=1
 # serve TLS_CERT/TLS_KEY from the slot active.json names. A release carries the pairs of its build
 # day, so a new install works offline. Self-hosting: your own DEVICE_HOST and your own issuer's
 # TLS_BASE_URL. No DNS or ACME credentials on the Pi. See docs/CAR-STACK-READINESS.md "Certificate".
+# Every hour the Pi first reads the issuer's DNS TXT record _car-certs.<DEVICE_HOST without its first
+# label> (override: TLS_POINTER_NAME=...; empty = none) and downloads only what changed.
 TLS_CERT=/etc/teslalinux/tls/fullchain.pem
 TLS_KEY=/etc/teslalinux/tls/privkey.pem
 TLS_BASE_URL=https://certs.alexahub.dev/car

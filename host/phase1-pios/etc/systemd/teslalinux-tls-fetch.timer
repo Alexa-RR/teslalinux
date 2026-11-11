@@ -1,10 +1,10 @@
 [Unit]
-Description=teslalinux: car certificate check at boot and every 6 h (an uplink coming up also starts it, via the NetworkManager dispatcher hook)
+Description=teslalinux: car certificate check at boot and every hour (a DNS lookup; downloads only what changed, or everything at most every 6 h when DNS gives no answer; an uplink coming up also starts it, via the NetworkManager dispatcher hook)
 
 [Timer]
 OnBootSec=1min
-OnUnitInactiveSec=6h
-RandomizedDelaySec=15min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
 AccuracySec=1min
 
 [Install]
