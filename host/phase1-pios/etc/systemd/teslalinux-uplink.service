@@ -1,0 +1,12 @@
+[Unit]
+Description=teslalinux: route through the uplink that reaches the internet (LTE, backup Wi-Fi, Ethernet)
+After=network.target NetworkManager.service
+Wants=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/teslalinux-uplink
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

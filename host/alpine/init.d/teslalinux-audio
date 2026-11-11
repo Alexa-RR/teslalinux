@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+# teslalinux: the app's audio to the car browser (FLAC fMP4 over WebSocket, 8080)
+description="teslalinux audio bridge"
+command=/usr/bin/python3
+command_args="/usr/local/lib/teslalinux/audio.py"
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/teslalinux-audio.pid
+output_log=/var/log/teslalinux/audio.log
+error_log=/var/log/teslalinux/audio.log
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
+
+depend() {
+	need teslalinux-pipewire-pulse
+	use teslalinux-wireplumber
+}
+
+start_pre() {
+	checkpath -d -m 0755 -o tesla:tesla /var/log/teslalinux
+	export XDG_RUNTIME_DIR=/run/tesla PULSE_SERVER="${PULSE_SERVER:-unix:/run/tesla/pulse/native}"
+	export TESLALINUX_AUDIO_WS_BIND=127.0.0.1
+}

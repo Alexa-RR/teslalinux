@@ -1,0 +1,71 @@
+@@@
+	private void surfaceCreated() {
+		for (SurfaceHolder.Callback c : mCallbacks) {
+===
+	private void surfaceCreated() {
+		android.util.Log.i("SurfaceView", "surfaceCreated " + this + " callbacks=" + mCallbacks.size());
+		for (SurfaceHolder.Callback c : mCallbacks) {
+@@@
+	private void surfaceChanged(int format, int width, int height) {
+		for (SurfaceHolder.Callback c : mCallbacks) {
+===
+	private void surfaceChanged(int format, int width, int height) {
+		android.util.Log.i("SurfaceView", "surfaceChanged " + this + " " + width + "x" + height + " callbacks=" + mCallbacks.size());
+		for (SurfaceHolder.Callback c : mCallbacks) {
+@@@
+		public void removeCallback(Callback callback) {
+			/*		synchronized (mCallbacks) {
+					mCallbacks.remove(callback);
+					}*/
+		}
+===
+		public void removeCallback(Callback callback) {
+			synchronized (mCallbacks) {
+				mCallbacks.remove(callback);
+			}
+		}
+@@@
+		for (SurfaceHolder.Callback c : mCallbacks) {
+			c.surfaceCreated(mSurfaceHolder);
+		}
+	}
+===
+		tlSurfaceCreated = true;
+		for (SurfaceHolder.Callback c : new java.util.ArrayList<>(mCallbacks)) {
+			c.surfaceCreated(mSurfaceHolder);
+		}
+		// AOSP: surfaceChanged(format, w, h) always follows surfaceCreated once the size is known; the
+		// native resize signal only fires on later size changes, so report the current size here.
+		if (tlSurfaceWidth > 0 && tlSurfaceHeight > 0)
+			surfaceChanged(1 /*RGBA_8888*/, tlSurfaceWidth, tlSurfaceHeight);
+		else if (getWidth() > 0 && getHeight() > 0)
+			surfaceChanged(1 /*RGBA_8888*/, getWidth(), getHeight());
+	}
+
+	private boolean tlSurfaceCreated;
+	private int tlSurfaceWidth, tlSurfaceHeight;
+@@@
+		for (SurfaceHolder.Callback c : mCallbacks) {
+			c.surfaceChanged(mSurfaceHolder, format, width, height);
+		}
+===
+		tlSurfaceWidth = width;
+		tlSurfaceHeight = height;
+		if (!tlSurfaceCreated)
+			return; // AOSP never reports a size change before surfaceCreated; the size is replayed then
+		for (SurfaceHolder.Callback c : new java.util.ArrayList<>(mCallbacks)) {
+			c.surfaceChanged(mSurfaceHolder, format, width, height);
+		}
+@@@
+		public Rect getSurfaceFrame() {
+			//		return mSurfaceFrame;
+			return new Rect(0, 0, 400, 400);
+		}
+===
+		/** AOSP: the current size of the surface (the view's size until a fixed size is requested). */
+		public Rect getSurfaceFrame() {
+			int w = tlSurfaceWidth > 0 ? tlSurfaceWidth : getWidth();
+			int h = tlSurfaceHeight > 0 ? tlSurfaceHeight : getHeight();
+			return new Rect(0, 0, w, h);
+		}
+

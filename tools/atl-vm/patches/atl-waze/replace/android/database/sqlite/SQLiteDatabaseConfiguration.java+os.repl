@@ -1,0 +1,10 @@
+@@@
+		customFunctions.clear();
+		customFunctions.addAll(other.customFunctions);
+	}
+===
+		customFunctions.clear();
+		customFunctions.addAll(other.customFunctions);
+		perConnectionSql.clear();
+		perConnectionSql.addAll(other.perConnectionSql);
+	}

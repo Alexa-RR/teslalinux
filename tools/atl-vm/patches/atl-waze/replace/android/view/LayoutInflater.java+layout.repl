@@ -1,0 +1,32 @@
+@@@
+	protected View onCreateView(String name, AttributeSet attrs) throws Exception {
+		try { // FIXME ugly
+			return createView(name, "android.view.", attrs);
+		} catch (java.lang.ClassNotFoundException e) {
+			try {
+				return createView(name, "android.widget.", attrs);
+			} catch (java.lang.ClassNotFoundException e1) {
+				return createView(name, "android.webkit.", attrs);
+			}
+		}
+	}
+===
+	/**
+	 * AOSP: a tag without a package is a framework view. PhoneLayoutInflater (the inflater every
+	 * context hands out) tries android.widget, android.webkit and android.app, then LayoutInflater
+	 * itself android.view (layout).
+	 */
+	private static final String[] TL_CLASS_PREFIX_LIST = {"android.widget.", "android.webkit.", "android.app."};
+
+	protected View onCreateView(String name, AttributeSet attrs) throws Exception {
+		for (String prefix : TL_CLASS_PREFIX_LIST) {
+			try {
+				View view = createView(name, prefix, attrs);
+				if (view != null)
+					return view;
+			} catch (java.lang.ClassNotFoundException e) {
+				// In this case we want to let the base class take a crack at it.
+			}
+		}
+		return createView(name, "android.view.", attrs);
+	}

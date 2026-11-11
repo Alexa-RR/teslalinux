@@ -1,0 +1,185 @@
+@@@
+public class Activity extends ContextThemeWrapper implements Window.Callback, LayoutInflater.Factory2 {
+===
+public class Activity extends ContextThemeWrapper implements Window.Callback, LayoutInflater.Factory2, android.content.ComponentCallbacks2 {
+@@@
+	public void registerActivityLifecycleCallbacks(Application.ActivityLifecycleCallbacks callback) {}
+===
+	/* registerActivityLifecycleCallbacks: see the lifecycle block appended below (ATL's was a no-op) */
+@@@
+	protected void onCreate(Bundle savedInstanceState) {
+		Slog.i(TAG, "- onCreate - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onCreate(savedInstanceState);
+		}
+
+		return;
+	}
+===
+	protected void onCreate(Bundle savedInstanceState) {
+		Slog.i(TAG, "- onCreate - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onCreate(savedInstanceState);
+		}
+
+		dispatchActivityCreated(savedInstanceState); // AOSP: ActivityLifecycleCallbacks.onActivityCreated
+		return;
+	}
+@@@
+	protected void onStart() {
+		Slog.i(TAG, "- onStart - yay!");
+		window.set_widget_as_root(window.native_window, window.getDecorView().widget);
+		window.setTitle(title);
+
+		for (Fragment fragment : fragments) {
+			fragment.onStart();
+		}
+
+		return;
+	}
+===
+	protected void onStart() {
+		Slog.i(TAG, "- onStart - yay!");
+		window.set_widget_as_root(window.native_window, window.getDecorView().widget);
+		window.setTitle(title);
+
+		for (Fragment fragment : fragments) {
+			fragment.onStart();
+		}
+
+		dispatchActivityStarted();
+		return;
+	}
+@@@
+	protected void onResume() {
+		Slog.i(TAG, "- onResume - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onResume();
+		}
+
+		paused = false;
+		return;
+	}
+===
+	protected void onResume() {
+		Slog.i(TAG, "- onResume - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onResume();
+		}
+
+		paused = false;
+		dispatchActivityResumed();
+		android.atl.ViewDump.installPoller(this); // ATL_DEBUG_DUMPVIEWS only
+		return;
+	}
+@@@
+	protected void onPause() {
+		Slog.i(TAG, "- onPause - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onPause();
+		}
+
+		paused = true;
+		return;
+	}
+===
+	protected void onPause() {
+		dispatchActivityPaused(); // AOSP dispatches Paused first
+		Slog.i(TAG, "- onPause - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onPause();
+		}
+
+		paused = true;
+		return;
+	}
+@@@
+	protected void onStop() {
+		Slog.i(TAG, "- onStop - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onStop();
+		}
+
+		return;
+	}
+===
+	protected void onStop() {
+		Slog.i(TAG, "- onStop - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onStop();
+		}
+
+		dispatchActivityStopped();
+		return;
+	}
+@@@
+	protected void onDestroy() {
+		Slog.i(TAG, "- onDestroy - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onDestroy();
+		}
+
+		destroyed = true;
+		return;
+	}
+===
+	protected void onDestroy() {
+		Slog.i(TAG, "- onDestroy - yay!");
+
+		for (Fragment fragment : fragments) {
+			fragment.onDestroy();
+		}
+
+		destroyed = true;
+		dispatchActivityDestroyed();
+		return;
+	}
+@@@
+public class Activity extends ContextThemeWrapper implements Window.Callback, LayoutInflater.Factory2, android.content.ComponentCallbacks2 {
+===
+public class Activity extends ContextThemeWrapper implements Window.Callback, KeyEvent.Callback, LayoutInflater.Factory2, android.content.ComponentCallbacks2 {
+@@@
+	public boolean dispatchKeyEvent(KeyEvent event) {
+		return false;
+	}
+===
+	/**
+	 * AOSP: the event goes to the window's views first (ATL's focused widget sees it natively before
+	 * the window-level controller calls here), then to this activity's KeyEvent.Callback methods,
+	 * where BACK ends in onBackPressed().
+	 */
+	public boolean dispatchKeyEvent(KeyEvent event) {
+		onUserInteraction();
+		return event.dispatch(this, tlKeyDispatchState, this);
+	}
+@@@
+	public void setDefaultKeyMode(int flag) {}
+===
+	/**
+	 * AOSP: the dialer, shortcut and search modes feed unhandled keys to the options menu, the dialer
+	 * or SearchManager; this platform has no options menu panel, dialer or search service, so those
+	 * modes keep the value and otherwise behave like DEFAULT_KEYS_DISABLE.
+	 */
+	public void setDefaultKeyMode(int flag) {
+		mDefaultKeyMode = flag;
+	}
+@@@
+		destroyed = true;
+		dispatchActivityDestroyed();
+		return;
+===
+		destroyed = true;
+		dispatchActivityDestroyed();
+		/* AOSP: the activity's window is removed with it (tl_window_attach: its decor page leaves the stack) */
+		if (window != null && window.native_window != 0 && window.getDecorView() != null)
+			window.tlRemoveRoot(window.native_window, window.getDecorView().widget);
+		return;

@@ -1,0 +1,23 @@
+#!/bin/sh
+# teslalinux first boot on the Alpine image: grow the root partition and filesystem to the whole
+# card, create the device TLS key + CSR + placeholder (teslalinux-tls init), mark done.
+set -eu
+. /etc/teslalinux/env
+root_dev=$(findmnt -n -o SOURCE / 2>/dev/null || mount | awk '$3 == "/" {print $1}')
+case "$root_dev" in
+	/dev/mmcblk*p2|/dev/sd?2|/dev/nvme*p2)
+		disk=${root_dev%p2}; disk=${disk%2}
+		part=${root_dev##*[p]}; part=${part##*[a-z]}
+		if command -v growpart >/dev/null 2>&1; then
+			growpart "$disk" "$part" 2>/dev/null || true
+		else
+			printf ', +\n' | sfdisk -N "$part" --no-reread "$disk" >/dev/null 2>&1 || true
+			partx -u "$disk" 2>/dev/null || true
+		fi
+		resize2fs "$root_dev" >/dev/null 2>&1 || true
+		;;
+esac
+# the device key (ECDSA P-256, generated here and never copied anywhere), its CSR for the cloud
+# renewer, and a self-signed placeholder for the same key until the real chain is fetched
+/usr/local/bin/teslalinux-tls init || true
+touch /etc/teslalinux/.firstboot-done

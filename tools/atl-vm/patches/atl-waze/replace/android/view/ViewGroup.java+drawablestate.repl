@@ -1,0 +1,21 @@
+@@@
+	public void setAddStatesFromChildren(boolean addsStates) {}
+===
+	public void setAddStatesFromChildren(boolean addsStates) {
+		if (tlAddStatesFromChildren != addsStates) {
+			tlAddStatesFromChildren = addsStates;
+			refreshDrawableState();
+		}
+	}
+@@@
+	protected void dispatchSetPressed(boolean pressed) {}
+===
+	/** AOSP: children that are clickable on their own do not show their parent's press */
+	@Override
+	protected void dispatchSetPressed(boolean pressed) {
+		for (int i = 0; i < getChildCount(); i++) {
+			final View child = getChildAt(i);
+			if (!pressed || (!child.isClickable() && !child.isLongClickable()))
+				child.setPressed(pressed);
+		}
+	}

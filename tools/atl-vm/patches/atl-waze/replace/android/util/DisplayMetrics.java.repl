@@ -1,0 +1,25 @@
+@@@
+	private static int getDeviceDensity() {
+		// qemu.sf.lcd_density can be used to override ro.sf.lcd_density
+		// when running in the emulator, allowing for dynamic configurations.
+		// The reason for this is that ro.sf.lcd_density is write-once and is
+		// set by the init process when it parses build.prop before anything else.
+		return DENSITY_DEFAULT;
+	}
+===
+	private static int getDeviceDensity() {
+		/* teslalinux: Android reads ro.sf.lcd_density (qemu.sf.lcd_density in the emulator); here the
+		 * same role is played by ATL_DENSITY_DPI (e.g. 240 = hdpi, 320 = xhdpi). The native asset
+		 * configuration uses the same variable, so density-qualified resources match. */
+		String env = System.getenv("ATL_DENSITY_DPI");
+		if (env != null) {
+			try {
+				int dpi = Integer.parseInt(env.trim());
+				if (dpi > 0)
+					return dpi;
+			} catch (NumberFormatException e) {
+				// fall through to the default
+			}
+		}
+		return DENSITY_DEFAULT;
+	}

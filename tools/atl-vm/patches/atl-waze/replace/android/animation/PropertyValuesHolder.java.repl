@@ -1,0 +1,27 @@
+@@@
+			setter = target.getClass().getMethod("set" + property_name.substring(0, 1).toUpperCase() + property_name.substring(1), clazz);
+			Method getter = target.getClass().getMethod("get" + property_name.substring(0, 1).toUpperCase() + property_name.substring(1));
+			if (values_int != null && values_int.length == 1) {
+				values_int = new int[] {(Integer)getter.invoke(target), values_int[0]};
+			} else if (values_float != null && values_float.length == 1) {
+				values_float = new float[] {(Float)getter.invoke(target), values_float[0]};
+			} else if (values_object != null && values_object.length == 1) {
+				values_object = new Object[] {getter.invoke(target), values_object[0]};
+			}
+===
+			String capitalized = property_name.substring(0, 1).toUpperCase() + property_name.substring(1);
+			setter = target.getClass().getMethod("set" + capitalized, clazz);
+			setter.setAccessible(true); // AOSP: public setters of non-public classes (VectorDrawable groups)
+			/* AOSP: the getter is only consulted when a single value was given (the start value comes from the target) */
+			if ((values_int != null && values_int.length == 1) || (values_float != null && values_float.length == 1)
+					|| (values_object != null && values_object.length == 1)) {
+				Method getter = target.getClass().getMethod("get" + capitalized);
+				getter.setAccessible(true);
+				if (values_int != null) {
+					values_int = new int[] {(Integer)getter.invoke(target), values_int[0]};
+				} else if (values_float != null) {
+					values_float = new float[] {(Float)getter.invoke(target), values_float[0]};
+				} else {
+					values_object = new Object[] {getter.invoke(target), values_object[0]};
+				}
+			}

@@ -1,0 +1,343 @@
+@@@
+	public Typeface setTypeface(Typeface typeface) {
+		return typeface;
+	}
+===
+	/* teslalinux: AOSP Paint keeps the typeface it was given (null means the default); ATL used to
+	 * drop it and hand back a fresh default from getTypeface(). Its face also goes to the native
+	 * font description (tlApplyFace), for drawText and the measuring calls. */
+	private Typeface mTypeface;
+
+	public Typeface setTypeface(Typeface typeface) {
+		mTypeface = typeface;
+		tlApplyFace();
+		return typeface;
+	}
+@@@
+	public Typeface getTypeface() {
+		return new Typeface();
+	}
+===
+	public Typeface getTypeface() {
+		return mTypeface;
+	}
+@@@
+	public Locale getTextLocale() { return Locale.getDefault(); }
+===
+	public Locale getTextLocale() { return getTextLocales().get(0); }
+@@@
+	public Object getColorFilter() {
+===
+	public ColorFilter getColorFilter() {
+@@@
+	public void setAntiAlias(boolean aa) {
+===
+	/** AOSP: whether anti-aliasing is on (the ANTI_ALIAS_FLAG). */
+	public boolean isAntiAlias() {
+		return tlAntiAlias;
+	}
+
+	private boolean tlAntiAlias = true;
+
+	public void setAntiAlias(boolean aa) {
+		tlAntiAlias = aa;
+@@@
+	public void setFilterBitmap(boolean filter) {}
+===
+	/** AOSP: FILTER_BITMAP_FLAG selects bilinear sampling of scaled bitmaps. */
+	public void setFilterBitmap(boolean filter) {
+		if (filter)
+			mFlags |= FILTER_BITMAP_FLAG;
+		else
+			mFlags &= ~FILTER_BITMAP_FLAG;
+	}
+@@@
+	public boolean isFilterBitmap() { return false; }
+===
+	public boolean isFilterBitmap() {
+		return (mFlags & FILTER_BITMAP_FLAG) != 0;
+	}
+@@@
+	public void setFlags(int flags) {
+		if ((flags & ANTI_ALIAS_FLAG) != 0)
+			setAntiAlias(true);
+	}
+===
+	public void setFlags(int flags) {
+		mFlags = flags;
+		setAntiAlias((flags & ANTI_ALIAS_FLAG) != 0);
+		tlApplyFace();
+	}
+@@@
+	public void setAntiAlias(boolean aa) {
+		tlAntiAlias = aa;
+	}
+===
+	public void setAntiAlias(boolean aa) {
+		tlAntiAlias = aa;
+		if (aa)
+			mFlags |= ANTI_ALIAS_FLAG;
+		else
+			mFlags &= ~ANTI_ALIAS_FLAG;
+	}
+@@@
+	public /*native*/ int getFlags() { return 0; }
+===
+	public int getFlags() {
+		return mFlags;
+	}
+@@@
+	public /*native*/ int getHinting() { return 0; }
+	public /*native*/ void setHinting(int mode) {}
+===
+	public int getHinting() {
+		return mHinting;
+	}
+	public void setHinting(int mode) {
+		mHinting = mode;
+	}
+@@@
+	public /*native*/ void setDither(boolean dither) {}
+	public boolean isDither() {
+		return false;
+	}
+===
+	public void setDither(boolean dither) {
+		if (dither)
+			mFlags |= DITHER_FLAG;
+		else
+			mFlags &= ~DITHER_FLAG;
+	}
+	public boolean isDither() {
+		return (mFlags & DITHER_FLAG) != 0;
+	}
+@@@
+	public float ascent() {
+		return -getTextSize();
+	}
+===
+	/** AOSP: distance above the baseline (negative) recommended by the font. */
+	public float ascent() {
+		return tlFontMetrics()[1];
+	}
+@@@
+	public float measureText(char[] text, int index, int count) { return 10; }
+	public float measureText(String text, int start, int end) {
+		return (end - start) * getTextSize() * .6f;
+	}
+===
+	public float measureText(char[] text, int index, int count) {
+		if (text == null)
+			throw new IllegalArgumentException("text cannot be null");
+		if ((index | count) < 0 || index + count > text.length)
+			throw new ArrayIndexOutOfBoundsException();
+		if (count == 0)
+			return 0f;
+		return native_measure_text(paint, text, index, count) * mTextScaleX;
+	}
+	public float measureText(String text, int start, int end) {
+		if (text == null)
+			throw new IllegalArgumentException("text cannot be null");
+		if ((start | end | (end - start) | (text.length() - end)) < 0)
+			throw new IndexOutOfBoundsException();
+		if (end == start)
+			return 0f;
+		char[] buf = new char[end - start];
+		text.getChars(start, end, buf, 0);
+		return measureText(buf, 0, buf.length);
+	}
+@@@
+	public int getTextWidths(String text, int start, int end, float[] widths) {
+		Rect bounds = new Rect();
+		native_get_text_bounds(paint, text.substring(start, end), bounds);
+		return bounds.width();
+	}
+===
+	/** AOSP: the advance of every character of text[start, end) into widths; returns the count. */
+	public int getTextWidths(String text, int start, int end, float[] widths) {
+		if (text == null)
+			throw new IllegalArgumentException("text cannot be null");
+		if ((start | end | (end - start) | (text.length() - end)) < 0)
+			throw new IndexOutOfBoundsException();
+		if (end - start > widths.length)
+			throw new ArrayIndexOutOfBoundsException();
+		if (end == start)
+			return 0;
+		char[] buf = new char[end - start];
+		text.getChars(start, end, buf, 0);
+		return getTextWidths(buf, 0, buf.length, widths);
+	}
+@@@
+	public /*native*/ float getTextScaleX() { return 0; }
+	public /*native*/ void setTextScaleX(float scaleX) {}
+===
+	/** AOSP: horizontal scale of the text, 1.0 by default; applied to measured advances. */
+	public float getTextScaleX() {
+		return mTextScaleX;
+	}
+	public void setTextScaleX(float scaleX) {
+		mTextScaleX = scaleX;
+	}
+@@@
+	public /*native*/ float descent() { return 0; }
+	public /*native*/ float getFontMetrics(FontMetrics metrics) { return 0; }
+	public /*native*/ int getFontMetricsInt(FontMetricsInt fmi) { return 0; }
+===
+	/** AOSP: distance below the baseline recommended by the font. */
+	public float descent() {
+		return tlFontMetrics()[2];
+	}
+	/** AOSP: fills metrics (may be null) and returns the recommended line spacing descent - ascent + leading. */
+	public float getFontMetrics(FontMetrics metrics) {
+		float[] m = tlFontMetrics();
+		if (metrics != null) {
+			metrics.top = m[0];
+			metrics.ascent = m[1];
+			metrics.descent = m[2];
+			metrics.bottom = m[3];
+			metrics.leading = m[4];
+		}
+		return m[2] - m[1] + m[4];
+	}
+	/** AOSP (Paint.cpp): top floored, bottom ceiled, the rest rounded; returns descent - ascent + leading. */
+	public int getFontMetricsInt(FontMetricsInt fmi) {
+		float[] m = tlFontMetrics();
+		int top = (int) Math.floor(m[0]);
+		int ascent = Math.round(m[1]);
+		int descent = Math.round(m[2]);
+		int bottom = (int) Math.ceil(m[3]);
+		int leading = Math.round(m[4]);
+		if (fmi != null) {
+			fmi.top = top;
+			fmi.ascent = ascent;
+			fmi.descent = descent;
+			fmi.bottom = bottom;
+			fmi.leading = leading;
+		}
+		return descent - ascent + leading;
+	}
+@@@
+	public int breakText(char[] text, int index, int count, float maxWidth, float[] measuredWidth) { return 10; }
+	public int breakText(String text, boolean measureForwards, float maxWidth, float[] measuredWidth) { return 10; }
+	public int breakText(CharSequence text, int start, int end, boolean measureForwards, float maxWidth, float[] measuredWidth) { return 10; }
+===
+	/** AOSP: how many characters of text[index, index+count) fit into maxWidth (count < 0 measures backwards). */
+	public int breakText(char[] text, int index, int count, float maxWidth, float[] measuredWidth) {
+		if (text == null)
+			throw new IllegalArgumentException("text cannot be null");
+		if (index < 0 || text.length - index < Math.abs(count))
+			throw new ArrayIndexOutOfBoundsException();
+		boolean forwards = count >= 0;
+		int n = Math.abs(count);
+		if (n == 0) {
+			if (measuredWidth != null && measuredWidth.length > 0)
+				measuredWidth[0] = 0;
+			return 0;
+		}
+		int from = forwards ? index : index - n;
+		float[] widths = new float[n];
+		getTextWidths(text, from, n, widths);
+		float sum = 0;
+		int fit = 0;
+		for (int i = 0; i < n; i++) {
+			float w = widths[forwards ? i : n - 1 - i];
+			if (sum + w > maxWidth)
+				break;
+			sum += w;
+			fit++;
+		}
+		if (measuredWidth != null && measuredWidth.length > 0)
+			measuredWidth[0] = sum;
+		return fit;
+	}
+	public int breakText(String text, boolean measureForwards, float maxWidth, float[] measuredWidth) {
+		if (text == null)
+			throw new IllegalArgumentException("text cannot be null");
+		char[] buf = text.toCharArray();
+		return measureForwards ? breakText(buf, 0, buf.length, maxWidth, measuredWidth)
+		                       : breakText(buf, buf.length, -buf.length, maxWidth, measuredWidth);
+	}
+	public int breakText(CharSequence text, int start, int end, boolean measureForwards, float maxWidth, float[] measuredWidth) {
+		if (text == null)
+			throw new IllegalArgumentException("text cannot be null");
+		if ((start | end | (end - start) | (text.length() - end)) < 0)
+			throw new IndexOutOfBoundsException();
+		char[] buf = new char[end - start];
+		android.text.TextUtils.getChars(text, start, end, buf, 0);
+		return measureForwards ? breakText(buf, 0, buf.length, maxWidth, measuredWidth)
+		                       : breakText(buf, buf.length, -buf.length, maxWidth, measuredWidth);
+	}
+@@@
+	public float getLetterSpacing() { return 1.0f; }
+===
+	/** AOSP: letter spacing in em units, 0 by default. */
+	public float getLetterSpacing() {
+		return mLetterSpacing;
+	}
+@@@
+	public boolean hasGlyph(String text) { return false; }
+===
+	/** AOSP: true when the string renders as a single glyph of the font (so emoji sequences are supported). */
+	public boolean hasGlyph(String text) {
+		if (text == null)
+			throw new IllegalArgumentException("text cannot be null");
+		if (text.isEmpty())
+			return false;
+		return native_has_glyph(paint, text);
+	}
+@@@
+	public void setLetterSpacing(float spacing) {}
+===
+	public void setLetterSpacing(float spacing) {
+		mLetterSpacing = spacing;
+		native_set_letter_spacing(paint, spacing);
+	}
+@@@
+	public FontMetrics getFontMetrics() {
+		return new FontMetrics();
+	}
+===
+	/** AOSP: a new FontMetrics filled from the current font. */
+	public FontMetrics getFontMetrics() {
+		FontMetrics fm = new FontMetrics();
+		getFontMetrics(fm);
+		return fm;
+	}
+@@@
+	public FontMetricsInt getFontMetricsInt() {
+		return new FontMetricsInt();
+	}
+===
+	/** AOSP: a new FontMetricsInt filled from the current font. */
+	public FontMetricsInt getFontMetricsInt() {
+		FontMetricsInt fm = new FontMetricsInt();
+		getFontMetricsInt(fm);
+		return fm;
+	}
+@@@
+	public void setShadowLayer(float radius, float dx, float dy, int color) {}
+===
+	/**
+	 * AOSP: a blurred shadow drawn under the text (radius 0 clears it). The parameters are kept on
+	 * the paint and reported by the getters; GskCanvas draws the shadow for text (see tlShadow*).
+	 */
+	public void setShadowLayer(float radius, float dx, float dy, int color) {
+		mShadowLayerRadius = radius;
+		mShadowLayerDx = dx;
+		mShadowLayerDy = dy;
+		mShadowLayerColor = color;
+	}
+@@@
+	public void clearShadowLayer() {}
+
+	public boolean hasShadowLayer() {
+		return false;
+	}
+===
+	public void clearShadowLayer() {
+		setShadowLayer(0, 0, 0, 0);
+	}
+
+	public boolean hasShadowLayer() {
+		return mShadowLayerRadius > 0;
+	}

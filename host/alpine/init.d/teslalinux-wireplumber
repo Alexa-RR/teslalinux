@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+# teslalinux: WirePlumber, the session manager of the tesla user's PipeWire (links the app's stream
+# to the default sink "android"; the ALSA/Bluetooth/V4L2 monitors are off in the image's
+# wireplumber.conf.d, so the Pi's own audio outputs never become the default).
+description="teslalinux WirePlumber"
+command=/usr/bin/wireplumber
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/teslalinux-wireplumber.pid
+output_log=/var/log/teslalinux/wireplumber.log
+error_log=/var/log/teslalinux/wireplumber.log
+supervisor=supervise-daemon
+respawn_delay=1
+respawn_max=0
+
+depend() {
+	need teslalinux-pipewire
+}
+
+start_pre() {
+	export XDG_RUNTIME_DIR=/run/tesla HOME=/var/lib/tesla
+	# the socket pipewire creates a moment after its process
+	i=0; while [ ! -S /run/tesla/pipewire-0 ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+}

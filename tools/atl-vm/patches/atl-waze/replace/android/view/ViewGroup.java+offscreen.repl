@@ -1,0 +1,10 @@
+@@@
+		if (canvas instanceof GskCanvas)
+			native_drawChild(widget, child.widget, ((GskCanvas)canvas).snapshot);
+		return false;
+===
+		/* teslalinux (offscreen): any canvas with a target, a Canvas(Bitmap) included */
+		final GskCanvas tlGsk = canvas.tlGskCanvas();
+		if (tlGsk != null)
+			native_drawChild(widget, child.widget, tlGsk.snapshot);
+		return false;

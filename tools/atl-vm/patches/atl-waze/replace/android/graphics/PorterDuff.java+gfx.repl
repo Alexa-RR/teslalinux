@@ -1,0 +1,24 @@
+@@@
+		DARKEN(12),
+===
+		DARKEN(16), /* teslalinux: AOSP's nativeInt values are SkBlendMode values (BlendMode.fromValue) */
+@@@
+		LIGHTEN(13),
+===
+		LIGHTEN(17),
+@@@
+		MULTIPLY(14),
+===
+		MULTIPLY(13),
+@@@
+		SCREEN(15),
+===
+		SCREEN(14),
+@@@
+		ADD(16),
+===
+		ADD(12),
+@@@
+		OVERLAY(17);
+===
+		OVERLAY(15);

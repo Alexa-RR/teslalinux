@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+# teslalinux: one-shot first boot: grow the root filesystem to the card, the device TLS key + CSR
+# (teslalinux-tls init: ECDSA P-256 made here, never leaves the Pi) and the self-signed placeholder
+description="teslalinux first boot"
+
+depend() {
+	need localmount
+	before teslalinux-netconfig nginx hostapd dnsmasq tacomp
+}
+
+start() {
+	[ -e /etc/teslalinux/.firstboot-done ] && return 0
+	ebegin "teslalinux first boot"
+	/usr/local/bin/teslalinux-firstboot
+	eend $?
+}

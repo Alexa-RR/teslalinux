@@ -1,0 +1,4 @@
+@@@
+		decorView = new FrameLayout(context);
+===
+		decorView = new TlDecorView(context);

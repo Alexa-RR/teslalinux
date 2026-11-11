@@ -1,0 +1,171 @@
+@@@
+	public Intent(Intent o) {
+		this.action = o.action;
+		this.data = o.data;
+		this.extras = o.extras;
+		this.component = o.component;
+	}
+===
+	/** AOSP: a copy of o; the extras, categories, bounds and selector are copied, not shared. */
+	public Intent(Intent o) {
+		this.action = o.action;
+		this.data = o.data;
+		this.type = o.type;
+		this.tlIdentifier = o.tlIdentifier;
+		this.packageName = o.packageName;
+		this.component = o.component;
+		this.flags = o.flags;
+		this.tlContentUserHint = o.tlContentUserHint;
+		if (o.tlCategories != null)
+			this.tlCategories = new android.util.ArraySet<String>(o.tlCategories);
+		this.extras = o.extras != null ? new Bundle(o.extras) : new Bundle();
+		if (o.tlSourceBounds != null)
+			this.tlSourceBounds = new Rect(o.tlSourceBounds);
+		if (o.selector != null)
+			this.selector = new Intent(o.selector);
+		this.tlClipData = o.tlClipData;
+	}
+@@@
+	public Intent putExtras(Intent src) {
+		// FIXME HACK
+		this.extras = src.getExtras();
+		return this;
+	}
+
+	public Intent putExtras(Bundle extras) {
+		// FIXME HACK
+		this.extras = extras;
+		return this;
+	}
+
+	public Intent replaceExtras(Bundle extras) {
+		this.extras = extras;
+		return this;
+	}
+===
+	/** AOSP: copies all extras of src into this intent. */
+	public Intent putExtras(Intent src) {
+		if (src.extras != null)
+			this.extras.putAll(src.extras);
+		return this;
+	}
+
+	/** AOSP: adds every mapping of extras to this intent's extras. */
+	public Intent putExtras(Bundle extras) {
+		this.extras.putAll(extras);
+		return this;
+	}
+
+	/**
+	 * AOSP: replaces the extras by a copy of the given ones. teslalinux: an intent here always has
+	 * an extras bundle (ATL's native intent serializer reads it), so null leaves an empty one.
+	 */
+	public Intent replaceExtras(Bundle extras) {
+		this.extras = extras != null ? new Bundle(extras) : new Bundle();
+		return this;
+	}
+@@@
+	public Intent addCategory(String action) {
+		return this;
+	}
+===
+	/** AOSP: adds a category (to the set of categories the intent's target must handle). */
+	public Intent addCategory(String category) {
+		if (tlCategories == null)
+			tlCategories = new android.util.ArraySet<String>();
+		tlCategories.add(category.intern());
+		return this;
+	}
+@@@
+	public ClipData getClipData() {
+		return null;
+	}
+===
+	/** AOSP: the ClipData set with setClipData, or null. */
+	public ClipData getClipData() {
+		return tlClipData;
+	}
+@@@
+	public void setExtrasClassLoader(ClassLoader loader) {}
+===
+	/** AOSP: the class loader the extras unparcel Parcelables with. */
+	public void setExtrasClassLoader(ClassLoader loader) {
+		if (extras != null)
+			extras.setClassLoader(loader);
+	}
+@@@
+	public Set<String> getCategories() {
+		return Collections.emptySet();
+	}
+===
+	/** AOSP: the categories, or null when there are none. */
+	public Set<String> getCategories() {
+		return tlCategories;
+	}
+@@@
+	public int filterHashCode() {
+		return 0;
+	}
+===
+	/** AOSP: a hash code over the fields filterEquals compares. */
+	public int filterHashCode() {
+		int code = 0;
+		if (action != null)
+			code += action.hashCode();
+		if (data != null)
+			code += data.hashCode();
+		if (type != null)
+			code += type.hashCode();
+		if (tlIdentifier != null)
+			code += tlIdentifier.hashCode();
+		if (packageName != null)
+			code += packageName.hashCode();
+		if (component != null)
+			code += component.hashCode();
+		if (tlCategories != null)
+			code += tlCategories.hashCode();
+		return code;
+	}
+@@@
+	public void setSourceBounds(Rect sourceBounds) {}
+
+	public Rect getSourceBounds() {
+		return null;
+	}
+===
+	/** AOSP: the bounds of the sender (on screen) the intent was launched from; copied. */
+	public void setSourceBounds(Rect sourceBounds) {
+		tlSourceBounds = sourceBounds != null ? new Rect(sourceBounds) : null;
+	}
+
+	/** AOSP: the bounds set with setSourceBounds, or null. */
+	public Rect getSourceBounds() {
+		return tlSourceBounds;
+	}
+@@@
+	public void setClipData(ClipData clip) {}
+===
+	/** AOSP: the ClipData carried with the intent (for URI grants and rich content). */
+	public void setClipData(ClipData clip) {
+		tlClipData = clip;
+	}
+@@@
+	public boolean filterEquals(Intent other) {
+		return Objects.equals(this.action, other.action)
+		    && Objects.equals(this.component, other.component)
+		    && Objects.equals(this.data, other.data)
+		    && Objects.equals(this.type, other.type);
+	}
+===
+	/** AOSP: equal for intent resolution (action, data, type, identifier, package, component, categories). */
+	public boolean filterEquals(Intent other) {
+		if (other == null)
+			return false;
+		return Objects.equals(this.action, other.action)
+		    && Objects.equals(this.data, other.data)
+		    && Objects.equals(this.type, other.type)
+		    && Objects.equals(this.tlIdentifier, other.tlIdentifier)
+		    && Objects.equals(this.packageName, other.packageName)
+		    && Objects.equals(this.component, other.component)
+		    && Objects.equals(this.tlCategories, other.tlCategories);
+	}

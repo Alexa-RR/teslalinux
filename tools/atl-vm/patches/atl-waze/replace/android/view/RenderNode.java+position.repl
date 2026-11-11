@@ -1,0 +1,35 @@
+@@@
+	public boolean setLeftTopRightBottom(int left, int top, int right, int bottom) {
+		float old_width = width;
+		float old_height = height;
+		width = right - left;
+		height = bottom - top;
+		return old_width != width || old_height != height || setTranslationX(left) || setTranslationY(top);
+	}
+===
+	/** AOSP: the node's position and size in its parent. teslalinux: the position always moves (the
+	 * short-circuit skipped it when the size changed, and Y when X changed), a new size drops the
+	 * cached transformed node (its clip to bounds uses the size), and the position goes through
+	 * tlSetBasePosition, which a subclass with its own translation (android.graphics.RenderNode) does
+	 * not override: calling the virtual setTranslationX here reset that translation to 0. */
+	public boolean setLeftTopRightBottom(int left, int top, int right, int bottom) {
+		float old_width = width;
+		float old_height = height;
+		width = right - left;
+		height = bottom - top;
+		boolean resized = old_width != width || old_height != height;
+		if (resized)
+			tlDropTransformed();
+		boolean moved = tlSetBasePosition(left, top);
+		return resized || moved;
+	}
+
+	/** the base node's translation, which carries the position (see setLeftTopRightBottom) */
+	final boolean tlSetBasePosition(float x, float y) {
+		boolean changed = translationX != x || translationY != y;
+		if (changed)
+			tlDropTransformed();
+		translationX = x;
+		translationY = y;
+		return changed;
+	}

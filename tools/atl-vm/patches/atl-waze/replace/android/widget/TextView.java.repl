@@ -1,0 +1,47 @@
+@@@
+	public void setOnEditorActionListener(TextView.OnEditorActionListener l) {}
+===
+	protected TextView.OnEditorActionListener tlEditorActionListener;
+
+	public void setOnEditorActionListener(TextView.OnEditorActionListener l) {
+		tlEditorActionListener = l;
+	}
+@@@
+	public void setAllCaps(boolean allCaps) {
+		String[] classesToRemove = {"ATL-text-uppercase"};
+===
+	public void setAllCaps(boolean allCaps) {
+		mAllCaps = allCaps;
+		String[] classesToRemove = {"ATL-text-uppercase"};
+@@@
+	public boolean isAllCaps() { return false; }
+===
+	/** AOSP: whether the text is transformed to upper case (setAllCaps). */
+	public boolean isAllCaps() {
+		return mAllCaps;
+	}
+@@@
+	public void setHighlightColor(int color) {}
+===
+	public void setHighlightColor(int color) {
+		mHighlightColor = color;
+	}
+@@@
+	private int gravity = Gravity.CENTER;
+===
+	private int gravity = Gravity.TOP | Gravity.START; // AOSP default
+@@@
+	public void setImeOptions(int imeOptions) {}
+===
+	/** AOSP: the IME options (action key, flags) reported through the EditorInfo. */
+	public void setImeOptions(int imeOptions) {
+		tlImeOptions = imeOptions;
+	}
+@@@
+	public int getInputType() { return 0; }
+===
+	public int getInputType() { return tlInputType; }
+@@@
+	public int getImeOptions() { return 0; }
+===
+	public int getImeOptions() { return tlImeOptions; }

@@ -1,0 +1,21 @@
+@@@
+	public interface OnCancelListener {
+	}
+===
+	public interface OnCancelListener {
+		void onCancel(DialogInterface dialog);
+	}
+@@@
+	public interface OnMultiChoiceClickListener {
+	}
+===
+	public interface OnMultiChoiceClickListener {
+		void onClick(DialogInterface dialog, int which, boolean isChecked);
+	}
+@@@
+	public interface OnKeyListener {
+	}
+===
+	public interface OnKeyListener {
+		boolean onKey(DialogInterface dialog, int keyCode, android.view.KeyEvent event);
+	}

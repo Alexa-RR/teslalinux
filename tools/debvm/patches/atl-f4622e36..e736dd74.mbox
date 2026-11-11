@@ -1,0 +1,1860 @@
+From 1b4f3cd2eed861e329110344bc4ebe94fc6c7e84 Mon Sep 17 00:00:00 2001
+From: teslalinux <dev@teslalinux>
+Date: Thu, 8 Oct 2026 00:15:10 +0000
+Subject: [PATCH 1/4] waze: stub batch (2026-10-08)
+
+---
+ .../android/app/usage/StorageStats.java       | 29 ++++++
+ .../app/usage/StorageStatsManager.java        | 44 +++++++++
+ .../android/content/AttributionSource.java    | 41 +++++++++
+ src/api-impl/android/content/Context.java     |  4 +
+ .../android/os/DeadSystemException.java       |  5 +
+ .../os/NetworkOnMainThreadException.java      |  4 +
+ src/api-impl/android/os/ParcelUuid.java       | 19 ++++
+ .../os/TransactionTooLargeException.java      |  6 ++
+ .../android/os/storage/StorageManager.java    |  3 +
+ .../android/system/ErrnoException.java        | 26 ++++++
+ src/api-impl/android/system/Os.java           | 92 +++++++++++++++++++
+ src/api-impl/android/system/OsConstants.java  | 33 +++++++
+ src/api-impl/android/system/StructStat.java   | 16 ++++
+ .../android/system/StructUtsname.java         |  8 ++
+ src/api-impl/android/util/CloseGuard.java     |  8 ++
+ src/api-impl/android/util/Range.java          | 33 +++++++
+ src/api-impl/meson.build                      | 14 +++
+ 17 files changed, 385 insertions(+)
+ create mode 100644 src/api-impl/android/app/usage/StorageStats.java
+ create mode 100644 src/api-impl/android/app/usage/StorageStatsManager.java
+ create mode 100644 src/api-impl/android/content/AttributionSource.java
+ create mode 100644 src/api-impl/android/os/DeadSystemException.java
+ create mode 100644 src/api-impl/android/os/NetworkOnMainThreadException.java
+ create mode 100644 src/api-impl/android/os/ParcelUuid.java
+ create mode 100644 src/api-impl/android/os/TransactionTooLargeException.java
+ create mode 100644 src/api-impl/android/system/ErrnoException.java
+ create mode 100644 src/api-impl/android/system/Os.java
+ create mode 100644 src/api-impl/android/system/OsConstants.java
+ create mode 100644 src/api-impl/android/system/StructStat.java
+ create mode 100644 src/api-impl/android/system/StructUtsname.java
+ create mode 100644 src/api-impl/android/util/CloseGuard.java
+ create mode 100644 src/api-impl/android/util/Range.java
+
+diff --git a/src/api-impl/android/app/usage/StorageStats.java b/src/api-impl/android/app/usage/StorageStats.java
+new file mode 100644
+index 00000000..460e9dd3
+--- /dev/null
++++ b/src/api-impl/android/app/usage/StorageStats.java
+@@ -0,0 +1,29 @@
++package android.app.usage;
++
++import java.io.File;
++
++public final class StorageStats {
++	private static long dirSize(File f) {
++		if (f == null || !f.exists())
++			return 0;
++		if (f.isFile())
++			return f.length();
++		long total = 0;
++		File[] children = f.listFiles();
++		if (children != null)
++			for (File c : children)
++				total += dirSize(c);
++		return total;
++	}
++
++	private long dataBytes() {
++		String dir = System.getenv("ANDROID_APP_DATA_DIR");
++		return dir != null ? dirSize(new File(dir)) : 0;
++	}
++
++	public long getAppBytes() { return 0; }
++	public long getDataBytes() { return dataBytes(); }
++	public long getCacheBytes() { return 0; }
++	public long getExternalCacheBytes() { return 0; }
++	public long getAppBytesByDataType(int dataType) { return 0; }
++}
+diff --git a/src/api-impl/android/app/usage/StorageStatsManager.java b/src/api-impl/android/app/usage/StorageStatsManager.java
+new file mode 100644
+index 00000000..6aa9ff0f
+--- /dev/null
++++ b/src/api-impl/android/app/usage/StorageStatsManager.java
+@@ -0,0 +1,44 @@
++package android.app.usage;
++
++import android.os.UserHandle;
++import java.io.File;
++import java.io.IOException;
++import java.util.UUID;
++
++/* teslalinux: Waze's Application.onCreate queries storage stats for itself. Report the data dir's
++ * real usage and the root filesystem's free/total space. */
++public class StorageStatsManager {
++	public StorageStatsManager() {}
++
++	public long getTotalBytes(UUID storageUuid) throws IOException {
++		return new File("/").getTotalSpace();
++	}
++
++	public long getFreeBytes(UUID storageUuid) throws IOException {
++		return new File("/").getUsableSpace();
++	}
++
++	public StorageStats queryStatsForPackage(UUID storageUuid, String packageName, UserHandle user) throws IOException {
++		return new StorageStats();
++	}
++
++	public StorageStats queryStatsForUid(UUID storageUuid, int uid) throws IOException {
++		return new StorageStats();
++	}
++
++	public StorageStats queryStatsForUser(UUID storageUuid, UserHandle user) throws IOException {
++		return new StorageStats();
++	}
++
++	public ExternalStorageStats queryExternalStatsForUser(UUID storageUuid, UserHandle user) throws IOException {
++		return new ExternalStorageStats();
++	}
++
++	public static class ExternalStorageStats {
++		public long getTotalBytes() { return 0; }
++		public long getAudioBytes() { return 0; }
++		public long getVideoBytes() { return 0; }
++		public long getImageBytes() { return 0; }
++		public long getAppBytes() { return 0; }
++	}
++}
+diff --git a/src/api-impl/android/content/AttributionSource.java b/src/api-impl/android/content/AttributionSource.java
+new file mode 100644
+index 00000000..1dad8709
+--- /dev/null
++++ b/src/api-impl/android/content/AttributionSource.java
+@@ -0,0 +1,41 @@
++package android.content;
++
++import android.os.Process;
++
++/* teslalinux: API 31 attribution plumbing; Firebase's init provider calls Context.getAttributionSource().
++ * There is one process and one app, so a single static source describes everything. */
++public final class AttributionSource {
++	private final int uid;
++	private final String packageName;
++	private final String attributionTag;
++
++	public AttributionSource() {
++		this(Process.myUid(), null, null);
++	}
++
++	public AttributionSource(int uid, String packageName, String attributionTag) {
++		this.uid = uid;
++		this.packageName = packageName;
++		this.attributionTag = attributionTag;
++	}
++
++	public int getUid() { return uid; }
++	public int getPid() { return Process.myPid(); }
++	public String getPackageName() { return packageName; }
++	public String getAttributionTag() { return attributionTag; }
++	public AttributionSource getNext() { return null; }
++	public boolean checkCallingUid() { return true; }
++	public boolean isTrusted(Context context) { return true; }
++
++	public static final class Builder {
++		private final int uid;
++		private String packageName;
++		private String attributionTag;
++		public Builder(int uid) { this.uid = uid; }
++		public Builder(AttributionSource current) { this.uid = current.uid; this.packageName = current.packageName; this.attributionTag = current.attributionTag; }
++		public Builder setPackageName(String packageName) { this.packageName = packageName; return this; }
++		public Builder setAttributionTag(String attributionTag) { this.attributionTag = attributionTag; return this; }
++		public Builder setNext(AttributionSource next) { return this; }
++		public AttributionSource build() { return new AttributionSource(uid, packageName, attributionTag); }
++	}
++}
+diff --git a/src/api-impl/android/content/Context.java b/src/api-impl/android/content/Context.java
+index 5ec5417b..42d1c5ec 100644
+--- a/src/api-impl/android/content/Context.java
++++ b/src/api-impl/android/content/Context.java
+@@ -546,6 +546,10 @@ public abstract class Context {
+ 		System.out.println("revokeUriPermission(" + uri + ", " + mode + ") called");
+ 	}
+ 
++	public android.content.AttributionSource getAttributionSource() {
++		return new android.content.AttributionSource(android.os.Process.myUid(), getPackageName(), getAttributionTag());
++	}
++
+ 	public String getAttributionTag() {
+ 		return null;
+ 	}
+diff --git a/src/api-impl/android/os/DeadSystemException.java b/src/api-impl/android/os/DeadSystemException.java
+new file mode 100644
+index 00000000..13e80d13
+--- /dev/null
++++ b/src/api-impl/android/os/DeadSystemException.java
+@@ -0,0 +1,5 @@
++package android.os;
++
++public class DeadSystemException extends DeadObjectException {
++	public DeadSystemException() {}
++}
+diff --git a/src/api-impl/android/os/NetworkOnMainThreadException.java b/src/api-impl/android/os/NetworkOnMainThreadException.java
+new file mode 100644
+index 00000000..c5bff3f3
+--- /dev/null
++++ b/src/api-impl/android/os/NetworkOnMainThreadException.java
+@@ -0,0 +1,4 @@
++package android.os;
++
++public class NetworkOnMainThreadException extends RuntimeException {
++}
+diff --git a/src/api-impl/android/os/ParcelUuid.java b/src/api-impl/android/os/ParcelUuid.java
+new file mode 100644
+index 00000000..cd47ec84
+--- /dev/null
++++ b/src/api-impl/android/os/ParcelUuid.java
+@@ -0,0 +1,19 @@
++package android.os;
++
++import java.util.UUID;
++
++public final class ParcelUuid implements Parcelable {
++	private final UUID mUuid;
++	public ParcelUuid(UUID uuid) { mUuid = uuid; }
++	public static ParcelUuid fromString(String uuid) { return new ParcelUuid(UUID.fromString(uuid)); }
++	public UUID getUuid() { return mUuid; }
++	@Override public String toString() { return mUuid.toString(); }
++	@Override public int hashCode() { return mUuid.hashCode(); }
++	@Override public boolean equals(Object o) { return o instanceof ParcelUuid && mUuid.equals(((ParcelUuid) o).mUuid); }
++	@Override public int describeContents() { return 0; }
++	@Override public void writeToParcel(Parcel dest, int flags) { dest.writeString(mUuid.toString()); }
++	public static final Parcelable.Creator<ParcelUuid> CREATOR = new Parcelable.Creator<ParcelUuid>() {
++		public ParcelUuid createFromParcel(Parcel source) { return ParcelUuid.fromString(source.readString()); }
++		public ParcelUuid[] newArray(int size) { return new ParcelUuid[size]; }
++	};
++}
+diff --git a/src/api-impl/android/os/TransactionTooLargeException.java b/src/api-impl/android/os/TransactionTooLargeException.java
+new file mode 100644
+index 00000000..345bef67
+--- /dev/null
++++ b/src/api-impl/android/os/TransactionTooLargeException.java
+@@ -0,0 +1,6 @@
++package android.os;
++
++public class TransactionTooLargeException extends RemoteException {
++	public TransactionTooLargeException() {}
++	public TransactionTooLargeException(String msg) { super(msg); }
++}
+diff --git a/src/api-impl/android/os/storage/StorageManager.java b/src/api-impl/android/os/storage/StorageManager.java
+index 83df735a..611c81b2 100644
+--- a/src/api-impl/android/os/storage/StorageManager.java
++++ b/src/api-impl/android/os/storage/StorageManager.java
+@@ -3,6 +3,9 @@ package android.os.storage;
+ import java.io.File;
+ 
+ public class StorageManager {
++	public static final java.util.UUID UUID_DEFAULT = java.util.UUID.fromString("41217664-9172-527a-b3d5-edabb50a7d69");
++	public java.util.UUID getUuidForPath(java.io.File path) { return UUID_DEFAULT; }
++	public boolean isAllocationSupported(java.io.FileDescriptor fd) { return false; }
+ 	public StorageVolume[] getVolumeList() {
+ 		StorageVolume[] sVolumes = {new StorageVolume()};
+ 		return sVolumes;
+diff --git a/src/api-impl/android/system/ErrnoException.java b/src/api-impl/android/system/ErrnoException.java
+new file mode 100644
+index 00000000..42592227
+--- /dev/null
++++ b/src/api-impl/android/system/ErrnoException.java
+@@ -0,0 +1,26 @@
++package android.system;
++
++import java.io.IOException;
++
++public final class ErrnoException extends Exception {
++	public final int errno;
++	private final String functionName;
++
++	public ErrnoException(String functionName, int errno) {
++		super(functionName + " failed: errno " + errno);
++		this.functionName = functionName;
++		this.errno = errno;
++	}
++
++	public ErrnoException(String functionName, int errno, Throwable cause) {
++		super(functionName + " failed: errno " + errno, cause);
++		this.functionName = functionName;
++		this.errno = errno;
++	}
++
++	public IOException rethrowAsIOException() throws IOException {
++		IOException e = new IOException(getMessage());
++		e.initCause(this);
++		throw e;
++	}
++}
+diff --git a/src/api-impl/android/system/Os.java b/src/api-impl/android/system/Os.java
+new file mode 100644
+index 00000000..f9fd25fd
+--- /dev/null
++++ b/src/api-impl/android/system/Os.java
+@@ -0,0 +1,92 @@
++package android.system;
++
++import java.io.File;
++import java.io.FileDescriptor;
++import java.io.IOException;
++import java.nio.file.Files;
++import java.nio.file.LinkOption;
++import java.nio.file.Paths;
++import java.nio.file.attribute.PosixFileAttributes;
++
++/* teslalinux: minimal android.system.Os. Apps (and OkHttp/Firebase internals) use a handful of
++ * these for pid/uid, env, stat and fd plumbing. Everything maps to java.io/nio on the host. */
++public final class Os {
++	private Os() {}
++
++	public static int getpid() { return android.os.Process.myPid(); }
++	public static int getppid() { return 1; }
++	public static int getuid() { return android.os.Process.myUid(); }
++	public static int geteuid() { return android.os.Process.myUid(); }
++	public static int getgid() { return android.os.Process.myUid(); }
++	public static int getegid() { return android.os.Process.myUid(); }
++	public static int gettid() { return (int) Thread.currentThread().getId(); }
++
++	public static String getenv(String name) { return System.getenv(name); }
++	public static void setenv(String name, String value, boolean overwrite) throws ErrnoException {}
++	public static void unsetenv(String name) throws ErrnoException {}
++
++	public static String strerror(int errno) { return "errno " + errno; }
++	public static String strsignal(int signal) { return "signal " + signal; }
++
++	public static StructStat stat(String path) throws ErrnoException {
++		try {
++			PosixFileAttributes a = Files.readAttributes(Paths.get(path), PosixFileAttributes.class);
++			File f = new File(path);
++			int mode = (f.isDirectory() ? OsConstants.S_IFDIR : (Files.isSymbolicLink(Paths.get(path)) ? OsConstants.S_IFLNK : OsConstants.S_IFREG));
++			return new StructStat(0, 0, mode, 1, getuid(), getgid(), 0, a.size(), a.lastAccessTime().to(java.util.concurrent.TimeUnit.SECONDS),
++			                      a.lastModifiedTime().to(java.util.concurrent.TimeUnit.SECONDS), a.lastModifiedTime().to(java.util.concurrent.TimeUnit.SECONDS), 4096, (a.size() + 511) / 512);
++		} catch (IOException | UnsupportedOperationException e) {
++			throw new ErrnoException("stat", OsConstants.ENOENT);
++		}
++	}
++
++	public static StructStat lstat(String path) throws ErrnoException {
++		try {
++			PosixFileAttributes a = Files.readAttributes(Paths.get(path), PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
++			int mode = a.isDirectory() ? OsConstants.S_IFDIR : (a.isSymbolicLink() ? OsConstants.S_IFLNK : OsConstants.S_IFREG);
++			return new StructStat(0, 0, mode, 1, getuid(), getgid(), 0, a.size(), 0, a.lastModifiedTime().to(java.util.concurrent.TimeUnit.SECONDS), 0, 4096, (a.size() + 511) / 512);
++		} catch (IOException | UnsupportedOperationException e) {
++			throw new ErrnoException("lstat", OsConstants.ENOENT);
++		}
++	}
++
++	public static StructStat fstat(FileDescriptor fd) throws ErrnoException {
++		return new StructStat(0, 0, OsConstants.S_IFREG, 1, getuid(), getgid(), 0, 0, 0, 0, 0, 4096, 0);
++	}
++
++	public static boolean access(String path, int mode) throws ErrnoException {
++		return new File(path).exists();
++	}
++
++	public static String readlink(String path) throws ErrnoException {
++		try {
++			return Files.readSymbolicLink(Paths.get(path)).toString();
++		} catch (IOException e) {
++			throw new ErrnoException("readlink", OsConstants.EINVAL);
++		}
++	}
++
++	public static void mkdir(String path, int mode) throws ErrnoException {
++		if (!new File(path).mkdir())
++			throw new ErrnoException("mkdir", OsConstants.EEXIST);
++	}
++
++	public static void remove(String path) throws ErrnoException {
++		if (!new File(path).delete())
++			throw new ErrnoException("remove", OsConstants.ENOENT);
++	}
++
++	public static void rename(String oldPath, String newPath) throws ErrnoException {
++		if (!new File(oldPath).renameTo(new File(newPath)))
++			throw new ErrnoException("rename", OsConstants.EINVAL);
++	}
++
++	public static void chmod(String path, int mode) throws ErrnoException {}
++	public static void fsync(FileDescriptor fd) throws ErrnoException {}
++	public static void fdatasync(FileDescriptor fd) throws ErrnoException {}
++	public static void close(FileDescriptor fd) throws ErrnoException {}
++	public static void setsockoptInt(FileDescriptor fd, int level, int option, int value) throws ErrnoException {}
++	public static long sysconf(int name) { return name == OsConstants._SC_NPROCESSORS_CONF ? Runtime.getRuntime().availableProcessors() : 4096; }
++	public static StructUtsname uname() { return new StructUtsname("Linux", "localhost", "6.12", "#1", System.getProperty("os.arch")); }
++	public static long lseek(FileDescriptor fd, long offset, int whence) throws ErrnoException { return offset; }
++}
+diff --git a/src/api-impl/android/system/OsConstants.java b/src/api-impl/android/system/OsConstants.java
+new file mode 100644
+index 00000000..d9b9b7ed
+--- /dev/null
++++ b/src/api-impl/android/system/OsConstants.java
+@@ -0,0 +1,33 @@
++package android.system;
++
++/* Linux/aarch64 values. */
++public final class OsConstants {
++	private OsConstants() {}
++
++	public static final int S_IFMT = 0170000, S_IFSOCK = 0140000, S_IFLNK = 0120000, S_IFREG = 0100000, S_IFBLK = 0060000,
++	                        S_IFDIR = 0040000, S_IFCHR = 0020000, S_IFIFO = 0010000;
++	public static final int S_IRWXU = 00700, S_IRUSR = 00400, S_IWUSR = 00200, S_IXUSR = 00100, S_IRWXG = 00070, S_IRGRP = 00040,
++	                        S_IWGRP = 00020, S_IXGRP = 00010, S_IRWXO = 00007, S_IROTH = 00004, S_IWOTH = 00002, S_IXOTH = 00001;
++	public static final int F_OK = 0, X_OK = 1, W_OK = 2, R_OK = 4;
++	public static final int O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0100, O_EXCL = 0200, O_TRUNC = 01000, O_APPEND = 02000,
++	                        O_NONBLOCK = 04000, O_CLOEXEC = 02000000;
++	public static final int SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
++	public static final int EPERM = 1, ENOENT = 2, EINTR = 4, EIO = 5, EBADF = 9, EAGAIN = 11, ENOMEM = 12, EACCES = 13, EEXIST = 17,
++	                        ENOTDIR = 20, EISDIR = 21, EINVAL = 22, ENOSPC = 28, EPIPE = 32, ERANGE = 34, ENOSYS = 38, ENOTEMPTY = 39,
++	                        ENOTSUP = 95, ECONNRESET = 104, ETIMEDOUT = 110, ECONNREFUSED = 111, EHOSTUNREACH = 113, EWOULDBLOCK = 11;
++	public static final int AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10, SOCK_STREAM = 1, SOCK_DGRAM = 2, SOL_SOCKET = 1,
++	                        SO_REUSEADDR = 2, SO_KEEPALIVE = 9, SO_RCVBUF = 8, SO_SNDBUF = 7, IPPROTO_TCP = 6, IPPROTO_UDP = 17, TCP_NODELAY = 1;
++	public static final int PROT_NONE = 0, PROT_READ = 1, PROT_WRITE = 2, PROT_EXEC = 4, MAP_SHARED = 1, MAP_PRIVATE = 2, MAP_ANONYMOUS = 0x20;
++	public static final int _SC_NPROCESSORS_CONF = 83, _SC_NPROCESSORS_ONLN = 84, _SC_PAGESIZE = 30, _SC_PAGE_SIZE = 30, _SC_CLK_TCK = 2;
++	public static final int SIGHUP = 1, SIGINT = 2, SIGQUIT = 3, SIGKILL = 9, SIGSEGV = 11, SIGTERM = 15, SIGUSR1 = 10, SIGUSR2 = 12;
++	public static final int STDIN_FILENO = 0, STDOUT_FILENO = 1, STDERR_FILENO = 2;
++
++	public static boolean S_ISDIR(int mode) { return (mode & S_IFMT) == S_IFDIR; }
++	public static boolean S_ISREG(int mode) { return (mode & S_IFMT) == S_IFREG; }
++	public static boolean S_ISLNK(int mode) { return (mode & S_IFMT) == S_IFLNK; }
++	public static boolean S_ISSOCK(int mode) { return (mode & S_IFMT) == S_IFSOCK; }
++	public static boolean S_ISCHR(int mode) { return (mode & S_IFMT) == S_IFCHR; }
++	public static boolean S_ISBLK(int mode) { return (mode & S_IFMT) == S_IFBLK; }
++	public static boolean S_ISFIFO(int mode) { return (mode & S_IFMT) == S_IFIFO; }
++	public static String errnoName(int errno) { return "errno" + errno; }
++}
+diff --git a/src/api-impl/android/system/StructStat.java b/src/api-impl/android/system/StructStat.java
+new file mode 100644
+index 00000000..d496e4eb
+--- /dev/null
++++ b/src/api-impl/android/system/StructStat.java
+@@ -0,0 +1,16 @@
++package android.system;
++
++public final class StructStat {
++	public final long st_dev, st_ino;
++	public final int st_mode;
++	public final long st_nlink;
++	public final int st_uid, st_gid;
++	public final long st_rdev, st_size, st_atime, st_mtime, st_ctime, st_blksize, st_blocks;
++
++	public StructStat(long st_dev, long st_ino, int st_mode, long st_nlink, int st_uid, int st_gid, long st_rdev, long st_size,
++	                  long st_atime, long st_mtime, long st_ctime, long st_blksize, long st_blocks) {
++		this.st_dev = st_dev; this.st_ino = st_ino; this.st_mode = st_mode; this.st_nlink = st_nlink; this.st_uid = st_uid; this.st_gid = st_gid;
++		this.st_rdev = st_rdev; this.st_size = st_size; this.st_atime = st_atime; this.st_mtime = st_mtime; this.st_ctime = st_ctime;
++		this.st_blksize = st_blksize; this.st_blocks = st_blocks;
++	}
++}
+diff --git a/src/api-impl/android/system/StructUtsname.java b/src/api-impl/android/system/StructUtsname.java
+new file mode 100644
+index 00000000..23a27df2
+--- /dev/null
++++ b/src/api-impl/android/system/StructUtsname.java
+@@ -0,0 +1,8 @@
++package android.system;
++
++public final class StructUtsname {
++	public final String sysname, nodename, release, version, machine;
++	public StructUtsname(String sysname, String nodename, String release, String version, String machine) {
++		this.sysname = sysname; this.nodename = nodename; this.release = release; this.version = version; this.machine = machine;
++	}
++}
+diff --git a/src/api-impl/android/util/CloseGuard.java b/src/api-impl/android/util/CloseGuard.java
+new file mode 100644
+index 00000000..5e5b14d5
+--- /dev/null
++++ b/src/api-impl/android/util/CloseGuard.java
+@@ -0,0 +1,8 @@
++package android.util;
++
++public final class CloseGuard {
++	public CloseGuard() {}
++	public void open(String closeMethodName) {}
++	public void close() {}
++	public void warnIfOpen() {}
++}
+diff --git a/src/api-impl/android/util/Range.java b/src/api-impl/android/util/Range.java
+new file mode 100644
+index 00000000..db91d2ad
+--- /dev/null
++++ b/src/api-impl/android/util/Range.java
+@@ -0,0 +1,33 @@
++package android.util;
++
++public final class Range<T extends Comparable<? super T>> {
++	private final T mLower, mUpper;
++
++	public Range(T lower, T upper) {
++		if (lower == null || upper == null) throw new NullPointerException("lower/upper must not be null");
++		if (lower.compareTo(upper) > 0) throw new IllegalArgumentException("lower must be less than or equal to upper");
++		mLower = lower; mUpper = upper;
++	}
++	public static <T extends Comparable<? super T>> Range<T> create(T lower, T upper) { return new Range<>(lower, upper); }
++	public T getLower() { return mLower; }
++	public T getUpper() { return mUpper; }
++	public boolean contains(T value) { return value.compareTo(mLower) >= 0 && value.compareTo(mUpper) <= 0; }
++	public boolean contains(Range<T> range) { return range.mLower.compareTo(mLower) >= 0 && range.mUpper.compareTo(mUpper) <= 0; }
++	public T clamp(T value) { return value.compareTo(mLower) < 0 ? mLower : (value.compareTo(mUpper) > 0 ? mUpper : value); }
++	public Range<T> intersect(Range<T> range) {
++		T l = range.mLower.compareTo(mLower) >= 0 ? range.mLower : mLower;
++		T u = range.mUpper.compareTo(mUpper) <= 0 ? range.mUpper : mUpper;
++		return create(l, u);
++	}
++	public Range<T> intersect(T lower, T upper) { return intersect(create(lower, upper)); }
++	public Range<T> extend(Range<T> range) {
++		T l = range.mLower.compareTo(mLower) <= 0 ? range.mLower : mLower;
++		T u = range.mUpper.compareTo(mUpper) >= 0 ? range.mUpper : mUpper;
++		return create(l, u);
++	}
++	public Range<T> extend(T lower, T upper) { return extend(create(lower, upper)); }
++	public Range<T> extend(T value) { return extend(create(value, value)); }
++	@Override public boolean equals(Object obj) { return obj instanceof Range && mLower.equals(((Range<?>) obj).mLower) && mUpper.equals(((Range<?>) obj).mUpper); }
++	@Override public int hashCode() { return 31 * mLower.hashCode() + mUpper.hashCode(); }
++	@Override public String toString() { return "[" + mLower + ", " + mUpper + "]"; }
++}
+diff --git a/src/api-impl/meson.build b/src/api-impl/meson.build
+index 20d2490e..b294b47b 100644
+--- a/src/api-impl/meson.build
++++ b/src/api-impl/meson.build
+@@ -1,4 +1,18 @@
+ srcs = [
++	'android/util/Range.java',
++	'android/util/CloseGuard.java',
++	'android/system/StructUtsname.java',
++	'android/system/StructStat.java',
++	'android/system/OsConstants.java',
++	'android/system/Os.java',
++	'android/system/ErrnoException.java',
++	'android/os/TransactionTooLargeException.java',
++	'android/os/ParcelUuid.java',
++	'android/os/NetworkOnMainThreadException.java',
++	'android/os/DeadSystemException.java',
++	'android/content/AttributionSource.java',
++	'android/app/usage/StorageStatsManager.java',
++	'android/app/usage/StorageStats.java',
+ 	'android/Manifest.java',
+ 	'android/R.java',
+ 	'android/accounts/Account.java',
+-- 
+2.54.0 (Apple Git-157)
+
+
+From ea3b39a468c2b47a0c92cae61527cc00080ad928 Mon Sep 17 00:00:00 2001
+From: t <t@t>
+Date: Thu, 8 Oct 2026 00:44:53 +0000
+Subject: [PATCH 2/4] waze: drop android.system stubs (libcore has them)
+
+---
+ .../android/system/ErrnoException.java        | 26 ------
+ src/api-impl/android/system/Os.java           | 92 -------------------
+ src/api-impl/android/system/OsConstants.java  | 33 -------
+ src/api-impl/android/system/StructStat.java   | 16 ----
+ .../android/system/StructUtsname.java         |  8 --
+ src/api-impl/meson.build                      |  5 -
+ 6 files changed, 180 deletions(-)
+ delete mode 100644 src/api-impl/android/system/ErrnoException.java
+ delete mode 100644 src/api-impl/android/system/Os.java
+ delete mode 100644 src/api-impl/android/system/OsConstants.java
+ delete mode 100644 src/api-impl/android/system/StructStat.java
+ delete mode 100644 src/api-impl/android/system/StructUtsname.java
+
+diff --git a/src/api-impl/android/system/ErrnoException.java b/src/api-impl/android/system/ErrnoException.java
+deleted file mode 100644
+index 42592227..00000000
+--- a/src/api-impl/android/system/ErrnoException.java
++++ /dev/null
+@@ -1,26 +0,0 @@
+-package android.system;
+-
+-import java.io.IOException;
+-
+-public final class ErrnoException extends Exception {
+-	public final int errno;
+-	private final String functionName;
+-
+-	public ErrnoException(String functionName, int errno) {
+-		super(functionName + " failed: errno " + errno);
+-		this.functionName = functionName;
+-		this.errno = errno;
+-	}
+-
+-	public ErrnoException(String functionName, int errno, Throwable cause) {
+-		super(functionName + " failed: errno " + errno, cause);
+-		this.functionName = functionName;
+-		this.errno = errno;
+-	}
+-
+-	public IOException rethrowAsIOException() throws IOException {
+-		IOException e = new IOException(getMessage());
+-		e.initCause(this);
+-		throw e;
+-	}
+-}
+diff --git a/src/api-impl/android/system/Os.java b/src/api-impl/android/system/Os.java
+deleted file mode 100644
+index f9fd25fd..00000000
+--- a/src/api-impl/android/system/Os.java
++++ /dev/null
+@@ -1,92 +0,0 @@
+-package android.system;
+-
+-import java.io.File;
+-import java.io.FileDescriptor;
+-import java.io.IOException;
+-import java.nio.file.Files;
+-import java.nio.file.LinkOption;
+-import java.nio.file.Paths;
+-import java.nio.file.attribute.PosixFileAttributes;
+-
+-/* teslalinux: minimal android.system.Os. Apps (and OkHttp/Firebase internals) use a handful of
+- * these for pid/uid, env, stat and fd plumbing. Everything maps to java.io/nio on the host. */
+-public final class Os {
+-	private Os() {}
+-
+-	public static int getpid() { return android.os.Process.myPid(); }
+-	public static int getppid() { return 1; }
+-	public static int getuid() { return android.os.Process.myUid(); }
+-	public static int geteuid() { return android.os.Process.myUid(); }
+-	public static int getgid() { return android.os.Process.myUid(); }
+-	public static int getegid() { return android.os.Process.myUid(); }
+-	public static int gettid() { return (int) Thread.currentThread().getId(); }
+-
+-	public static String getenv(String name) { return System.getenv(name); }
+-	public static void setenv(String name, String value, boolean overwrite) throws ErrnoException {}
+-	public static void unsetenv(String name) throws ErrnoException {}
+-
+-	public static String strerror(int errno) { return "errno " + errno; }
+-	public static String strsignal(int signal) { return "signal " + signal; }
+-
+-	public static StructStat stat(String path) throws ErrnoException {
+-		try {
+-			PosixFileAttributes a = Files.readAttributes(Paths.get(path), PosixFileAttributes.class);
+-			File f = new File(path);
+-			int mode = (f.isDirectory() ? OsConstants.S_IFDIR : (Files.isSymbolicLink(Paths.get(path)) ? OsConstants.S_IFLNK : OsConstants.S_IFREG));
+-			return new StructStat(0, 0, mode, 1, getuid(), getgid(), 0, a.size(), a.lastAccessTime().to(java.util.concurrent.TimeUnit.SECONDS),
+-			                      a.lastModifiedTime().to(java.util.concurrent.TimeUnit.SECONDS), a.lastModifiedTime().to(java.util.concurrent.TimeUnit.SECONDS), 4096, (a.size() + 511) / 512);
+-		} catch (IOException | UnsupportedOperationException e) {
+-			throw new ErrnoException("stat", OsConstants.ENOENT);
+-		}
+-	}
+-
+-	public static StructStat lstat(String path) throws ErrnoException {
+-		try {
+-			PosixFileAttributes a = Files.readAttributes(Paths.get(path), PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+-			int mode = a.isDirectory() ? OsConstants.S_IFDIR : (a.isSymbolicLink() ? OsConstants.S_IFLNK : OsConstants.S_IFREG);
+-			return new StructStat(0, 0, mode, 1, getuid(), getgid(), 0, a.size(), 0, a.lastModifiedTime().to(java.util.concurrent.TimeUnit.SECONDS), 0, 4096, (a.size() + 511) / 512);
+-		} catch (IOException | UnsupportedOperationException e) {
+-			throw new ErrnoException("lstat", OsConstants.ENOENT);
+-		}
+-	}
+-
+-	public static StructStat fstat(FileDescriptor fd) throws ErrnoException {
+-		return new StructStat(0, 0, OsConstants.S_IFREG, 1, getuid(), getgid(), 0, 0, 0, 0, 0, 4096, 0);
+-	}
+-
+-	public static boolean access(String path, int mode) throws ErrnoException {
+-		return new File(path).exists();
+-	}
+-
+-	public static String readlink(String path) throws ErrnoException {
+-		try {
+-			return Files.readSymbolicLink(Paths.get(path)).toString();
+-		} catch (IOException e) {
+-			throw new ErrnoException("readlink", OsConstants.EINVAL);
+-		}
+-	}
+-
+-	public static void mkdir(String path, int mode) throws ErrnoException {
+-		if (!new File(path).mkdir())
+-			throw new ErrnoException("mkdir", OsConstants.EEXIST);
+-	}
+-
+-	public static void remove(String path) throws ErrnoException {
+-		if (!new File(path).delete())
+-			throw new ErrnoException("remove", OsConstants.ENOENT);
+-	}
+-
+-	public static void rename(String oldPath, String newPath) throws ErrnoException {
+-		if (!new File(oldPath).renameTo(new File(newPath)))
+-			throw new ErrnoException("rename", OsConstants.EINVAL);
+-	}
+-
+-	public static void chmod(String path, int mode) throws ErrnoException {}
+-	public static void fsync(FileDescriptor fd) throws ErrnoException {}
+-	public static void fdatasync(FileDescriptor fd) throws ErrnoException {}
+-	public static void close(FileDescriptor fd) throws ErrnoException {}
+-	public static void setsockoptInt(FileDescriptor fd, int level, int option, int value) throws ErrnoException {}
+-	public static long sysconf(int name) { return name == OsConstants._SC_NPROCESSORS_CONF ? Runtime.getRuntime().availableProcessors() : 4096; }
+-	public static StructUtsname uname() { return new StructUtsname("Linux", "localhost", "6.12", "#1", System.getProperty("os.arch")); }
+-	public static long lseek(FileDescriptor fd, long offset, int whence) throws ErrnoException { return offset; }
+-}
+diff --git a/src/api-impl/android/system/OsConstants.java b/src/api-impl/android/system/OsConstants.java
+deleted file mode 100644
+index d9b9b7ed..00000000
+--- a/src/api-impl/android/system/OsConstants.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-package android.system;
+-
+-/* Linux/aarch64 values. */
+-public final class OsConstants {
+-	private OsConstants() {}
+-
+-	public static final int S_IFMT = 0170000, S_IFSOCK = 0140000, S_IFLNK = 0120000, S_IFREG = 0100000, S_IFBLK = 0060000,
+-	                        S_IFDIR = 0040000, S_IFCHR = 0020000, S_IFIFO = 0010000;
+-	public static final int S_IRWXU = 00700, S_IRUSR = 00400, S_IWUSR = 00200, S_IXUSR = 00100, S_IRWXG = 00070, S_IRGRP = 00040,
+-	                        S_IWGRP = 00020, S_IXGRP = 00010, S_IRWXO = 00007, S_IROTH = 00004, S_IWOTH = 00002, S_IXOTH = 00001;
+-	public static final int F_OK = 0, X_OK = 1, W_OK = 2, R_OK = 4;
+-	public static final int O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2, O_CREAT = 0100, O_EXCL = 0200, O_TRUNC = 01000, O_APPEND = 02000,
+-	                        O_NONBLOCK = 04000, O_CLOEXEC = 02000000;
+-	public static final int SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
+-	public static final int EPERM = 1, ENOENT = 2, EINTR = 4, EIO = 5, EBADF = 9, EAGAIN = 11, ENOMEM = 12, EACCES = 13, EEXIST = 17,
+-	                        ENOTDIR = 20, EISDIR = 21, EINVAL = 22, ENOSPC = 28, EPIPE = 32, ERANGE = 34, ENOSYS = 38, ENOTEMPTY = 39,
+-	                        ENOTSUP = 95, ECONNRESET = 104, ETIMEDOUT = 110, ECONNREFUSED = 111, EHOSTUNREACH = 113, EWOULDBLOCK = 11;
+-	public static final int AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10, SOCK_STREAM = 1, SOCK_DGRAM = 2, SOL_SOCKET = 1,
+-	                        SO_REUSEADDR = 2, SO_KEEPALIVE = 9, SO_RCVBUF = 8, SO_SNDBUF = 7, IPPROTO_TCP = 6, IPPROTO_UDP = 17, TCP_NODELAY = 1;
+-	public static final int PROT_NONE = 0, PROT_READ = 1, PROT_WRITE = 2, PROT_EXEC = 4, MAP_SHARED = 1, MAP_PRIVATE = 2, MAP_ANONYMOUS = 0x20;
+-	public static final int _SC_NPROCESSORS_CONF = 83, _SC_NPROCESSORS_ONLN = 84, _SC_PAGESIZE = 30, _SC_PAGE_SIZE = 30, _SC_CLK_TCK = 2;
+-	public static final int SIGHUP = 1, SIGINT = 2, SIGQUIT = 3, SIGKILL = 9, SIGSEGV = 11, SIGTERM = 15, SIGUSR1 = 10, SIGUSR2 = 12;
+-	public static final int STDIN_FILENO = 0, STDOUT_FILENO = 1, STDERR_FILENO = 2;
+-
+-	public static boolean S_ISDIR(int mode) { return (mode & S_IFMT) == S_IFDIR; }
+-	public static boolean S_ISREG(int mode) { return (mode & S_IFMT) == S_IFREG; }
+-	public static boolean S_ISLNK(int mode) { return (mode & S_IFMT) == S_IFLNK; }
+-	public static boolean S_ISSOCK(int mode) { return (mode & S_IFMT) == S_IFSOCK; }
+-	public static boolean S_ISCHR(int mode) { return (mode & S_IFMT) == S_IFCHR; }
+-	public static boolean S_ISBLK(int mode) { return (mode & S_IFMT) == S_IFBLK; }
+-	public static boolean S_ISFIFO(int mode) { return (mode & S_IFMT) == S_IFIFO; }
+-	public static String errnoName(int errno) { return "errno" + errno; }
+-}
+diff --git a/src/api-impl/android/system/StructStat.java b/src/api-impl/android/system/StructStat.java
+deleted file mode 100644
+index d496e4eb..00000000
+--- a/src/api-impl/android/system/StructStat.java
++++ /dev/null
+@@ -1,16 +0,0 @@
+-package android.system;
+-
+-public final class StructStat {
+-	public final long st_dev, st_ino;
+-	public final int st_mode;
+-	public final long st_nlink;
+-	public final int st_uid, st_gid;
+-	public final long st_rdev, st_size, st_atime, st_mtime, st_ctime, st_blksize, st_blocks;
+-
+-	public StructStat(long st_dev, long st_ino, int st_mode, long st_nlink, int st_uid, int st_gid, long st_rdev, long st_size,
+-	                  long st_atime, long st_mtime, long st_ctime, long st_blksize, long st_blocks) {
+-		this.st_dev = st_dev; this.st_ino = st_ino; this.st_mode = st_mode; this.st_nlink = st_nlink; this.st_uid = st_uid; this.st_gid = st_gid;
+-		this.st_rdev = st_rdev; this.st_size = st_size; this.st_atime = st_atime; this.st_mtime = st_mtime; this.st_ctime = st_ctime;
+-		this.st_blksize = st_blksize; this.st_blocks = st_blocks;
+-	}
+-}
+diff --git a/src/api-impl/android/system/StructUtsname.java b/src/api-impl/android/system/StructUtsname.java
+deleted file mode 100644
+index 23a27df2..00000000
+--- a/src/api-impl/android/system/StructUtsname.java
++++ /dev/null
+@@ -1,8 +0,0 @@
+-package android.system;
+-
+-public final class StructUtsname {
+-	public final String sysname, nodename, release, version, machine;
+-	public StructUtsname(String sysname, String nodename, String release, String version, String machine) {
+-		this.sysname = sysname; this.nodename = nodename; this.release = release; this.version = version; this.machine = machine;
+-	}
+-}
+diff --git a/src/api-impl/meson.build b/src/api-impl/meson.build
+index b294b47b..b9f019fe 100644
+--- a/src/api-impl/meson.build
++++ b/src/api-impl/meson.build
+@@ -1,11 +1,6 @@
+ srcs = [
+ 	'android/util/Range.java',
+ 	'android/util/CloseGuard.java',
+-	'android/system/StructUtsname.java',
+-	'android/system/StructStat.java',
+-	'android/system/OsConstants.java',
+-	'android/system/Os.java',
+-	'android/system/ErrnoException.java',
+ 	'android/os/TransactionTooLargeException.java',
+ 	'android/os/ParcelUuid.java',
+ 	'android/os/NetworkOnMainThreadException.java',
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 03189fd268602442792fe5c55e8da9a114a6c95a Mon Sep 17 00:00:00 2001
+From: teslalinux <dev@teslalinux>
+Date: Thu, 8 Oct 2026 03:04:30 +0000
+Subject: [PATCH 3/4] waze: stub batch (2026-10-08)
+
+---
+ src/api-impl/android/app/Activity.java        |  14 +++
+ src/api-impl/android/app/ActivityManager.java |   9 ++
+ src/api-impl/android/app/AppOpsManager.java   |  36 +++++-
+ src/api-impl/android/app/KeyguardManager.java |  12 ++
+ .../android/app/NotificationChannel.java      |  67 +++++++---
+ .../android/app/NotificationManager.java      |  15 +++
+ src/api-impl/android/content/Context.java     |  28 +++++
+ src/api-impl/android/content/Intent.java      |  30 +++++
+ .../android/content/pm/ApplicationInfo.java   |  10 ++
+ .../android/content/pm/PackageManager.java    |  36 +++++-
+ src/api-impl/android/graphics/Bitmap.java     |  13 ++
+ src/api-impl/android/graphics/Canvas.java     |  33 +++++
+ src/api-impl/android/graphics/Color.java      |  20 +++
+ src/api-impl/android/graphics/DrawFilter.java |   4 +
+ src/api-impl/android/graphics/Paint.java      |   5 +
+ src/api-impl/android/graphics/Shader.java     |   4 +
+ src/api-impl/android/graphics/Typeface.java   |   6 +
+ .../android/graphics/drawable/Drawable.java   |  13 ++
+ .../android/hardware/SensorManager.java       | 116 ++++++++++++++++++
+ .../location/GnssMeasurementsEvent.java       |  13 ++
+ src/api-impl/android/location/Location.java   |  98 +++++++++++++++
+ .../android/location/LocationManager.java     |  30 +++++
+ .../android/location/LocationProvider.java    |  18 +++
+ .../android/location/LocationRequest.java     |  40 ++++++
+ .../location/OnNmeaMessageListener.java       |   5 +
+ src/api-impl/android/window/BackEvent.java    |  12 ++
+ .../window/OnBackAnimationCallback.java       |   7 ++
+ .../android/window/OnBackInvokedCallback.java |   5 +
+ .../window/OnBackInvokedDispatcher.java       |  14 +++
+ src/api-impl/meson.build                      |   9 ++
+ 30 files changed, 699 insertions(+), 23 deletions(-)
+ create mode 100644 src/api-impl/android/graphics/DrawFilter.java
+ create mode 100644 src/api-impl/android/location/GnssMeasurementsEvent.java
+ create mode 100644 src/api-impl/android/location/LocationProvider.java
+ create mode 100644 src/api-impl/android/location/LocationRequest.java
+ create mode 100644 src/api-impl/android/location/OnNmeaMessageListener.java
+ create mode 100644 src/api-impl/android/window/BackEvent.java
+ create mode 100644 src/api-impl/android/window/OnBackAnimationCallback.java
+ create mode 100644 src/api-impl/android/window/OnBackInvokedCallback.java
+ create mode 100644 src/api-impl/android/window/OnBackInvokedDispatcher.java
+
+diff --git a/src/api-impl/android/app/Activity.java b/src/api-impl/android/app/Activity.java
+index c0cb3e0d..8ae09226 100644
+--- a/src/api-impl/android/app/Activity.java
++++ b/src/api-impl/android/app/Activity.java
+@@ -658,4 +658,18 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, La
+ 		super.atl_attach_base_context(baseContext);
+ 		this.window = new Window(this, this);
+ 	}
++
++	/* teslalinux-frag e87de5a14153 */
++	/* teslalinux: Activity additions */
++	public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return android.window.OnBackInvokedDispatcher.STUB; }
++	public void addContentView(View view, ViewGroup.LayoutParams params) { setContentView(view, params); }
++	public boolean isLaunchedFromBubble() { return false; }
++	public void onUserInteraction() {}
++	public boolean navigateUpTo(Intent upIntent) { return false; }
++	public boolean shouldUpRecreateTask(Intent targetIntent) { return false; }
++	public void setEnterSharedElementCallback(SharedElementCallback callback) {}
++	public void setExitSharedElementCallback(SharedElementCallback callback) {}
++	public boolean dispatchKeyShortcutEvent(android.view.KeyEvent event) { return false; }
++	public void startIntentSenderForResult(android.content.IntentSender intent, int requestCode, Intent fillInIntent, int flagsMask, int flagsValues, int extraFlags) {}
++	public void startIntentSenderForResult(android.content.IntentSender intent, int requestCode, Intent fillInIntent, int flagsMask, int flagsValues, int extraFlags, android.os.Bundle options) {}
+ }
+diff --git a/src/api-impl/android/app/ActivityManager.java b/src/api-impl/android/app/ActivityManager.java
+index da14b241..27bdad45 100644
+--- a/src/api-impl/android/app/ActivityManager.java
++++ b/src/api-impl/android/app/ActivityManager.java
+@@ -101,4 +101,13 @@ public class ActivityManager {
+ 
+ 	public void moveTaskToFront(int taskId, int flags, Bundle options) {
+ 	}
++
++	/* teslalinux-frag 0818ea008f19 */
++	/* teslalinux: ActivityManager additions */
++	public boolean isRunningInTestHarness() { return false; }
++	public static boolean isRunningInUserTestHarness() { return false; }
++	public int getLauncherLargeIconSize() { return 96; }
++	public int getLauncherLargeIconDensity() { return 320; }
++	public boolean isBackgroundRestricted() { return false; }
++	public static boolean isUserAMonkeyStatic() { return false; }
+ }
+diff --git a/src/api-impl/android/app/AppOpsManager.java b/src/api-impl/android/app/AppOpsManager.java
+index 57a65da2..b08e3d5a 100644
+--- a/src/api-impl/android/app/AppOpsManager.java
++++ b/src/api-impl/android/app/AppOpsManager.java
+@@ -1,12 +1,36 @@
+ package android.app;
+ 
++/* teslalinux: replaces ATL's two-method AppOpsManager. One app, one user: every op is allowed. */
+ public class AppOpsManager {
++	public static final int MODE_ALLOWED = 0, MODE_IGNORED = 1, MODE_ERRORED = 2, MODE_DEFAULT = 3, MODE_FOREGROUND = 4;
++	public static final String OPSTR_COARSE_LOCATION = "android:coarse_location", OPSTR_FINE_LOCATION = "android:fine_location",
++	                           OPSTR_GET_USAGE_STATS = "android:get_usage_stats", OPSTR_SYSTEM_ALERT_WINDOW = "android:system_alert_window",
++	                           OPSTR_RECORD_AUDIO = "android:record_audio", OPSTR_CAMERA = "android:camera", OPSTR_READ_PHONE_STATE = "android:read_phone_state",
++	                           OPSTR_PICTURE_IN_PICTURE = "android:picture_in_picture", OPSTR_MOCK_LOCATION = "android:mock_location";
+ 
+-	public static String permissionToOp(String permission) {
+-		return permission;
+-	}
++	public interface OnOpChangedListener { void onOpChanged(String op, String packageName); }
+ 
+-	public int noteProxyOpNoThrow(String op, String pkg) {
+-		return 0;
+-	}
++	public static String permissionToOp(String permission) { return permission; }
++	public int checkOp(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int checkOpNoThrow(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int unsafeCheckOp(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int unsafeCheckOpNoThrow(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int unsafeCheckOpRaw(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int unsafeCheckOpRawNoThrow(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int noteOp(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int noteOp(String op, int uid, String packageName, String attributionTag, String message) { return MODE_ALLOWED; }
++	public int noteOpNoThrow(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int noteOpNoThrow(String op, int uid, String packageName, String attributionTag, String message) { return MODE_ALLOWED; }
++	public int noteProxyOp(String op, String proxiedPackageName) { return MODE_ALLOWED; }
++	public int noteProxyOp(String op, String proxiedPackageName, int proxiedUid, String proxiedAttributionTag, String message) { return MODE_ALLOWED; }
++	public int noteProxyOpNoThrow(String op, String proxiedPackageName) { return MODE_ALLOWED; }
++	public int noteProxyOpNoThrow(String op, String proxiedPackageName, int proxiedUid) { return MODE_ALLOWED; }
++	public int noteProxyOpNoThrow(String op, String proxiedPackageName, int proxiedUid, String proxiedAttributionTag, String message) { return MODE_ALLOWED; }
++	public int startOp(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public int startOpNoThrow(String op, int uid, String packageName) { return MODE_ALLOWED; }
++	public void finishOp(String op, int uid, String packageName) {}
++	public void checkPackage(int uid, String packageName) {}
++	public void startWatchingMode(String op, String packageName, OnOpChangedListener callback) {}
++	public void startWatchingMode(String op, String packageName, int flags, OnOpChangedListener callback) {}
++	public void stopWatchingMode(OnOpChangedListener callback) {}
+ }
+diff --git a/src/api-impl/android/app/KeyguardManager.java b/src/api-impl/android/app/KeyguardManager.java
+index 084c22f7..c032e3a7 100644
+--- a/src/api-impl/android/app/KeyguardManager.java
++++ b/src/api-impl/android/app/KeyguardManager.java
+@@ -12,4 +12,16 @@ public class KeyguardManager {
+ 	public boolean isKeyguardSecure() {
+ 		return true;
+ 	}
++
++	/* teslalinux-frag 13ca4b5ac136 */
++	/* teslalinux: KeyguardManager additions */
++	public static abstract class KeyguardDismissCallback {
++		public void onDismissError() {}
++		public void onDismissSucceeded() {}
++		public void onDismissCancelled() {}
++	}
++	public boolean isDeviceSecure() { return false; }
++	public boolean isDeviceLocked() { return false; }
++	public android.content.Intent createConfirmDeviceCredentialIntent(CharSequence title, CharSequence description) { return null; }
++	public void requestDismissKeyguard(Activity activity, KeyguardDismissCallback callback) { if (callback != null) callback.onDismissSucceeded(); }
+ }
+diff --git a/src/api-impl/android/app/NotificationChannel.java b/src/api-impl/android/app/NotificationChannel.java
+index 4cf40929..291ddc85 100644
+--- a/src/api-impl/android/app/NotificationChannel.java
++++ b/src/api-impl/android/app/NotificationChannel.java
+@@ -3,22 +3,59 @@ package android.app;
+ import android.media.AudioAttributes;
+ import android.net.Uri;
+ 
++/* teslalinux: replaces ATL's no-op NotificationChannel with one that remembers what it was given. */
+ public class NotificationChannel {
++	public static final String DEFAULT_CHANNEL_ID = "miscellaneous";
+ 
+-	public NotificationChannel(String id, CharSequence name, int importance) {}
++	private final String id;
++	private CharSequence name;
++	private int importance;
++	private String description, group, conversationId, parentChannelId;
++	private boolean showBadge = true, bypassDnd, lights, vibration, bubbles, importantConversation;
++	private int lightColor, lockscreenVisibility = -1000;
++	private long[] vibrationPattern;
++	private Uri sound;
++	private AudioAttributes audioAttributes;
+ 
+-	public void setLockscreenVisibility(int a) {}
+-	public void setShowBadge(boolean a) {}
+-	public void setGroup(String grp) {}
+-	public void enableLights(boolean en) {}
+-	public void setLightColor(int color) {}
+-	public void setVibrationPattern(long[] pattern) {}
+-	public void enableVibration(boolean en) {}
+-	public void setSound(Uri uri, AudioAttributes attrs) {}
+-	public boolean shouldShowLights() { return false; }
+-	public int getLightColor() { return 0; }
+-	public boolean shouldVibrate() { return false; }
+-	public Uri getSound() { return null; }
+-	public void setDescription(String description) {}
+-	public void setBypassDnd(boolean bypassDnd) {}
++	public NotificationChannel(String id, CharSequence name, int importance) {
++		this.id = id; this.name = name; this.importance = importance;
++	}
++
++	public String getId() { return id; }
++	public CharSequence getName() { return name; }
++	public void setName(CharSequence name) { this.name = name; }
++	public int getImportance() { return importance; }
++	public void setImportance(int importance) { this.importance = importance; }
++	public String getDescription() { return description; }
++	public void setDescription(String description) { this.description = description; }
++	public String getGroup() { return group; }
++	public void setGroup(String grp) { this.group = grp; }
++	public boolean canShowBadge() { return showBadge; }
++	public void setShowBadge(boolean a) { showBadge = a; }
++	public boolean canBypassDnd() { return bypassDnd; }
++	public void setBypassDnd(boolean bypassDnd) { this.bypassDnd = bypassDnd; }
++	public int getLockscreenVisibility() { return lockscreenVisibility; }
++	public void setLockscreenVisibility(int a) { lockscreenVisibility = a; }
++	public void enableLights(boolean en) { lights = en; }
++	public boolean shouldShowLights() { return lights; }
++	public void setLightColor(int color) { lightColor = color; }
++	public int getLightColor() { return lightColor; }
++	public void setVibrationPattern(long[] pattern) { vibrationPattern = pattern; vibration = pattern != null && pattern.length > 0; }
++	public long[] getVibrationPattern() { return vibrationPattern; }
++	public void enableVibration(boolean en) { vibration = en; }
++	public boolean shouldVibrate() { return vibration; }
++	public void setSound(Uri uri, AudioAttributes attrs) { sound = uri; audioAttributes = attrs; }
++	public Uri getSound() { return sound; }
++	public AudioAttributes getAudioAttributes() { return audioAttributes; }
++	public String getParentChannelId() { return parentChannelId; }
++	public String getConversationId() { return conversationId; }
++	public void setConversationId(String parentChannelId, String conversationId) { this.parentChannelId = parentChannelId; this.conversationId = conversationId; }
++	public boolean isImportantConversation() { return importantConversation; }
++	public void setImportantConversation(boolean v) { importantConversation = v; }
++	public boolean canBubble() { return bubbles; }
++	public void setAllowBubbles(boolean v) { bubbles = v; }
++	public boolean hasUserSetImportance() { return false; }
++	public boolean hasUserSetSound() { return false; }
++	public boolean isBlockable() { return true; }
++	@Override public String toString() { return "NotificationChannel{" + id + "," + name + "," + importance + "}"; }
+ }
+diff --git a/src/api-impl/android/app/NotificationManager.java b/src/api-impl/android/app/NotificationManager.java
+index 2ecface2..d65ef251 100644
+--- a/src/api-impl/android/app/NotificationManager.java
++++ b/src/api-impl/android/app/NotificationManager.java
+@@ -106,4 +106,19 @@ public class NotificationManager {
+ 	public NotificationChannel getNotificationChannel(String channel) {
+ 		return null;
+ 	}
++
++	/* teslalinux-frag d5b0a0352af6 */
++	/* teslalinux: NotificationManager additions */
++	public static final int IMPORTANCE_UNSPECIFIED = -1000, IMPORTANCE_NONE = 0, IMPORTANCE_MIN = 1, IMPORTANCE_LOW = 2, IMPORTANCE_DEFAULT = 3, IMPORTANCE_HIGH = 4, IMPORTANCE_MAX = 5;
++	public static final int INTERRUPTION_FILTER_UNKNOWN = 0, INTERRUPTION_FILTER_ALL = 1, INTERRUPTION_FILTER_PRIORITY = 2, INTERRUPTION_FILTER_NONE = 3, INTERRUPTION_FILTER_ALARMS = 4;
++	public NotificationChannelGroup getNotificationChannelGroup(String channelGroupId) { return null; }
++	public int getImportance() { return IMPORTANCE_DEFAULT; }
++	public int getCurrentInterruptionFilter() { return INTERRUPTION_FILTER_ALL; }
++	public boolean canUseFullScreenIntent() { return true; }
++	public boolean canPostPromotedNotifications() { return false; }
++	public void deleteNotificationChannelGroup(String groupId) {}
++	public String getNotificationDelegate() { return null; }
++	public void setNotificationDelegate(String delegate) {}
++	public boolean isNotificationPolicyAccessGranted() { return false; }
++	public boolean shouldHideSilentStatusBarIcons() { return false; }
+ }
+diff --git a/src/api-impl/android/content/Context.java b/src/api-impl/android/content/Context.java
+index 42d1c5ec..689195bb 100644
+--- a/src/api-impl/android/content/Context.java
++++ b/src/api-impl/android/content/Context.java
+@@ -1,4 +1,5 @@
+ package android.content;
++import java.util.concurrent.Executor;
+ 
+ import android.R;
+ import android.app.Activity;
+@@ -592,4 +593,31 @@ public abstract class Context {
+ 	public abstract int getThemeResId();
+ 
+ 	public abstract ATLLoadedApp get_atl_loaded_app();
++
++	/* teslalinux-frag 529391287442 */
++	/* teslalinux: API 28-34 Context additions Waze touches during Application.onCreate */
++	public Executor getMainExecutor() {
++		final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
++		return new Executor() {
++			public void execute(Runnable r) { h.post(r); }
++		};
++	}
++	public Context createAttributionContext(String attributionTag) { return this; }
++	public Context createWindowContext(int type, android.os.Bundle options) { return this; }
++	public Context createWindowContext(android.view.Display display, int type, android.os.Bundle options) { return this; }
++	public Context createDeviceContext(int deviceId) { return this; }
++	public int getDeviceId() { return 0; }
++	public boolean isUiContext() { return true; }
++	public String getOpPackageName() { return getPackageName(); }
++	public java.io.File getCodeCacheDir() { java.io.File f = new java.io.File(getCacheDir(), "code_cache"); f.mkdirs(); return f; }
++	public String getSystemServiceName(Class<?> serviceClass) { return serviceClass.getSimpleName(); }
++	public ComponentName startForegroundService(Intent service) { return startService(service); }
++	public void startActivities(Intent[] intents) { for (Intent i : intents) startActivity(i); }
++	public void startActivities(Intent[] intents, android.os.Bundle options) { startActivities(intents); }
++	public boolean deleteFile(String name) { return getFileStreamPath(name).delete(); }
++	public int checkCallingOrSelfUriPermission(android.net.Uri uri, int modeFlags) { return android.content.pm.PackageManager.PERMISSION_GRANTED; }
++	public boolean bindServiceAsUser(Intent service, ServiceConnection conn, int flags, android.os.UserHandle user) { return bindService(service, conn, flags); }
++	public android.view.Display getDisplay() { return ((android.view.WindowManager) getSystemService("window")).getDefaultDisplay(); }
++	public void registerDeviceIdChangeListener(Executor executor, java.util.function.IntConsumer listener) {}
++	public void unregisterDeviceIdChangeListener(java.util.function.IntConsumer listener) {}
+ }
+diff --git a/src/api-impl/android/content/Intent.java b/src/api-impl/android/content/Intent.java
+index 841c3b23..ce291a9a 100644
+--- a/src/api-impl/android/content/Intent.java
++++ b/src/api-impl/android/content/Intent.java
+@@ -915,4 +915,34 @@ public class Intent implements Parcelable {
+ 	public int[] getIntArrayExtra(String name) {
+ 		return extras.getIntArray(name);
+ 	}
++
++	/* teslalinux-frag ee39f844c46d */
++	/* teslalinux: Intent additions */
++	private String tlIdentifier;
++	public boolean hasCategory(String category) { java.util.Set<String> c = getCategories(); return c != null && c.contains(category); }
++	public CharSequence getCharSequenceExtra(String name) { android.os.Bundle b = getExtras(); return b == null ? null : b.getCharSequence(name); }
++	public Intent setIdentifier(String identifier) { tlIdentifier = identifier; return this; }
++	public String getIdentifier() { return tlIdentifier; }
++	public Intent cloneFilter() { Intent i = new Intent(this); i.tlIdentifier = tlIdentifier; return i; }
++	@Override public Object clone() { return new Intent(this); }
++	public static Intent makeMainActivity(ComponentName mainActivity) {
++		Intent i = new Intent("android.intent.action.MAIN"); i.setComponent(mainActivity); i.addCategory("android.intent.category.LAUNCHER"); return i;
++	}
++	public static Intent makeMainSelectorActivity(String selectorAction, String selectorCategory) {
++		Intent i = new Intent("android.intent.action.MAIN"); i.addCategory(selectorCategory); return i;
++	}
++	public static Intent makeRestartActivityTask(ComponentName mainActivity) {
++		Intent i = makeMainActivity(mainActivity); i.addFlags(FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP); return i;
++	}
++	public static Intent parseUri(String uri, int flags) throws java.net.URISyntaxException {
++		if (uri == null) throw new java.net.URISyntaxException("null", "null uri");
++		return new Intent("android.intent.action.VIEW", android.net.Uri.parse(uri));
++	}
++	public String toUri(int flags) { return getDataString() != null ? getDataString() : ""; }
++	public void writeToParcel(android.os.Parcel out, int flags) {}
++	public int describeContents() { return 0; }
++	public static final android.os.Parcelable.Creator<Intent> CREATOR = new android.os.Parcelable.Creator<Intent>() {
++		public Intent createFromParcel(android.os.Parcel in) { return new Intent(); }
++		public Intent[] newArray(int size) { return new Intent[size]; }
++	};
+ }
+diff --git a/src/api-impl/android/content/pm/ApplicationInfo.java b/src/api-impl/android/content/pm/ApplicationInfo.java
+index 17243518..68d2dc83 100644
+--- a/src/api-impl/android/content/pm/ApplicationInfo.java
++++ b/src/api-impl/android/content/pm/ApplicationInfo.java
+@@ -677,4 +677,14 @@ public class ApplicationInfo extends PackageItemInfo {
+ 	}
+ 
+ 	public String[] splitPublicSourceDirs = new String[0];
++
++	/* teslalinux-frag e03297d86d83 */
++	/* teslalinux: ApplicationInfo additions */
++	public String deviceProtectedDataDir;
++	public String credentialProtectedDataDir;
++	public int category = -1;
++	public int minSdkVersion = 1;
++	public int compileSdkVersion = 34;
++	public String compileSdkVersionCodename;
++	public boolean isVirtualPreview() { return false; }
+ }
+diff --git a/src/api-impl/android/content/pm/PackageManager.java b/src/api-impl/android/content/pm/PackageManager.java
+index 8123836f..ebdacc80 100644
+--- a/src/api-impl/android/content/pm/PackageManager.java
++++ b/src/api-impl/android/content/pm/PackageManager.java
+@@ -1890,8 +1890,8 @@ public class PackageManager {
+ 				else
+ 					return PERMISSION_DENIED;
+ 			default:
+-				System.out.println("PackageManager.checkPermission: >" + permName + "< not handled\n");
+-				return PERMISSION_DENIED;
++				/* teslalinux: single-app device, the car owner already consented; grant everything. */
++				return PERMISSION_GRANTED;
+ 		}
+ 	}
+ 
+@@ -3621,4 +3621,36 @@ public class PackageManager {
+ 	public PackageInstaller getPackageInstaller() {
+ 		return new PackageInstaller();
+ 	}
++
++	/* teslalinux-frag 75f1f402f082 */
++	/* teslalinux: PackageManager additions (API 29-34) */
++	public static final class Property {
++		private final String name, packageName, className; private final Object value;
++		public Property(String name, Object value, String packageName, String className) { this.name = name; this.value = value; this.packageName = packageName; this.className = className; }
++		public String getName() { return name; }
++		public String getPackageName() { return packageName; }
++		public String getClassName() { return className; }
++		public boolean isBoolean() { return value instanceof Boolean; }
++		public boolean getBoolean() { return value instanceof Boolean && (Boolean) value; }
++		public boolean isString() { return value instanceof String; }
++		public String getString() { return value instanceof String ? (String) value : null; }
++		public boolean isInteger() { return value instanceof Integer; }
++		public int getInteger() { return value instanceof Integer ? (Integer) value : 0; }
++		public boolean isFloat() { return value instanceof Float; }
++		public float getFloat() { return value instanceof Float ? (Float) value : 0; }
++		public boolean isResourceId() { return false; }
++		public int getResourceId() { return 0; }
++	}
++	public static final class ComponentInfoFlags { public final long value; private ComponentInfoFlags(long v) { value = v; } public static ComponentInfoFlags of(long v) { return new ComponentInfoFlags(v); } public long getValue() { return value; } }
++	public static final class ResolveInfoFlags { public final long value; private ResolveInfoFlags(long v) { value = v; } public static ResolveInfoFlags of(long v) { return new ResolveInfoFlags(v); } public long getValue() { return value; } }
++	public static final class ApplicationInfoFlags { public final long value; private ApplicationInfoFlags(long v) { value = v; } public static ApplicationInfoFlags of(long v) { return new ApplicationInfoFlags(v); } public long getValue() { return value; } }
++	public static final class PackageInfoFlags { public final long value; private PackageInfoFlags(long v) { value = v; } public static PackageInfoFlags of(long v) { return new PackageInfoFlags(v); } public long getValue() { return value; } }
++	public Property getProperty(String propertyName, String packageName) throws NameNotFoundException { throw new NameNotFoundException(propertyName); }
++	public Property getProperty(String propertyName, android.content.ComponentName component) throws NameNotFoundException { throw new NameNotFoundException(propertyName); }
++	public boolean hasSigningCertificate(String packageName, byte[] certificate, int type) { return false; }
++	public boolean hasSigningCertificate(int uid, byte[] certificate, int type) { return false; }
++	public boolean isAutoRevokeWhitelisted() { return true; }
++	public boolean isAutoRevokeWhitelisted(String packageName) { return true; }
++	public boolean canRequestPackageInstalls() { return false; }
++	public boolean isPackageSuspended() { return false; }
+ }
+diff --git a/src/api-impl/android/graphics/Bitmap.java b/src/api-impl/android/graphics/Bitmap.java
+index 9c6dbf9f..29e04861 100644
+--- a/src/api-impl/android/graphics/Bitmap.java
++++ b/src/api-impl/android/graphics/Bitmap.java
+@@ -255,4 +255,17 @@ public final class Bitmap {
+ 	private static native void native_copy_to_buffer(long texture, Buffer buffer, int memory_format, int stride);
+ 	private static native byte[] native_save_to_png(long texture);
+ 	private static native void native_set_pixels(long snapshot, int[] pixels, int offset, int stride, int x, int y, int width, int height);
++
++	/* teslalinux-frag f8c32c8efab9 */
++	/* teslalinux: Bitmap additions */
++	private boolean tlMipMap;
++	public int getPixel(int x, int y) { int[] p = new int[1]; getPixels(p, 0, 1, x, y, 1, 1); return p[0]; }
++	public void setPixel(int x, int y, int color) { setPixels(new int[] { color }, 0, 1, x, y, 1, 1); }
++	public boolean hasMipMap() { return tlMipMap; }
++	public void setHasMipMap(boolean hasMipMap) { tlMipMap = hasMipMap; }
++	public boolean sameAs(Bitmap other) { return this == other; }
++	public ColorSpace getColorSpace() { return null; }
++	public void setColorSpace(ColorSpace colorSpace) {}
++	public Bitmap asShared() { return this; }
++	public int getGenerationId() { return 0; }
+ }
+diff --git a/src/api-impl/android/graphics/Canvas.java b/src/api-impl/android/graphics/Canvas.java
+index d673e588..d52ae0d1 100644
+--- a/src/api-impl/android/graphics/Canvas.java
++++ b/src/api-impl/android/graphics/Canvas.java
+@@ -618,4 +618,37 @@ public class Canvas {
+ 	public boolean quickReject(float left, float top, float right, float bottom, EdgeType edgeType) {
+ 		return false;
+ 	}
++
++	/* teslalinux-frag 424c24dfd70a */
++	/* teslalinux: Canvas additions */
++	private int tlDensity = 0;
++	public int saveLayerAlpha(RectF bounds, int alpha) { return saveLayer(bounds, null); }
++	public int saveLayerAlpha(RectF bounds, int alpha, int saveFlags) { return saveLayer(bounds, null); }
++	public int saveLayerAlpha(float left, float top, float right, float bottom, int alpha) { return saveLayer(new RectF(left, top, right, bottom), null); }
++	public int saveLayerAlpha(float left, float top, float right, float bottom, int alpha, int saveFlags) { return saveLayer(new RectF(left, top, right, bottom), null); }
++	public boolean clipOutRect(Rect rect) { return true; }
++	public boolean clipOutRect(RectF rect) { return true; }
++	public boolean clipOutRect(float left, float top, float right, float bottom) { return true; }
++	public boolean clipOutRect(int left, int top, int right, int bottom) { return true; }
++	public boolean clipOutPath(Path path) { return true; }
++	public void drawRGB(int r, int g, int b) { drawColor(Color.rgb(r, g, b)); }
++	public int getDensity() { return tlDensity; }
++	public void setDensity(int density) { tlDensity = density; }
++	public boolean isOpaque() { return false; }
++	public void skew(float sx, float sy) {}
++	public void drawTextRun(CharSequence text, int start, int end, int contextStart, int contextEnd, float x, float y, boolean isRtl, Paint paint) { drawText(text, start, end, x, y, paint); }
++	public void drawTextRun(char[] text, int index, int count, int contextIndex, int contextCount, float x, float y, boolean isRtl, Paint paint) { drawText(text, index, count, x, y, paint); }
++	public void drawPosText(String text, float[] pos, Paint paint) {}
++	public void drawPosText(char[] text, int index, int count, float[] pos, Paint paint) {}
++	public int getMaximumBitmapWidth() { return 32768; }
++	public int getMaximumBitmapHeight() { return 32768; }
++	public DrawFilter getDrawFilter() { return null; }
++	public void setDrawFilter(DrawFilter filter) {}
++	public void enableZ() {}
++	public void disableZ() {}
++	public void drawDoubleRoundRect(RectF outer, float outerRx, float outerRy, RectF inner, float innerRx, float innerRy, Paint paint) { drawRoundRect(outer, outerRx, outerRy, paint); }
++	public void drawDoubleRoundRect(RectF outer, float[] outerRadii, RectF inner, float[] innerRadii, Paint paint) { drawRoundRect(outer, outerRadii[0], outerRadii[1], paint); }
++	public void drawVertices(VertexMode mode, int vertexCount, float[] verts, int vertOffset, float[] texs, int texOffset, int[] colors, int colorOffset, short[] indices, int indexOffset, int indexCount, Paint paint) {}
++	public void drawBitmapMesh(Bitmap bitmap, int meshWidth, int meshHeight, float[] verts, int vertOffset, int[] colors, int colorOffset, Paint paint) {}
++	public enum VertexMode { TRIANGLES, TRIANGLE_STRIP, TRIANGLE_FAN }
+ }
+diff --git a/src/api-impl/android/graphics/Color.java b/src/api-impl/android/graphics/Color.java
+index 9c6a70b9..f2a52690 100644
+--- a/src/api-impl/android/graphics/Color.java
++++ b/src/api-impl/android/graphics/Color.java
+@@ -189,4 +189,24 @@ public class Color {
+ 	public static int HSVToColor(int alpha, float[] hsv) {
+ 		return (alpha << 24) | (HSVToColor(hsv) & 0xffffff);
+ 	}
++
++	/* teslalinux-frag be6a5d0728cc */
++	/* teslalinux: Color additions (API 26+ long colors, sRGB only) */
++	public static float luminance(int color) {
++		double r = ((color >> 16) & 0xff) / 255.0, g = ((color >> 8) & 0xff) / 255.0, b = (color & 0xff) / 255.0;
++		r = r < 0.03928 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4);
++		g = g < 0.03928 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4);
++		b = b < 0.03928 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4);
++		return (float) (0.2126 * r + 0.7152 * g + 0.0722 * b);
++	}
++	public static long pack(int color) { return (color & 0xffffffffL) << 32; }
++	public static long pack(float red, float green, float blue) { return pack(red, green, blue, 1f); }
++	public static long pack(float red, float green, float blue, float alpha) {
++		int c = ((int) (alpha * 255.0f + 0.5f) << 24) | ((int) (red * 255.0f + 0.5f) << 16) | ((int) (green * 255.0f + 0.5f) << 8) | (int) (blue * 255.0f + 0.5f);
++		return pack(c);
++	}
++	public static boolean isSrgb(long color) { return true; }
++	public static boolean isWideGamut(long color) { return false; }
++	public static boolean isInColorSpace(long color, ColorSpace colorSpace) { return true; }
++	public static int getComponentCount(long color) { return 4; }
+ }
+diff --git a/src/api-impl/android/graphics/DrawFilter.java b/src/api-impl/android/graphics/DrawFilter.java
+new file mode 100644
+index 00000000..53cc55d1
+--- /dev/null
++++ b/src/api-impl/android/graphics/DrawFilter.java
+@@ -0,0 +1,4 @@
++package android.graphics;
++
++public class DrawFilter {
++}
+diff --git a/src/api-impl/android/graphics/Paint.java b/src/api-impl/android/graphics/Paint.java
+index 71201cf8..285fed16 100644
+--- a/src/api-impl/android/graphics/Paint.java
++++ b/src/api-impl/android/graphics/Paint.java
+@@ -407,4 +407,9 @@ public class Paint {
+ 	private static native void native_set_color_filter(long paint, int mode, int color);
+ 	private static native void native_get_text_bounds(long paint, String text, Rect bounds);
+ 	private static native void native_set_text_align(long paint, int align);
++
++	/* teslalinux-frag 8b942656da00 */
++	/* teslalinux: Paint additions */
++	public long getColorLong() { return Color.pack(getColor()); }
++	public String getFontVariationSettings() { return null; }
+ }
+diff --git a/src/api-impl/android/graphics/Shader.java b/src/api-impl/android/graphics/Shader.java
+index 37526c6a..b7923910 100644
+--- a/src/api-impl/android/graphics/Shader.java
++++ b/src/api-impl/android/graphics/Shader.java
+@@ -14,4 +14,8 @@ public class Shader {
+ 	public void setLocalMatrix(Matrix matrix) {}
+ 
+ 	protected void copyLocalMatrix(Shader dest) {}
++
++	/* teslalinux-frag b24d79935774 */
++	/* teslalinux: Shader additions */
++	public boolean getLocalMatrix(Matrix localM) { return false; }
+ }
+diff --git a/src/api-impl/android/graphics/Typeface.java b/src/api-impl/android/graphics/Typeface.java
+index 9339e975..5816c555 100644
+--- a/src/api-impl/android/graphics/Typeface.java
++++ b/src/api-impl/android/graphics/Typeface.java
+@@ -79,4 +79,10 @@ public class Typeface {
+ 			return DEFAULT;
+ 		}
+ 	}
++
++	/* teslalinux-frag 582089e661c0 */
++	/* teslalinux: Typeface additions */
++	public boolean isBold() { return (getStyle() & BOLD) != 0; }
++	public boolean isItalic() { return (getStyle() & ITALIC) != 0; }
++	public int getWeight() { return isBold() ? 700 : 400; }
+ }
+diff --git a/src/api-impl/android/graphics/drawable/Drawable.java b/src/api-impl/android/graphics/drawable/Drawable.java
+index 68c764cd..357cb8bf 100644
+--- a/src/api-impl/android/graphics/drawable/Drawable.java
++++ b/src/api-impl/android/graphics/drawable/Drawable.java
+@@ -414,4 +414,17 @@ public class Drawable {
+ 	protected native void native_draw(long paintable, long snapshot, int width, int height);
+ 	protected native void native_ref(long paintable);
+ 	protected native void native_unref(long paintable);
++
++	/* teslalinux-frag e4cbcef7862e */
++	/* teslalinux: Drawable additions */
++	public int getAlpha() { return 255; }
++	public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
++	public boolean isAutoMirrored() { return false; }
++	public Rect getDirtyBounds() { return getBounds(); }
++	public void getOutline(android.graphics.Outline outline) {}
++	public android.graphics.Insets getOpticalInsets() { return android.graphics.Insets.NONE; }
++	public void applyTheme(android.content.res.Resources.Theme t) {}
++	public boolean canApplyTheme() { return false; }
++	public android.graphics.Region getTransparentRegion() { return null; }
++	protected boolean onLevelChange(int level) { return false; }
+ }
+diff --git a/src/api-impl/android/hardware/SensorManager.java b/src/api-impl/android/hardware/SensorManager.java
+index 5c3d752c..9cc6a69e 100644
+--- a/src/api-impl/android/hardware/SensorManager.java
++++ b/src/api-impl/android/hardware/SensorManager.java
+@@ -50,4 +50,120 @@ public class SensorManager {
+ 	public List<Sensor> getSensorList(int type) {
+ 		return Arrays.asList(getDefaultSensor(type));
+ 	}
++
++	/* teslalinux-frag 6e8b9dae6961 */
++	/* teslalinux: orientation math from AOSP SensorManager (pure Java) */
++	public static final int AXIS_X = 1, AXIS_Y = 2, AXIS_Z = 3, AXIS_MINUS_X = AXIS_X | 0x80, AXIS_MINUS_Y = AXIS_Y | 0x80, AXIS_MINUS_Z = AXIS_Z | 0x80;
++
++	public static boolean getRotationMatrix(float[] R, float[] I, float[] gravity, float[] geomagnetic) {
++		float Ax = gravity[0], Ay = gravity[1], Az = gravity[2];
++		final float normsqA = (Ax * Ax + Ay * Ay + Az * Az);
++		final float g = 9.81f;
++		final float freeFallGravitySquared = 0.01f * g * g;
++		if (normsqA < freeFallGravitySquared) return false;
++		final float Ex = geomagnetic[0], Ey = geomagnetic[1], Ez = geomagnetic[2];
++		float Hx = Ey * Az - Ez * Ay, Hy = Ez * Ax - Ex * Az, Hz = Ex * Ay - Ey * Ax;
++		final float normH = (float) Math.sqrt(Hx * Hx + Hy * Hy + Hz * Hz);
++		if (normH < 0.1f) return false;
++		final float invH = 1.0f / normH;
++		Hx *= invH; Hy *= invH; Hz *= invH;
++		final float invA = 1.0f / (float) Math.sqrt(Ax * Ax + Ay * Ay + Az * Az);
++		Ax *= invA; Ay *= invA; Az *= invA;
++		final float Mx = Ay * Hz - Az * Hy, My = Az * Hx - Ax * Hz, Mz = Ax * Hy - Ay * Hx;
++		if (R != null) {
++			if (R.length == 9) {
++				R[0] = Hx; R[1] = Hy; R[2] = Hz;
++				R[3] = Mx; R[4] = My; R[5] = Mz;
++				R[6] = Ax; R[7] = Ay; R[8] = Az;
++			} else if (R.length == 16) {
++				R[0] = Hx; R[1] = Hy; R[2] = Hz; R[3] = 0;
++				R[4] = Mx; R[5] = My; R[6] = Mz; R[7] = 0;
++				R[8] = Ax; R[9] = Ay; R[10] = Az; R[11] = 0;
++				R[12] = 0; R[13] = 0; R[14] = 0; R[15] = 1;
++			}
++		}
++		if (I != null) {
++			final float invE = 1.0f / (float) Math.sqrt(Ex * Ex + Ey * Ey + Ez * Ez);
++			final float c = (Ex * Mx + Ey * My + Ez * Mz) * invE;
++			final float s = (Ex * Ax + Ey * Ay + Ez * Az) * invE;
++			if (I.length == 9) {
++				I[0] = 1; I[1] = 0; I[2] = 0;
++				I[3] = 0; I[4] = c; I[5] = s;
++				I[6] = 0; I[7] = -s; I[8] = c;
++			} else if (I.length == 16) {
++				I[0] = 1; I[1] = 0; I[2] = 0;
++				I[4] = 0; I[5] = c; I[6] = s;
++				I[8] = 0; I[9] = -s; I[10] = c;
++				I[3] = I[7] = I[11] = I[12] = I[13] = I[14] = 0; I[15] = 1;
++			}
++		}
++		return true;
++	}
++
++	public static float[] getOrientation(float[] R, float[] values) {
++		if (R.length == 9) {
++			values[0] = (float) Math.atan2(R[1], R[4]);
++			values[1] = (float) Math.asin(-R[7]);
++			values[2] = (float) Math.atan2(-R[6], R[8]);
++		} else {
++			values[0] = (float) Math.atan2(R[1], R[5]);
++			values[1] = (float) Math.asin(-R[9]);
++			values[2] = (float) Math.atan2(-R[8], R[10]);
++		}
++		return values;
++	}
++
++	public static boolean remapCoordinateSystem(float[] inR, int X, int Y, float[] outR) {
++		if (inR == outR) {
++			final float[] temp = new float[16];
++			if (remapCoordinateSystemImpl(inR, X, Y, temp)) { System.arraycopy(temp, 0, outR, 0, outR.length); return true; }
++			return false;
++		}
++		return remapCoordinateSystemImpl(inR, X, Y, outR);
++	}
++
++	private static boolean remapCoordinateSystemImpl(float[] inR, int X, int Y, float[] outR) {
++		final int length = outR.length;
++		if (inR.length != length) return false;
++		if ((X & 0x7C) != 0 || (Y & 0x7C) != 0) return false;
++		if (((X & 0x3) == 0) || ((Y & 0x3) == 0)) return false;
++		if ((X & 0x3) == (Y & 0x3)) return false;
++		final int Z = X ^ Y;
++		final int x = (X & 0x3) - 1, y = (Y & 0x3) - 1, z = (Z & 0x3) - 1;
++		final int axis_y = (z + 1) % 3, axis_z = (z + 2) % 3;
++		int Zf = Z;
++		if (((x ^ axis_y) | (y ^ axis_z)) != 0) Zf ^= 0x80;
++		final boolean sx = (X >= 0x80), sy = (Y >= 0x80), sz = (Zf >= 0x80);
++		final int rowLength = ((length == 16) ? 4 : 3);
++		for (int j = 0; j < 3; j++) {
++			final int offset = j * rowLength;
++			for (int i = 0; i < 3; i++) {
++				if (x == i) outR[offset + i] = sx ? -inR[offset + 0] : inR[offset + 0];
++				if (y == i) outR[offset + i] = sy ? -inR[offset + 1] : inR[offset + 1];
++				if (z == i) outR[offset + i] = sz ? -inR[offset + 2] : inR[offset + 2];
++			}
++		}
++		if (length == 16) { outR[3] = outR[7] = outR[11] = outR[12] = outR[13] = outR[14] = 0; outR[15] = 1; }
++		return true;
++	}
++
++	public static void getRotationMatrixFromVector(float[] R, float[] rotationVector) {
++		float q0, q1 = rotationVector[0], q2 = rotationVector[1], q3 = rotationVector[2];
++		if (rotationVector.length >= 4) q0 = rotationVector[3];
++		else { q0 = 1 - q1 * q1 - q2 * q2 - q3 * q3; q0 = (q0 > 0) ? (float) Math.sqrt(q0) : 0; }
++		float sq_q1 = 2 * q1 * q1, sq_q2 = 2 * q2 * q2, sq_q3 = 2 * q3 * q3;
++		float q1_q2 = 2 * q1 * q2, q3_q0 = 2 * q3 * q0, q1_q3 = 2 * q1 * q3, q2_q0 = 2 * q2 * q0, q2_q3 = 2 * q2 * q3, q1_q0 = 2 * q1 * q0;
++		if (R.length == 9) {
++			R[0] = 1 - sq_q2 - sq_q3; R[1] = q1_q2 - q3_q0; R[2] = q1_q3 + q2_q0;
++			R[3] = q1_q2 + q3_q0; R[4] = 1 - sq_q1 - sq_q3; R[5] = q2_q3 - q1_q0;
++			R[6] = q1_q3 - q2_q0; R[7] = q2_q3 + q1_q0; R[8] = 1 - sq_q1 - sq_q2;
++		} else if (R.length == 16) {
++			R[0] = 1 - sq_q2 - sq_q3; R[1] = q1_q2 - q3_q0; R[2] = q1_q3 + q2_q0; R[3] = 0;
++			R[4] = q1_q2 + q3_q0; R[5] = 1 - sq_q1 - sq_q3; R[6] = q2_q3 - q1_q0; R[7] = 0;
++			R[8] = q1_q3 - q2_q0; R[9] = q2_q3 + q1_q0; R[10] = 1 - sq_q1 - sq_q2; R[11] = 0;
++			R[12] = R[13] = R[14] = 0; R[15] = 1;
++		}
++	}
++	public static float getAltitude(float p0, float p) { return 44330.0f * (1.0f - (float) Math.pow(p / p0, 1.0f / 5.255f)); }
++	public static float getInclination(float[] I) { return I.length == 9 ? (float) Math.atan2(I[5], I[4]) : (float) Math.atan2(I[6], I[5]); }
+ }
+diff --git a/src/api-impl/android/location/GnssMeasurementsEvent.java b/src/api-impl/android/location/GnssMeasurementsEvent.java
+new file mode 100644
+index 00000000..0dffffa6
+--- /dev/null
++++ b/src/api-impl/android/location/GnssMeasurementsEvent.java
+@@ -0,0 +1,13 @@
++package android.location;
++
++import java.util.Collection;
++import java.util.Collections;
++
++public final class GnssMeasurementsEvent {
++	public static abstract class Callback {
++		public static final int STATUS_NOT_SUPPORTED = 0, STATUS_READY = 1, STATUS_LOCATION_DISABLED = 2, STATUS_NOT_ALLOWED = 3;
++		public void onGnssMeasurementsReceived(GnssMeasurementsEvent event) {}
++		public void onStatusChanged(int status) {}
++	}
++	public Collection<Object> getMeasurements() { return Collections.emptyList(); }
++}
+diff --git a/src/api-impl/android/location/Location.java b/src/api-impl/android/location/Location.java
+index 62fdc069..b0896873 100644
+--- a/src/api-impl/android/location/Location.java
++++ b/src/api-impl/android/location/Location.java
+@@ -1,4 +1,5 @@
+ package android.location;
++import android.os.Bundle;
+ 
+ public class Location {
+ 
+@@ -84,4 +85,101 @@ public class Location {
+ 	public String getProvider() {
+ 		return "fused";
+ 	}
++
++	/* teslalinux-frag bf32f4215d8d */
++	/* teslalinux: the rest of android.location.Location (API 26-34) as used by Waze */
++	private float tlVerticalAccuracy, tlSpeedAccuracy, tlBearingAccuracy;
++	private boolean tlHasVerticalAccuracy, tlHasSpeedAccuracy, tlHasBearingAccuracy, tlMock;
++	private long tlElapsedRealtimeNanos;
++	private double tlElapsedRealtimeUncertaintyNanos = -1;
++	private double tlMslAltitude; private boolean tlHasMslAltitude;
++	private float tlMslAltitudeAccuracy; private boolean tlHasMslAltitudeAccuracy;
++	private Bundle tlExtras;
++	private String tlProvider;
++
++	public Location(Location l) {
++		this(l.latitude, l.longitude, l.altitude, l.accuracy, l.speed, l.bearing, l.timestamp);
++		tlVerticalAccuracy = l.tlVerticalAccuracy; tlSpeedAccuracy = l.tlSpeedAccuracy; tlBearingAccuracy = l.tlBearingAccuracy;
++		tlHasVerticalAccuracy = l.tlHasVerticalAccuracy; tlHasSpeedAccuracy = l.tlHasSpeedAccuracy; tlHasBearingAccuracy = l.tlHasBearingAccuracy;
++		tlMock = l.tlMock; tlElapsedRealtimeNanos = l.tlElapsedRealtimeNanos; tlExtras = l.tlExtras; tlProvider = l.tlProvider;
++	}
++	public void set(Location l) {
++		latitude = l.latitude; longitude = l.longitude; altitude = l.altitude; accuracy = l.accuracy; speed = l.speed; bearing = l.bearing; timestamp = l.timestamp;
++		tlVerticalAccuracy = l.tlVerticalAccuracy; tlSpeedAccuracy = l.tlSpeedAccuracy; tlBearingAccuracy = l.tlBearingAccuracy;
++		tlHasVerticalAccuracy = l.tlHasVerticalAccuracy; tlHasSpeedAccuracy = l.tlHasSpeedAccuracy; tlHasBearingAccuracy = l.tlHasBearingAccuracy;
++		tlMock = l.tlMock; tlElapsedRealtimeNanos = l.tlElapsedRealtimeNanos; tlExtras = l.tlExtras; tlProvider = l.tlProvider;
++	}
++	public void reset() { latitude = 0; longitude = 0; altitude = 0; accuracy = 0; speed = 0; bearing = 0; timestamp = 0; tlHasVerticalAccuracy = tlHasSpeedAccuracy = tlHasBearingAccuracy = false; tlExtras = null; }
++	public void setAltitude(double altitude) { this.altitude = altitude; }
++	public void removeAltitude() { this.altitude = 0; }
++	public void setBearing(float bearing) { this.bearing = bearing; }
++	public void removeBearing() { this.bearing = 0; }
++	public void setSpeed(float speed) { this.speed = speed; }
++	public void removeSpeed() { this.speed = 0; }
++	public void setTime(long time) { this.timestamp = time; }
++	public void setProvider(String provider) { this.tlProvider = provider; }
++	public Bundle getExtras() { return tlExtras; }
++	public void setExtras(Bundle extras) { tlExtras = extras; }
++	public boolean hasVerticalAccuracy() { return tlHasVerticalAccuracy; }
++	public float getVerticalAccuracyMeters() { return tlVerticalAccuracy; }
++	public void setVerticalAccuracyMeters(float v) { tlVerticalAccuracy = v; tlHasVerticalAccuracy = true; }
++	public void removeVerticalAccuracy() { tlHasVerticalAccuracy = false; }
++	public boolean hasSpeedAccuracy() { return tlHasSpeedAccuracy; }
++	public float getSpeedAccuracyMetersPerSecond() { return tlSpeedAccuracy; }
++	public void setSpeedAccuracyMetersPerSecond(float v) { tlSpeedAccuracy = v; tlHasSpeedAccuracy = true; }
++	public void removeSpeedAccuracy() { tlHasSpeedAccuracy = false; }
++	public boolean hasBearingAccuracy() { return tlHasBearingAccuracy; }
++	public float getBearingAccuracyDegrees() { return tlBearingAccuracy; }
++	public void setBearingAccuracyDegrees(float v) { tlBearingAccuracy = v; tlHasBearingAccuracy = true; }
++	public void removeBearingAccuracy() { tlHasBearingAccuracy = false; }
++	public long getElapsedRealtimeNanos() { return tlElapsedRealtimeNanos != 0 ? tlElapsedRealtimeNanos : timestamp * 1000000L; }
++	public void setElapsedRealtimeNanos(long v) { tlElapsedRealtimeNanos = v; }
++	public long getElapsedRealtimeMillis() { return getElapsedRealtimeNanos() / 1000000L; }
++	public long getElapsedRealtimeAgeMillis() { return 0; }
++	public boolean hasElapsedRealtimeUncertaintyNanos() { return tlElapsedRealtimeUncertaintyNanos >= 0; }
++	public double getElapsedRealtimeUncertaintyNanos() { return tlElapsedRealtimeUncertaintyNanos; }
++	public void setElapsedRealtimeUncertaintyNanos(double v) { tlElapsedRealtimeUncertaintyNanos = v; }
++	public void removeElapsedRealtimeUncertaintyNanos() { tlElapsedRealtimeUncertaintyNanos = -1; }
++	public boolean isFromMockProvider() { return tlMock; }
++	public boolean isMock() { return tlMock; }
++	public void setMock(boolean mock) { tlMock = mock; }
++	public boolean hasMslAltitude() { return tlHasMslAltitude; }
++	public double getMslAltitudeMeters() { return tlMslAltitude; }
++	public void setMslAltitudeMeters(double v) { tlMslAltitude = v; tlHasMslAltitude = true; }
++	public void removeMslAltitude() { tlHasMslAltitude = false; }
++	public boolean hasMslAltitudeAccuracy() { return tlHasMslAltitudeAccuracy; }
++	public float getMslAltitudeAccuracyMeters() { return tlMslAltitudeAccuracy; }
++	public void setMslAltitudeAccuracyMeters(float v) { tlMslAltitudeAccuracy = v; tlHasMslAltitudeAccuracy = true; }
++	public void removeMslAltitudeAccuracy() { tlHasMslAltitudeAccuracy = false; }
++	public void dump(android.util.Printer pw, String prefix) {}
++
++	public static void distanceBetween(double startLatitude, double startLongitude, double endLatitude, double endLongitude, float[] results) {
++		double R = 6371008.8;
++		double p1 = Math.toRadians(startLatitude), p2 = Math.toRadians(endLatitude);
++		double dp = p2 - p1, dl = Math.toRadians(endLongitude - startLongitude);
++		double a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
++		double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
++		results[0] = (float) (R * c);
++		if (results.length > 1) {
++			double y = Math.sin(dl) * Math.cos(p2);
++			double x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
++			results[1] = (float) Math.toDegrees(Math.atan2(y, x));
++			if (results.length > 2) {
++				double y2 = Math.sin(-dl) * Math.cos(p1);
++				double x2 = Math.cos(p2) * Math.sin(p1) - Math.sin(p2) * Math.cos(p1) * Math.cos(-dl);
++				results[2] = (float) ((Math.toDegrees(Math.atan2(y2, x2)) + 180) % 360);
++			}
++		}
++	}
++	public float distanceTo(Location dest) { float[] r = new float[1]; distanceBetween(latitude, longitude, dest.latitude, dest.longitude, r); return r[0]; }
++	public float bearingTo(Location dest) { float[] r = new float[2]; distanceBetween(latitude, longitude, dest.latitude, dest.longitude, r); return r[1]; }
++	public static String convert(double coordinate, int outputType) { return Double.toString(coordinate); }
++	public static double convert(String coordinate) { return Double.parseDouble(coordinate); }
++
++	public static final android.os.Parcelable.Creator<Location> CREATOR = new android.os.Parcelable.Creator<Location>() {
++		public Location createFromParcel(android.os.Parcel in) { return new Location("gps"); }
++		public Location[] newArray(int size) { return new Location[size]; }
++	};
++	public int describeContents() { return 0; }
++	public void writeToParcel(android.os.Parcel parcel, int flags) {}
+ }
+diff --git a/src/api-impl/android/location/LocationManager.java b/src/api-impl/android/location/LocationManager.java
+index 99ad0784..670d18b3 100644
+--- a/src/api-impl/android/location/LocationManager.java
++++ b/src/api-impl/android/location/LocationManager.java
+@@ -1,4 +1,7 @@
+ package android.location;
++import android.os.CancellationSignal;
++import java.util.function.Consumer;
++import java.util.concurrent.Executor;
+ 
+ import android.os.Bundle;
+ import android.os.Handler;
+@@ -67,4 +70,31 @@ public class LocationManager {
+ 
+ 	public void unregisterGnssStatusCallback(GnssStatus.Callback callback) {
+ 	}
++
++	/* teslalinux-frag 00d0b731e56d */
++	/* teslalinux: LocationManager additions (API 28-34) */
++	public boolean isLocationEnabled() { return true; }
++	public boolean hasProvider(String provider) { return "gps".equals(provider) || "network".equals(provider) || "passive".equals(provider) || "fused".equals(provider); }
++	public LocationProvider getProvider(String name) { return hasProvider(name) ? new LocationProvider(name) : null; }
++	public void getCurrentLocation(String provider, CancellationSignal signal, Executor executor, final Consumer<Location> consumer) {
++		final Location l = getLastKnownLocation(provider);
++		executor.execute(new Runnable() { public void run() { consumer.accept(l); } });
++	}
++	public void getCurrentLocation(String provider, LocationRequest request, CancellationSignal signal, Executor executor, Consumer<Location> consumer) { getCurrentLocation(provider, signal, executor, consumer); }
++	public boolean registerGnssMeasurementsCallback(GnssMeasurementsEvent.Callback callback) { return false; }
++	public boolean registerGnssMeasurementsCallback(GnssMeasurementsEvent.Callback callback, android.os.Handler handler) { return false; }
++	public boolean registerGnssMeasurementsCallback(Executor executor, GnssMeasurementsEvent.Callback callback) { return false; }
++	public void unregisterGnssMeasurementsCallback(GnssMeasurementsEvent.Callback callback) {}
++	public boolean registerGnssStatusCallback(Executor executor, GnssStatus.Callback callback) { return registerGnssStatusCallback(callback, null); }
++	public String getGnssHardwareModelName() { return "atl"; }
++	public int getGnssYearOfHardware() { return 2020; }
++	public void requestLocationUpdates(String provider, LocationRequest request, Executor executor, LocationListener listener) { requestLocationUpdates(provider, request.getIntervalMillis(), request.getMinUpdateDistanceMeters(), listener); }
++	public void requestLocationUpdates(String provider, long minTimeMs, float minDistanceM, Executor executor, LocationListener listener) { requestLocationUpdates(provider, minTimeMs, minDistanceM, listener); }
++	public void requestLocationUpdates(String provider, long minTimeMs, float minDistanceM, LocationListener listener, android.os.Looper looper) { requestLocationUpdates(provider, minTimeMs, minDistanceM, listener); }
++	public void requestLocationUpdates(long minTimeMs, float minDistanceM, Criteria criteria, LocationListener listener, android.os.Looper looper) { requestLocationUpdates("gps", minTimeMs, minDistanceM, listener); }
++	public void requestLocationUpdates(long minTimeMs, float minDistanceM, Criteria criteria, Executor executor, LocationListener listener) { requestLocationUpdates("gps", minTimeMs, minDistanceM, listener); }
++	public void requestSingleUpdate(String provider, LocationListener listener, android.os.Looper looper) { requestLocationUpdates(provider, 0, 0, listener); }
++	public void removeUpdates(android.app.PendingIntent intent) {}
++	public boolean addNmeaListener(Executor executor, OnNmeaMessageListener listener) { return false; }
++	public void removeNmeaListener(OnNmeaMessageListener listener) {}
+ }
+diff --git a/src/api-impl/android/location/LocationProvider.java b/src/api-impl/android/location/LocationProvider.java
+new file mode 100644
+index 00000000..a99f3a32
+--- /dev/null
++++ b/src/api-impl/android/location/LocationProvider.java
+@@ -0,0 +1,18 @@
++package android.location;
++
++public class LocationProvider {
++	public static final int OUT_OF_SERVICE = 0, TEMPORARILY_UNAVAILABLE = 1, AVAILABLE = 2;
++	private final String name;
++	public LocationProvider(String name) { this.name = name; }
++	public String getName() { return name; }
++	public boolean meetsCriteria(Criteria criteria) { return true; }
++	public boolean requiresNetwork() { return !"gps".equals(name); }
++	public boolean requiresSatellite() { return "gps".equals(name); }
++	public boolean requiresCell() { return false; }
++	public boolean hasMonetaryCost() { return false; }
++	public boolean supportsAltitude() { return true; }
++	public boolean supportsSpeed() { return true; }
++	public boolean supportsBearing() { return true; }
++	public int getPowerRequirement() { return 1; }
++	public int getAccuracy() { return 1; }
++}
+diff --git a/src/api-impl/android/location/LocationRequest.java b/src/api-impl/android/location/LocationRequest.java
+new file mode 100644
+index 00000000..17d98c58
+--- /dev/null
++++ b/src/api-impl/android/location/LocationRequest.java
+@@ -0,0 +1,40 @@
++package android.location;
++
++public final class LocationRequest {
++	public static final int QUALITY_LOW_POWER = 104, QUALITY_BALANCED_POWER_ACCURACY = 102, QUALITY_HIGH_ACCURACY = 100;
++	public static final long PASSIVE_INTERVAL = Long.MAX_VALUE;
++	private final long intervalMillis, minUpdateIntervalMillis, maxUpdateDelayMillis, durationMillis;
++	private final int quality, maxUpdates;
++	private final float minUpdateDistanceMeters;
++
++	LocationRequest(long interval, long minInterval, long maxDelay, long duration, int quality, int maxUpdates, float minDistance) {
++		intervalMillis = interval; minUpdateIntervalMillis = minInterval; maxUpdateDelayMillis = maxDelay; durationMillis = duration;
++		this.quality = quality; this.maxUpdates = maxUpdates; minUpdateDistanceMeters = minDistance;
++	}
++	public long getIntervalMillis() { return intervalMillis; }
++	public long getMinUpdateIntervalMillis() { return minUpdateIntervalMillis; }
++	public long getMaxUpdateDelayMillis() { return maxUpdateDelayMillis; }
++	public long getDurationMillis() { return durationMillis; }
++	public int getQuality() { return quality; }
++	public int getMaxUpdates() { return maxUpdates; }
++	public float getMinUpdateDistanceMeters() { return minUpdateDistanceMeters; }
++	public boolean isLocationSettingsIgnored() { return false; }
++
++	public static final class Builder {
++		private long interval, minInterval = -1, maxDelay, duration = Long.MAX_VALUE;
++		private int quality = QUALITY_BALANCED_POWER_ACCURACY, maxUpdates = Integer.MAX_VALUE;
++		private float minDistance;
++		public Builder(long intervalMillis) { interval = intervalMillis; }
++		public Builder(LocationRequest r) { interval = r.intervalMillis; minInterval = r.minUpdateIntervalMillis; maxDelay = r.maxUpdateDelayMillis; duration = r.durationMillis; quality = r.quality; maxUpdates = r.maxUpdates; minDistance = r.minUpdateDistanceMeters; }
++		public Builder setIntervalMillis(long v) { interval = v; return this; }
++		public Builder setMinUpdateIntervalMillis(long v) { minInterval = v; return this; }
++		public Builder clearMinUpdateIntervalMillis() { minInterval = -1; return this; }
++		public Builder setMaxUpdateDelayMillis(long v) { maxDelay = v; return this; }
++		public Builder setDurationMillis(long v) { duration = v; return this; }
++		public Builder setQuality(int v) { quality = v; return this; }
++		public Builder setMaxUpdates(int v) { maxUpdates = v; return this; }
++		public Builder setMinUpdateDistanceMeters(float v) { minDistance = v; return this; }
++		public Builder setLocationSettingsIgnored(boolean v) { return this; }
++		public LocationRequest build() { return new LocationRequest(interval, minInterval < 0 ? interval : minInterval, maxDelay, duration, quality, maxUpdates, minDistance); }
++	}
++}
+diff --git a/src/api-impl/android/location/OnNmeaMessageListener.java b/src/api-impl/android/location/OnNmeaMessageListener.java
+new file mode 100644
+index 00000000..a00c36ee
+--- /dev/null
++++ b/src/api-impl/android/location/OnNmeaMessageListener.java
+@@ -0,0 +1,5 @@
++package android.location;
++
++public interface OnNmeaMessageListener {
++	void onNmeaMessage(String message, long timestamp);
++}
+diff --git a/src/api-impl/android/window/BackEvent.java b/src/api-impl/android/window/BackEvent.java
+new file mode 100644
+index 00000000..028215ae
+--- /dev/null
++++ b/src/api-impl/android/window/BackEvent.java
+@@ -0,0 +1,12 @@
++package android.window;
++
++public final class BackEvent {
++	public static final int EDGE_LEFT = 0, EDGE_RIGHT = 1;
++	private final float touchX, touchY, progress;
++	private final int swipeEdge;
++	public BackEvent(float touchX, float touchY, float progress, int swipeEdge) { this.touchX = touchX; this.touchY = touchY; this.progress = progress; this.swipeEdge = swipeEdge; }
++	public float getTouchX() { return touchX; }
++	public float getTouchY() { return touchY; }
++	public float getProgress() { return progress; }
++	public int getSwipeEdge() { return swipeEdge; }
++}
+diff --git a/src/api-impl/android/window/OnBackAnimationCallback.java b/src/api-impl/android/window/OnBackAnimationCallback.java
+new file mode 100644
+index 00000000..3eff9241
+--- /dev/null
++++ b/src/api-impl/android/window/OnBackAnimationCallback.java
+@@ -0,0 +1,7 @@
++package android.window;
++
++public interface OnBackAnimationCallback extends OnBackInvokedCallback {
++	default void onBackStarted(BackEvent backEvent) {}
++	default void onBackProgressed(BackEvent backEvent) {}
++	default void onBackCancelled() {}
++}
+diff --git a/src/api-impl/android/window/OnBackInvokedCallback.java b/src/api-impl/android/window/OnBackInvokedCallback.java
+new file mode 100644
+index 00000000..31f27fa1
+--- /dev/null
++++ b/src/api-impl/android/window/OnBackInvokedCallback.java
+@@ -0,0 +1,5 @@
++package android.window;
++
++public interface OnBackInvokedCallback {
++	void onBackInvoked();
++}
+diff --git a/src/api-impl/android/window/OnBackInvokedDispatcher.java b/src/api-impl/android/window/OnBackInvokedDispatcher.java
+new file mode 100644
+index 00000000..6f4cb302
+--- /dev/null
++++ b/src/api-impl/android/window/OnBackInvokedDispatcher.java
+@@ -0,0 +1,14 @@
++package android.window;
++
++public interface OnBackInvokedDispatcher {
++	int PRIORITY_DEFAULT = 0;
++	int PRIORITY_OVERLAY = 1000000;
++	void registerOnBackInvokedCallback(int priority, OnBackInvokedCallback callback);
++	void unregisterOnBackInvokedCallback(OnBackInvokedCallback callback);
++
++	/* teslalinux: a dispatcher that never dispatches; back navigation goes through Activity.onBackPressed */
++	OnBackInvokedDispatcher STUB = new OnBackInvokedDispatcher() {
++		public void registerOnBackInvokedCallback(int priority, OnBackInvokedCallback callback) {}
++		public void unregisterOnBackInvokedCallback(OnBackInvokedCallback callback) {}
++	};
++}
+diff --git a/src/api-impl/meson.build b/src/api-impl/meson.build
+index b9f019fe..33a99ea1 100644
+--- a/src/api-impl/meson.build
++++ b/src/api-impl/meson.build
+@@ -1,4 +1,13 @@
+ srcs = [
++	'android/window/OnBackInvokedDispatcher.java',
++	'android/window/OnBackInvokedCallback.java',
++	'android/window/OnBackAnimationCallback.java',
++	'android/window/BackEvent.java',
++	'android/location/OnNmeaMessageListener.java',
++	'android/location/LocationRequest.java',
++	'android/location/LocationProvider.java',
++	'android/location/GnssMeasurementsEvent.java',
++	'android/graphics/DrawFilter.java',
+ 	'android/util/Range.java',
+ 	'android/util/CloseGuard.java',
+ 	'android/os/TransactionTooLargeException.java',
+-- 
+2.54.0 (Apple Git-157)
+
+
+From e736dd74ca62e19af725dddcb87cfa896ea79f35 Mon Sep 17 00:00:00 2001
+From: teslalinux <dev@teslalinux>
+Date: Thu, 8 Oct 2026 03:38:04 +0000
+Subject: [PATCH 4/4] waze: stub batch (2026-10-08)
+
+---
+ src/api-impl/android/content/pm/ApplicationInfo.java | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/src/api-impl/android/content/pm/ApplicationInfo.java b/src/api-impl/android/content/pm/ApplicationInfo.java
+index 68d2dc83..f9461743 100644
+--- a/src/api-impl/android/content/pm/ApplicationInfo.java
++++ b/src/api-impl/android/content/pm/ApplicationInfo.java
+@@ -678,12 +678,11 @@ public class ApplicationInfo extends PackageItemInfo {
+ 
+ 	public String[] splitPublicSourceDirs = new String[0];
+ 
+-	/* teslalinux-frag e03297d86d83 */
++	/* teslalinux-frag 56492a6d5235 */
+ 	/* teslalinux: ApplicationInfo additions */
+ 	public String deviceProtectedDataDir;
+ 	public String credentialProtectedDataDir;
+ 	public int category = -1;
+-	public int minSdkVersion = 1;
+ 	public int compileSdkVersion = 34;
+ 	public String compileSdkVersionCodename;
+ 	public boolean isVirtualPreview() { return false; }
+-- 
+2.54.0 (Apple Git-157)
+

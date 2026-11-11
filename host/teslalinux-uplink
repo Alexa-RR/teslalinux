@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""teslalinux-uplink: keep the car (and the app) on an uplink that actually reaches the internet.
+
+The device can have several uplinks at once: the LTE modem, a second Wi-Fi card that joins a known
+network (home, a phone's hotspot, a garage's Wi-Fi), Ethernet, a phone on USB. DHCP (NetworkManager on
+Pi OS, dhcpcd on Alpine) gives each its own default route; the kernel would use the lowest metric
+whether or not that link reaches anything. Underground the LTE modem keeps its link and its route but
+no longer passes traffic, so the car would lose the internet although a Wi-Fi network is right there.
+
+Every few seconds this checks each uplink through that interface alone (a TCP connection to two
+public anycast addresses with SO_BINDTODEVICE) and installs one default route of its own, metric 5,
+in front of the DHCP ones, through the best uplink that works:
+  prefer "lte"  (default) LTE, phone, Ethernet, then Wi-Fi: Wi-Fi only while LTE has no internet
+  prefer "wifi" Wi-Fi, Ethernet, then LTE, phone: a known Wi-Fi saves mobile data when in range
+An uplink is down after 2 failed checks in a row; a preferred one that comes back takes over again
+after 3 good checks, so a garage entrance does not flap the route. When nothing works the route stays
+where it is. The DHCP routes stay untouched underneath; if the chosen link disappears the kernel drops
+our route with it and the next check picks another. The car's NAT (nftables masquerade) follows the
+route by itself.
+
+Where NetworkManager does not run (Alpine), this also keeps wpa_supplicant running on the second Wi-Fi
+card with the networks saved from the settings page (host/teslalinux-network renders
+/etc/teslalinux/wpa_supplicant-client.conf); dhcpcd takes the lease. Under NetworkManager its own
+profiles do that.
+
+Settings: /etc/teslalinux/wifi-client.json (written by teslalinux-network: enabled, prefer, iface, the
+networks). State for the settings page's Status: /run/teslalinux/uplink.json.
+"""
+import json
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import threading
+import time
+
+CONFIG = os.environ.get("TESLALINUX_WIFI_CLIENT", "/etc/teslalinux/wifi-client.json")
+WPA_CONF = os.environ.get("TESLALINUX_WPA_CONF", "/etc/teslalinux/wpa_supplicant-client.conf")
+ENV = os.environ.get("TESLALINUX_ENV", "/etc/teslalinux/env")
+STATE = os.environ.get("TESLALINUX_UPLINK_STATE", "/run/teslalinux/uplink.json")
+METRIC = 5
+INTERVAL = float(os.environ.get("TESLALINUX_UPLINK_INTERVAL", "5"))
+PROBES = (("1.1.1.1", 443), ("8.8.8.8", 53))
+SO_BINDTODEVICE = getattr(socket, "SO_BINDTODEVICE", 25)
+DOWN_AFTER = 2
+UP_AFTER = 3
+MODEM_DRIVERS = {"cdc_ether", "cdc_ncm", "huawei_cdc_ncm", "rndis_host", "qmi_wwan", "cdc_mbim"}
+ORDER = {"lte": ("lte", "phone", "ethernet", "wifi"), "wifi": ("wifi", "ethernet", "lte", "phone")}
+WPA_PID = "/run/teslalinux-wpa-client.pid"
+WPA_CTRL = "/run/teslalinux-wpa"
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def ap_iface():
+    m = re.search(r"^\s*AP_IFACE=['\"]?([A-Za-z0-9_.-]+)", read(ENV) or "", re.M)
+    return m.group(1) if m else "wlan0"
+
+
+def load_config():
+    try:
+        with open(CONFIG) as f:
+            c = json.load(f)
+        if isinstance(c, dict):
+            return c
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def kind(name):
+    drv = os.path.basename(os.path.realpath("/sys/class/net/%s/device/driver" % name))
+    if drv == "ipheth":
+        return "phone"
+    if drv in MODEM_DRIVERS or name.startswith("wwan"):
+        return "lte"
+    if os.path.isdir("/sys/class/net/%s/wireless" % name) or os.path.exists("/sys/class/net/%s/phy80211" % name):
+        return "wifi"
+    return "ethernet"
+
+
+def wireless_ifaces():
+    try:
+        names = sorted(os.listdir("/sys/class/net"))
+    except OSError:
+        return []
+    return [n for n in names if os.path.isdir("/sys/class/net/%s/wireless" % n) or os.path.exists("/sys/class/net/%s/phy80211" % n)]
+
+
+def client_iface(cfg):
+    want = cfg.get("iface") or ""
+    ap = ap_iface()
+    if want and want != ap and os.path.isdir("/sys/class/net/" + want):
+        return want
+    for n in wireless_ifaces():
+        if n != ap:
+            return n
+    return None
+
+
+def routes():
+    """{iface: (gateway or None, metric)} of the DHCP default routes (ours, metric 5, left out) and the
+    interface our route goes through now"""
+    out, ours = {}, None
+    try:
+        with open("/proc/net/route") as f:
+            next(f)
+            for line in f:
+                c = line.split()
+                if len(c) < 8 or c[1] != "00000000" or c[7] != "00000000":
+                    continue
+                gw = socket.inet_ntoa(bytes.fromhex(c[2])[::-1]) if c[2] != "00000000" else None
+                metric = int(c[6])
+                if metric == METRIC:
+                    ours = (c[0], gw)
+                    continue
+                if c[0] not in out or metric < out[c[0]][1]:
+                    out[c[0]] = (gw, metric)
+    except (OSError, ValueError, StopIteration):
+        pass
+    return out, ours
+
+
+def probe(iface):
+    """(ok, latency ms) of a TCP connection made through IFACE only"""
+    for host, port in PROBES:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface.encode() + b"\0")
+            s.settimeout(3)
+            t0 = time.monotonic()
+            s.connect((host, port))
+            return True, int((time.monotonic() - t0) * 1000)
+        except OSError:
+            continue
+        finally:
+            s.close()
+    return False, None
+
+
+def set_route(iface, gw):
+    cmd = ["ip", "-4", "route", "replace", "default"] + (["via", gw] if gw else []) + ["dev", iface, "metric", str(METRIC)]
+    return subprocess.run(cmd, capture_output=True).returncode == 0
+
+
+def clear_route():
+    subprocess.run(["ip", "-4", "route", "del", "default", "metric", str(METRIC)], capture_output=True)
+
+
+def wifi_link(iface):
+    """(ssid, signal dBm) the Wi-Fi card is associated with, or (None, None)"""
+    if not iface or not shutil.which("iw"):
+        return None, None
+    out = subprocess.run(["iw", "dev", iface, "link"], capture_output=True, text=True).stdout
+    ssid = re.search(r"^\s*SSID: (.*)$", out, re.M)
+    sig = re.search(r"^\s*signal: (-?\d+)", out, re.M)
+    if not ssid:
+        return None, None
+
+    def unescape(s):
+        try:
+            return re.sub(rb"\\x([0-9a-fA-F]{2})", lambda m: bytes([int(m.group(1), 16)]), s.encode("latin-1", "backslashreplace")).decode("utf-8", "replace")
+        except UnicodeError:
+            return s
+    return unescape(ssid.group(1)), int(sig.group(1)) if sig else None
+
+
+def nm_running():
+    if not shutil.which("nmcli"):
+        return False
+    r = subprocess.run(["nmcli", "-t", "-f", "RUNNING", "general"], capture_output=True, text=True)
+    return r.returncode == 0 and r.stdout.strip() == "running"
+
+
+class Wpa:
+    """wpa_supplicant on the second Wi-Fi card where NetworkManager does not run"""
+
+    def __init__(self):
+        self.iface, self.mtime = None, None
+
+    def pid(self):
+        p = read(WPA_PID)
+        if p and p.isdigit() and os.path.exists("/proc/%s" % p):
+            return int(p)
+        return None
+
+    def stop(self):
+        p = self.pid()
+        if p:
+            try:
+                os.kill(p, signal.SIGTERM)
+            except OSError:
+                pass
+        self.iface = None
+
+    def ensure(self, cfg, iface):
+        if not cfg.get("enabled", True) or not iface or not cfg.get("networks") or not os.path.exists(WPA_CONF) \
+                or not shutil.which("wpa_supplicant"):
+            if self.pid():
+                self.stop()
+            return
+        try:
+            mtime = os.stat(WPA_CONF).st_mtime
+        except OSError:
+            return
+        if self.pid() and self.iface == iface and self.mtime == mtime:
+            return
+        self.stop()
+        time.sleep(0.5)
+        subprocess.run(["ip", "link", "set", iface, "up"], capture_output=True)
+        r = subprocess.run(["wpa_supplicant", "-B", "-D", "nl80211", "-i", iface, "-c", WPA_CONF, "-P", WPA_PID],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            self.iface, self.mtime = iface, mtime
+        else:
+            print("teslalinux-uplink: wpa_supplicant on %s failed: %s" % (iface, r.stderr.strip()), flush=True)
+
+
+def write_state(st):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATE)
+
+
+def main():
+    health = {}  # iface -> {"ok": bool, "streak": +good/-bad, "latencyMs", "lastOk"}
+    active, since = None, time.time()
+    wpa = Wpa()
+    managed = nm_running()
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    while not stop.is_set():
+        cfg = load_config()
+        prefer = cfg.get("prefer") if cfg.get("prefer") in ORDER else "lte"
+        wifi_if = client_iface(cfg)
+        if not managed:
+            wpa.ensure(cfg, wifi_if)
+        dhcp, ours = routes()
+        ap = ap_iface()
+        cands = {i: v for i, v in dhcp.items() if i not in (ap, "lo") and not i.startswith(("waydroid", "docker", "veth"))}
+        # the backup Wi-Fi switched off: never route through it
+        if wifi_if and not cfg.get("enabled", True):
+            cands.pop(wifi_if, None)
+
+        results = {}
+        threads = [threading.Thread(target=lambda i=i: results.__setitem__(i, probe(i))) for i in cands]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        for i in list(health):
+            if i not in cands:
+                del health[i]
+        for i, (ok, ms) in results.items():
+            h = health.setdefault(i, {"ok": ok, "streak": 0, "latencyMs": None, "lastOk": None})
+            h["streak"] = (max(h["streak"], 0) + 1) if ok else (min(h["streak"], 0) - 1)
+            h["latencyMs"] = ms
+            if ok:
+                h["lastOk"] = int(time.time())
+            if h["ok"] and h["streak"] <= -DOWN_AFTER:
+                h["ok"] = False
+            elif not h["ok"] and h["streak"] >= 1:
+                h["ok"] = True
+
+        order = ORDER[prefer]
+        rank = lambda i: (order.index(kind(i)) if kind(i) in order else len(order), cands[i][1])  # noqa: E731
+        ranked = sorted(cands, key=rank)
+        healthy = [i for i in ranked if health.get(i, {}).get("ok")]
+        choice = active if active in cands else None
+        if healthy:
+            best = healthy[0]
+            if choice is None or not health.get(choice, {}).get("ok"):
+                choice = best
+            elif best != choice and rank(best) < rank(choice) and health[best]["streak"] >= UP_AFTER:
+                choice = best  # the preferred uplink is back and stayed good
+        elif choice is None and ranked:
+            choice = ranked[0]  # nothing reaches the internet: the most preferred link, for when it comes back
+
+        def why(using):
+            """why a less preferred uplink carries the traffic: the preferred ones above it have no internet"""
+            above = [i for i in ranked[:ranked.index(using)] if not health.get(i, {}).get("ok")] if using in ranked else []
+            return ", ".join("%s (%s) has no internet" % (kind(i), i) for i in above)
+
+        if choice:
+            gw = cands[choice][0]
+            if ours != (choice, gw):
+                if set_route(choice, gw):
+                    if choice != active:
+                        since = time.time()
+                        print("teslalinux-uplink: default route via %s (%s)%s" % (choice, kind(choice), ": " + why(choice) if why(choice) else ""), flush=True)
+                    active = choice
+        else:
+            if ours:
+                clear_route()
+            active = None
+
+        ssid, sig = wifi_link(wifi_if)
+        write_state({
+            "time": int(time.time()), "prefer": prefer, "active": active, "activeKind": kind(active) if active else None,
+            "since": int(since), "reason": why(active) if active else "",
+            "candidates": [{"iface": i, "kind": kind(i), "gateway": cands[i][0], "ok": health.get(i, {}).get("ok", False),
+                            "latencyMs": health.get(i, {}).get("latencyMs"), "lastOk": health.get(i, {}).get("lastOk")}
+                           for i in ranked],
+            "wifi": {"iface": wifi_if, "enabled": cfg.get("enabled", True), "ssid": ssid, "signalDbm": sig,
+                     "managedBy": "networkmanager" if managed else ("wpa_supplicant" if wpa.pid() else None)},
+        })
+        stop.wait(INTERVAL)
+    clear_route()
+    if not managed:
+        wpa.stop()
+
+
+if __name__ == "__main__":
+    main()

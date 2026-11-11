@@ -1,0 +1,4 @@
+@@@
+public class PersistableBundle extends BaseBundle {
+===
+public final class PersistableBundle extends BaseBundle implements Cloneable, Parcelable {

@@ -1,0 +1,17 @@
+@@@
+	protected int getSuggestedMinimumHeight() {
+		return getMinimumHeight();
+	}
+	protected int getSuggestedMinimumWidth() {
+		return getMinimumWidth();
+	}
+===
+	/** AOSP: the larger of the view's minimum height and its background's minimum height (a view is
+	 * never smaller than its background image: Waze's speedometer circles are only backgrounds) */
+	protected int getSuggestedMinimumHeight() {
+		return (background == null) ? getMinimumHeight() : Math.max(getMinimumHeight(), background.getMinimumHeight());
+	}
+	/** AOSP: the larger of the view's minimum width and its background's minimum width */
+	protected int getSuggestedMinimumWidth() {
+		return (background == null) ? getMinimumWidth() : Math.max(getMinimumWidth(), background.getMinimumWidth());
+	}

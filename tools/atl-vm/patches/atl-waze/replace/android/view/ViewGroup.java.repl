@@ -1,0 +1,236 @@
+@@@
+	public boolean isTransitionGroup() { return false; }
+===
+	public boolean isTransitionGroup() {
+		if ((mGroupFlags & FLAG_IS_TRANSITION_GROUP_SET) != 0) {
+			return ((mGroupFlags & FLAG_IS_TRANSITION_GROUP) != 0);
+		} else {
+			// AOSP: a group is a transition group if it has a background or a transition name
+			return getBackground() != null || getTransitionName() != null;
+		}
+	}
+@@@
+	public void onNestedScrollAccepted(View child, View target, int nestedScrollAxes) {
+		// TODO Auto-generated method stub
+		throw new UnsupportedOperationException("Unimplemented method 'onNestedScrollAccepted'");
+	}
+===
+	public void onNestedScrollAccepted(View child, View target, int nestedScrollAxes) {
+		mNestedScrollAxes = nestedScrollAxes;
+	}
+@@@
+	public void onStopNestedScroll(View target) {
+		// TODO Auto-generated method stub
+		throw new UnsupportedOperationException("Unimplemented method 'onStopNestedScroll'");
+	}
+===
+	public void onStopNestedScroll(View target) {
+		// Stop any recursive nested scrolling.
+		stopNestedScroll();
+		mNestedScrollAxes = 0;
+	}
+@@@
+	public void onNestedScroll(View target, int dxConsumed, int dyConsumed, int dxUnconsumed, int dyUnconsumed) {
+		// TODO Auto-generated method stub
+		throw new UnsupportedOperationException("Unimplemented method 'onNestedScroll'");
+	}
+===
+	public void onNestedScroll(View target, int dxConsumed, int dyConsumed, int dxUnconsumed, int dyUnconsumed) {
+		// Re-dispatch up the tree by default
+		dispatchNestedScroll(dxConsumed, dyConsumed, dxUnconsumed, dyUnconsumed, null);
+	}
+@@@
+	public void onNestedPreScroll(View target, int dx, int dy, int[] consumed) {
+		// TODO Auto-generated method stub
+		throw new UnsupportedOperationException("Unimplemented method 'onNestedPreScroll'");
+	}
+===
+	public void onNestedPreScroll(View target, int dx, int dy, int[] consumed) {
+		// Re-dispatch up the tree by default
+		dispatchNestedPreScroll(dx, dy, consumed, null);
+	}
+@@@
+		public int getLayoutDirection() { return LAYOUT_DIRECTION_LTR; }
+===
+		private int tlLayoutDirection = View.LAYOUT_DIRECTION_LTR;
+
+		public int getLayoutDirection() { return tlLayoutDirection; }
+
+		/** AOSP: the resolved layout direction of these params (LTR/RTL), used by start/end margins. */
+		public void setLayoutDirection(int layoutDirection) {
+			if (layoutDirection != View.LAYOUT_DIRECTION_LTR && layoutDirection != View.LAYOUT_DIRECTION_RTL)
+				return;
+			tlLayoutDirection = layoutDirection;
+		}
+
+		public void resolveLayoutDirection(int layoutDirection) {
+			setLayoutDirection(layoutDirection);
+		}
+@@@
+	public void onDescendantInvalidated(View child, View target) {}
+===
+	/** AOSP: a descendant's drawing changed; propagate up so every ancestor that caches drawings knows. */
+	public void onDescendantInvalidated(View child, View target) {
+		if (System.getenv("ATL_DEBUG_SURFACE") != null && target instanceof SurfaceView && (sDescendantTrace++ % 100) == 0)
+			android.util.Log.i("ViewGroup", "[surface] onDescendantInvalidated #" + sDescendantTrace + " " + getClass().getName() + " parent=" + (parent == null ? "null" : parent.getClass().getName()));
+		final ViewParent p = parent;
+		if (p != null) {
+			p.onDescendantInvalidated(this, target);
+		}
+	}
+@@@
+	public boolean drawChild(Canvas canvas, View child, long drawingTime) {
+		if (canvas instanceof GskCanvas)
+			native_drawChild(widget, child.widget, ((GskCanvas)canvas).snapshot);
+		return false;
+	}
+===
+	private static int sDrawChildTrace;
+	public boolean drawChild(Canvas canvas, View child, long drawingTime) {
+		if (System.getenv("ATL_DEBUG_SURFACE") != null && child instanceof SurfaceView && (sDrawChildTrace++ % 100) == 0)
+			android.util.Log.i("ViewGroup", "[surface] drawChild #" + sDrawChildTrace + " " + getClass().getName() + " -> " + child.getClass().getName() + " canvas=" + canvas.getClass().getName());
+		if (canvas instanceof GskCanvas)
+			native_drawChild(widget, child.widget, ((GskCanvas)canvas).snapshot);
+		return false;
+	}
+@@@
+	public boolean dispatchTouchEvent(MotionEvent event) {
+		return native_dispatchTouchEvent(widget, event, event.getX(), event.getY());
+	}
+===
+	/**
+	 * AOSP ViewGroup.dispatchTouchEvent: the children under the point get the event first (the native
+	 * side picks the widget and propagates through the Java views in between, in their own
+	 * coordinates); when none takes it, the group handles it itself (super.dispatchTouchEvent).
+	 */
+	public boolean dispatchTouchEvent(MotionEvent event) {
+		if (System.getenv("ATL_DEBUG_TOUCH") != null)
+			android.util.Log.i("ViewGroup", "[touch] dispatchTouchEvent " + getClass().getName() + " action=" + event.getActionMasked() + " at " + event.getX() + "," + event.getY() + " size " + getWidth() + "x" + getHeight());
+		if (native_dispatchTouchEvent(widget, event, event.getX(), event.getY()))
+			return true;
+		return super.dispatchTouchEvent(event);
+	}
+@@@
+		if (native_dispatchTouchEvent(widget, event, event.getX(), event.getY()))
+			return true;
+		return super.dispatchTouchEvent(event);
+===
+		boolean tlHandled = native_dispatchTouchEvent(widget, event, event.getX(), event.getY());
+		if (!tlHandled)
+			tlHandled = super.dispatchTouchEvent(event);
+		if (System.getenv("ATL_DEBUG_TOUCH") != null)
+			android.util.Log.i("ViewGroup", "[touch] dispatchTouchEvent " + getClass().getName() + " action=" + event.getActionMasked() + " -> " + tlHandled);
+		return tlHandled;
+@@@
+	public View getFocusedChild() { return null; }
+===
+	/** AOSP: the direct child that is or contains the window's focused view (mFocused, tl_focus_model). */
+	public View getFocusedChild() {
+		return tlFocusedChild;
+	}
+@@@
+	public int getDescendantFocusability() { return 0; }
+===
+	/** AOSP: how this group shares focus with its descendants (tl_touch_mode). */
+	public int getDescendantFocusability() { return tlDescendantFocusability; }
+@@@
+		children = new ArrayList<View>();
+		detachedChildren = new ArrayList<View>();
+	}
+===
+		children = new ArrayList<View>();
+		detachedChildren = new ArrayList<View>();
+		/* AOSP initFromAttributes: android:descendantFocusability (tl_touch_mode) */
+		if (attrs != null) {
+			android.content.res.TypedArray a = context.obtainStyledAttributes(attrs, com.android.internal.R.styleable.ViewGroup, defStyleAttr, defStyleRes);
+			if (a.hasValue(com.android.internal.R.styleable.ViewGroup_descendantFocusability))
+				setDescendantFocusability(TL_DESCENDANT_FOCUSABILITY_FLAGS[a.getInt(com.android.internal.R.styleable.ViewGroup_descendantFocusability, 0)]);
+			a.recycle();
+		}
+	}
+@@@
+	public View findViewById(int id) {
+		Slog.v(TAG, "findViewById: looking for id: " + String.format("%x", id) + "(" + getResources().getAssets().getResourceName(id) + ")"
+		            + " | checking: " + this + ",id: " + String.format("%x", this.getId()) + ", id_str: " + this.getIdName());
+		if (this.id == id) {
+			Slog.v(TAG, "findViewById: found: " + this + " | id: " + String.format("%x", this.getId()) + ", id_str: " + this.getIdName());
+			return this;
+		}
+		for (View child : children) {
+===
+	/**
+	 * AOSP findViewById / ViewGroup.findViewTraversal: this group, then its children in order.
+	 * teslalinux: ATL built a verbose log line on every call (resource name lookup, toString),
+	 * which cost time on each lookup and called getResources() of view subclasses whose
+	 * constructors look up children before their own fields exist (Waze's destination cells).
+	 */
+	public View findViewById(int id) {
+		if (id == NO_ID)
+			return null;
+		if (this.id == id)
+			return this;
+		for (View child : children) {
+@@@
+	public void requestChildFocus(View child, View focused) {}
+===
+	/**
+	 * AOSP: a descendant (focused) in this child's subtree took focus; this group drops its own
+	 * focus and its previous focused child's, and passes the request up (tl_focus_model).
+	 */
+	public void requestChildFocus(View child, View focused) {
+		if (getDescendantFocusability() == FOCUS_BLOCK_DESCENDANTS)
+			return;
+		super.tlUnFocus(focused); /* this group itself was focused */
+		if (tlFocusedChild != child) {
+			if (tlFocusedChild != null)
+				tlFocusedChild.tlUnFocus(focused);
+			tlFocusedChild = child;
+		}
+		if (getParent() instanceof ViewGroup)
+			((ViewGroup) getParent()).requestChildFocus(this, focused);
+	}
+@@@
+	protected void removeViewInternal(View child) {
+		if (child == null || child.parent != this)
+			return;
+		child.parent = null;
+===
+	protected void removeViewInternal(View child) {
+		if (child == null || child.parent != this)
+			return;
+		/* AOSP removeViewInternal: a removed child takes its focus with it */
+		boolean clearChildFocus = false;
+		if (child == tlFocusedChild) {
+			child.tlUnFocus(null);
+			clearChildFocus = true;
+		}
+		if (clearChildFocus) {
+			clearChildFocus(child);
+			if (!tlRootViewRequestFocus() && isAttachedToWindow())
+				getViewTreeObserver().dispatchOnGlobalFocusChange(child, null);
+		}
+		child.parent = null;
+@@@
+	public void removeAllViews() {
+		for (Iterator<View> it = children.iterator(); it.hasNext();) {
+===
+	public void removeAllViews() {
+		/* AOSP removeAllViewsInLayout: the focused child loses its focus first */
+		View focused = tlFocusedChild;
+		if (focused != null) {
+			clearChildFocus(focused);
+			focused.tlUnFocus(null);
+			if (!tlRootViewRequestFocus() && isAttachedToWindow())
+				getViewTreeObserver().dispatchOnGlobalFocusChange(focused, null);
+		}
+		for (Iterator<View> it = children.iterator(); it.hasNext();) {
+@@@
+	protected void removeDetachedView(View child, boolean animate) {
+		if (!detachedChildren.remove(child))
+			return;
+===
+	protected void removeDetachedView(View child, boolean animate) {
+		if (!detachedChildren.remove(child))
+			return;
+		if (child == tlFocusedChild)
+			child.clearFocus(); /* AOSP removeDetachedView */

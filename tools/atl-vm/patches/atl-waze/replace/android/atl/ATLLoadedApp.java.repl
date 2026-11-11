@@ -1,0 +1,29 @@
+@@@
+		final String className = component.getClassName();
+===
+		final String className = component.getClassName();
+		final ComponentName resolved = component;
+@@@
+						serviceConnection.onServiceConnected(intent.getComponent(), service.onBind(intent));
+===
+						serviceConnection.onServiceConnected(resolved, service.onBind(intent));
+@@@
+			                                 assetManager.openXmlResourceParser(1, "AndroidManifest.xml"), 0, outError);
+===
+			                                 assetManager.openXmlResourceParser(assetManager.findCookieForPath(mainApk), "AndroidManifest.xml"), 0, outError);
+@@@
+		Resources resources = new Resources(this.default_resources.getAssets(), displayMetrics, configuration);
+		resources.applyPackageQuirks(this.pkg.applicationInfo.minSdkVersion);
+		return resources;
+===
+		/* AOSP (ResourcesManager): the resources' configuration is the system one with the caller's
+		 * override applied, over an AssetManager of their own, and later system changes keep the override */
+		Configuration override = new Configuration(configuration);
+		Configuration effective = new Configuration(Context.sys_config);
+		effective.updateFrom(override);
+		Resources resources = new Resources(this.default_resources.getAssets().tlNewSharing(), displayMetrics, effective);
+		resources.applyPackageQuirks(this.pkg.applicationInfo.minSdkVersion);
+		synchronized (tl_resources) {
+			tl_resources.add(new Object[] {new java.lang.ref.WeakReference<Resources>(resources), override});
+		}
+		return resources;

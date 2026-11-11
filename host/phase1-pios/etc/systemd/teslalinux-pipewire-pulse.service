@@ -1,0 +1,17 @@
+[Unit]
+Description=teslalinux: PulseAudio protocol on the tesla user's PipeWire (/run/tesla/pulse/native, read by audio.py)
+After=teslalinux-pipewire.service
+BindsTo=teslalinux-pipewire.service
+
+[Service]
+User=tesla
+Group=tesla
+Environment=XDG_RUNTIME_DIR=/run/tesla
+Environment=HOME=/var/lib/tesla
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 50); do [ -S /run/tesla/pipewire-0 ] && exit 0; sleep 0.1; done; exit 1'
+ExecStart=/usr/bin/pipewire-pulse
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

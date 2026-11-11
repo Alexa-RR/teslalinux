@@ -1,0 +1,78 @@
+@@@
+	public void setAdjustViewBounds(boolean adjustViewBounds) {}
+===
+	/** AOSP: keep the drawable's aspect ratio when measuring; implies FIT_CENTER (teslalinux +text) */
+	public void setAdjustViewBounds(boolean adjustViewBounds) {
+		mAdjustViewBounds = adjustViewBounds;
+		if (adjustViewBounds)
+			setScaleType(ScaleType.FIT_CENTER);
+	}
+@@@
+	public void setImageMatrix(Matrix matrix) {}
+===
+	/** AOSP: the matrix a MATRIX scale type draws the image with (teslalinux +text) */
+	public void setImageMatrix(Matrix matrix) {
+		if (matrix != null && matrix.isIdentity())
+			matrix = null;
+		if ((matrix == null && !mTlMatrix.isIdentity()) || (matrix != null && !mTlMatrix.equals(matrix))) {
+			mTlMatrix.set(matrix);
+			/* the native image paintable draws a MATRIX scale type through it (native-imageview-scaletype.sh) */
+			float[] values = null;
+			if (matrix != null) {
+				values = new float[9];
+				matrix.getValues(values);
+			}
+			mTlAnimActive = false; /* AOSP configureBounds replaces an animateTransform matrix */
+			native_setImageMatrix(widget, values);
+			invalidate();
+		}
+	}
+@@@
+	public void setMaxWidth(int width) {}
+
+	public void setMaxHeight(int height) {}
+===
+	/** AOSP: an upper bound for the measured size (with adjustViewBounds) (teslalinux +text) */
+	public void setMaxWidth(int maxWidth) {
+		mMaxWidth = maxWidth;
+		requestLayout();
+	}
+
+	public void setMaxHeight(int maxHeight) {
+		mMaxHeight = maxHeight;
+		requestLayout();
+	}
+@@@
+		if (a.hasValue(com.android.internal.R.styleable.ImageView_scaleType))
+			setScaleType(scaletype_from_int[a.getInt(com.android.internal.R.styleable.ImageView_scaleType, 3 /*CENTER*/)]);
+		a.recycle();
+===
+		if (a.hasValue(com.android.internal.R.styleable.ImageView_scaleType))
+			setScaleType(scaletype_from_int[a.getInt(com.android.internal.R.styleable.ImageView_scaleType, 3 /*CENTER*/)]);
+		/* teslalinux (+text): AOSP measuring attributes */
+		mAdjustViewBounds = a.getBoolean(com.android.internal.R.styleable.ImageView_adjustViewBounds, false);
+		if (mAdjustViewBounds && !a.hasValue(com.android.internal.R.styleable.ImageView_scaleType))
+			setScaleType(ScaleType.FIT_CENTER); /* AOSP setAdjustViewBounds(true) */
+		mMaxWidth = a.getDimensionPixelSize(com.android.internal.R.styleable.ImageView_maxWidth, Integer.MAX_VALUE);
+		mMaxHeight = a.getDimensionPixelSize(com.android.internal.R.styleable.ImageView_maxHeight, Integer.MAX_VALUE);
+		mBaseline = a.getDimensionPixelSize(com.android.internal.R.styleable.ImageView_baseline, -1);
+		mBaselineAlignBottom = a.getBoolean(com.android.internal.R.styleable.ImageView_baselineAlignBottom, false);
+		a.recycle();
+@@@
+	public void setCropToPadding(boolean crop) {}
+===
+	/** AOSP: whether the image is clipped to the padding (teslalinux +text) */
+	public void setCropToPadding(boolean crop) {
+		if (mCropToPaddingFlag != crop) {
+			mCropToPaddingFlag = crop;
+			native_setCropToPadding(widget, crop);
+			requestLayout();
+			invalidate();
+		}
+	}
+@@@
+	public Matrix getImageMatrix() {
+		return Matrix.IDENTITY_MATRIX;
+	}
+===
+	/* teslalinux (+text): getImageMatrix is in ImageView.java+text.frag */

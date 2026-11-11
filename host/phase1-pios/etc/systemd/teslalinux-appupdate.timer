@@ -1,0 +1,11 @@
+[Unit]
+Description=teslalinux: app update cycle hourly (the Play check itself runs once a day, jittered; the other runs retry with backoff or install a staged update when the car is not connected)
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=1h
+RandomizedDelaySec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

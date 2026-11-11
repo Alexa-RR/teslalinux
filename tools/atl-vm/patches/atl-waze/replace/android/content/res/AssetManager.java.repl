@@ -1,0 +1,38 @@
+@@@
+			xmlBlock = openXmlAssetNative(cookie, fileName);
+			if (xmlBlock != 0) {
+===
+			// A cookie selects one APK (AOSP OpenNonAsset(filename, cookie)). The C libandroidfw
+			// open has no cookie and resolves by name across all asset paths, which is fine while a
+			// name is unique; for names that several APKs carry (AndroidManifest.xml of a base APK
+			// and its splits) read the entry from the APK the cookie names.
+			xmlBlock = 0;
+			if (cookie > 0 && sharedEntries().contains(fileName)) {
+				byte[] data = readXmlFromCookie(cookie, fileName);
+				if (data != null)
+					xmlBlock = openXmlAssetFromBufferNative(data);
+			}
+			if (xmlBlock == 0)
+				xmlBlock = openXmlAssetNative(cookie, fileName);
+			if (xmlBlock != 0) {
+@@@
+	/*package*/ final CharSequence getResourceText(int id) {
+		if (id == 0)
+			return "";
+		TypedValue value = new TypedValue();
+		loadResourceValue(id, (short)0, value, true);
+		return value.coerceToString();
+	}
+===
+	/*package*/ final CharSequence getResourceText(int id) {
+		/* AOSP: null when the id does not resolve to a value (0 never does), so Resources.getText
+		 * throws NotFoundException. ATL returned "" for 0, which apps falling back on
+		 * NotFoundException took as the text (Waze's search field placeholder: its string lookup
+		 * calls getString(getIdentifier(text)) and keeps the text only when that throws). */
+		if (id == 0)
+			return null;
+		TypedValue value = new TypedValue();
+		if (loadResourceValue(id, (short)0, value, true) < 0)
+			return null;
+		return value.coerceToString();
+	}

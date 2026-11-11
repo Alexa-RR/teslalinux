@@ -1,0 +1,85 @@
+@@@
+	public void addFlags(int flags) {}
+	public void setFlags(int flags, int mask) {}
+	public void clearFlags(int flags) {}
+===
+	/* teslalinux: AOSP Window flag handling (the flags live in the window attributes). */
+	private int mForcedWindowFlags = 0;
+
+	public void addFlags(int flags) {
+		setFlags(flags, flags);
+	}
+
+	public void clearFlags(int flags) {
+		setFlags(0, flags);
+	}
+
+	public void setFlags(int flags, int mask) {
+		final WindowManager.LayoutParams attrs = getAttributes();
+		attrs.flags = (attrs.flags & ~mask) | (flags & mask);
+		mForcedWindowFlags |= mask;
+	}
+
+	/** @hide AOSP: flags the app set explicitly through setFlags/addFlags/clearFlags. */
+	public final int getForcedWindowFlags() {
+		return mForcedWindowFlags;
+	}
+
+	/** @hide AOSP */
+	public final boolean hasSoftInputMode() {
+		return getAttributes().softInputMode != 0;
+	}
+@@@
+	public void setStatusBarColor(int color) {}
+===
+	/* teslalinux: AOSP keeps the bar colours in the window attributes (default from the theme, black here
+	 * as there is no system bar to tint); the old placeholder answered a constant red that apps painted. */
+	private int tlStatusBarColor = 0xFF000000;
+	private int tlNavigationBarColor = 0xFF000000;
+
+	public void setStatusBarColor(int color) {
+		tlStatusBarColor = color;
+	}
+@@@
+	public void setNavigationBarColor(int color) {}
+===
+	public void setNavigationBarColor(int color) {
+		tlNavigationBarColor = color;
+	}
+@@@
+	public int getStatusBarColor() { return 0xFFFF0000; }
+===
+	public int getStatusBarColor() { return tlStatusBarColor; }
+@@@
+	public int getNavigationBarColor() {
+		return 0xFF888888; // gray
+	}
+===
+	public int getNavigationBarColor() {
+		return tlNavigationBarColor;
+	}
+@@@
+	public void setSoftInputMode(int dummy) {}
+===
+	/** AOSP: the window soft input mode (WindowManager.LayoutParams.SOFT_INPUT_*). */
+	public void setSoftInputMode(int dummy) {
+		tlSoftInputMode = dummy;
+	}
+@@@
+		decorView = new FrameLayout(context);
+		decorView.setId(android.R.id.content);
+	}
+===
+		decorView = new FrameLayout(context);
+		decorView.setId(android.R.id.content);
+		tlRegisterWindow(this);
+	}
+@@@
+	public View peekDecorView() {
+		return null;
+	}
+===
+	/** AOSP: the decor view if it was created; ATL creates it with the window. */
+	public View peekDecorView() {
+		return decorView;
+	}

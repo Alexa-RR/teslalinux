@@ -1,0 +1,10 @@
+@@@
+	private static float getRefreshRate() {
+		/*DisplayInfo di = DisplayManagerGlobal.getInstance().getDisplayInfo(Display.DEFAULT_DISPLAY);*/
+		return 60 /*di.refreshRate*/; // FIXME
+	}
+===
+	/** AOSP: the default display's refresh rate (Display.getRefreshRate: the monitor showing the window) */
+	private static float getRefreshRate() {
+		return new Display().getRefreshRate();
+	}

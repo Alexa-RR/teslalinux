@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+# teslalinux: browser geolocation WebSocket (9998) -> location feed (9997) for ATL
+description="teslalinux GPS bridge"
+command=/usr/bin/python3
+command_args="/usr/local/lib/teslalinux/gps.py"
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/teslalinux-gps.pid
+output_log=/var/log/teslalinux/gps.log
+error_log=/var/log/teslalinux/gps.log
+supervisor=supervise-daemon
+respawn_delay=1
+respawn_max=0
+
+depend() {
+	need localmount
+	after net
+}
+
+start_pre() {
+	checkpath -d -m 0755 -o tesla:tesla /var/log/teslalinux
+	export TESLALINUX_GPS_WS_PORT="${TESLALINUX_GPS_WS_PORT:-9998}" TESLALINUX_GPS_FEED_PORT="${TESLALINUX_GPS_FEED_PORT:-9997}"
+	export TESLALINUX_GPS_WS_BIND=127.0.0.1 TESLALINUX_GPS_FEED_BIND=127.0.0.1
+}

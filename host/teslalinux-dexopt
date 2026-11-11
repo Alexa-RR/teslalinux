@@ -1,0 +1,128 @@
+#!/bin/bash
+# teslalinux-dexopt: compile the app ahead of time, as Android's installd does (dexopt), for the ART
+# that ATL runs. Run by the app launcher (host/phase1-pios/teslalinux-atl) right before the app
+# starts, as the app's user and with the launcher's environment; a no-op when nothing changed.
+#
+#   teslalinux-dexopt [--force] [--check] APK...      (the APKs in class path order: base.apk first)
+#
+# Why: ATL's ART compiles an app's dex files by itself when they are loaded, but without the class
+# loader context, so the compiled file never matches the context at run time; ART then checks for
+# duplicate classes against the parent class loader, which holds ATL's api-impl.jar (on Android the
+# framework is on the boot class path and never part of that check), finds the framework classes
+# apps ship (Waze carries android.animation.ValueAnimator$DurationScaleChangeListener), rejects the
+# compiled code and runs the whole app from the APK: interpreter and JIT only.
+#
+# What: each APK that has code is compiled with dex2oat into <app dir>/oat/<isa>/<name>.odex + .vdex,
+# the preinstalled location ATL's ART prefers over its cache when the file is up to date (Android
+# puts installed apps' code at /data/app/<pkg>/oat/<isa>/base.odex the same way), with the class
+# loader context the runtime computes for it: the app's PathClassLoader with the APKs before it,
+# whose parent is the system class loader with api-impl.jar ("PCL[<earlier>];PCL[<api-impl.jar>]").
+# The compiler filter is ART's default for an installed app here, speed (TESLALINUX_DEXOPT_FILTER).
+#
+# When: a stamp next to the output records what the code was compiled against (the APKs,
+# api-impl.jar, the boot class path jars, the boot image, dex2oat, the context, the filter);
+# anything changed (an app update, a system update) compiles again. --force compiles regardless,
+# --check only says whether a compile is due (exit 0 up to date, 1 due). The boot image is generated
+# by ART on the app's very first start; until it exists there is nothing to compile against and the
+# app runs from the APK that one time.
+set -uo pipefail
+
+ATL_PREFIX="${ATL_PREFIX:-/opt/atl}"
+FILTER="${TESLALINUX_DEXOPT_FILTER:-speed}"
+VERSION=1
+FORCE=0
+CHECK=0
+while [[ $# -gt 0 && "$1" == --* ]]; do
+	case "$1" in
+	--force) FORCE=1 ;;
+	--check) CHECK=1 ;;
+	*) echo "teslalinux-dexopt: unknown option $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+[[ $# -ge 1 ]] || { echo "usage: teslalinux-dexopt [--force] [--check] APK..." >&2; exit 2; }
+log() { echo "teslalinux-dexopt: $*" >&2; }
+
+case "$(uname -m)" in
+aarch64) ISA=arm64 ;;
+x86_64) ISA=x86_64 ;;
+armv7*|armv8l) ISA=arm ;;
+*) log "unsupported machine $(uname -m)"; exit 0 ;;
+esac
+
+# the dex directory exactly as ATL spells it (dirname of libart.so + "/../java/dex", main.c), since
+# class loader contexts and boot image locations compare these strings
+DEX_DIR="${TESLALINUX_DEX_DIR:-$ATL_PREFIX/lib/art/../java/dex}"
+API_IMPL="$DEX_DIR/android_translation_layer/api-impl.jar"
+BOOT_IMAGE="$DEX_DIR/art/oat/boot.art"
+DEX2OAT="$ATL_PREFIX/bin/dex2oat"
+[[ -x "$DEX2OAT" ]] || { log "no dex2oat in $ATL_PREFIX/bin"; exit 0; }
+[[ -f "$API_IMPL" ]] || { log "no api-impl.jar at $API_IMPL"; exit 0; }
+
+# the boot image ART generated (its cache: \$XDG_CACHE_HOME/art or \$HOME/.cache/art, art_standalone's
+# GetDalvikCache), named after the image location
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/art/$ISA"
+BOOT_NAME="$(printf '%s' "${BOOT_IMAGE#/}" | tr / @)"
+BOOT_FILES=("$CACHE/$BOOT_NAME" "$CACHE/${BOOT_NAME%.art}.oat" "$CACHE/${BOOT_NAME%.art}.vdex")
+if [[ ! -s "${BOOT_FILES[0]}" ]]; then
+	log "no boot image yet ($CACHE); the app runs from its APKs this once"
+	exit 0
+fi
+
+has_code() {
+	python3 -I -c 'import sys, zipfile; sys.exit(0 if "classes.dex" in zipfile.ZipFile(sys.argv[1]).namelist() else 1)' "$1" 2>/dev/null
+}
+# size and modification time of each input: what a recompile depends on
+fingerprint() {
+	local f
+	for f in "$@"; do
+		if [[ -e "$f" ]]; then stat -L -c '%n %s %Y' "$f"; else echo "$f missing"; fi
+	done
+}
+
+status=0
+earlier=()
+for apk in "$@"; do
+	[[ -f "$apk" ]] || { log "no such APK $apk"; status=1; continue; }
+	if ! has_code "$apk"; then
+		continue # a resources-only split: nothing to compile, and not part of a context
+	fi
+	dir="$(dirname "$apk")"
+	name="$(basename "$apk" .apk)"
+	out="$dir/oat/$ISA"
+	odex="$out/$name.odex"
+	stamp="$out/$name.dexopt-stamp"
+	context="PCL[$(IFS=:; echo "${earlier[*]-}")];PCL[$API_IMPL]"
+	earlier+=("$apk")
+	want="$(
+		echo "teslalinux-dexopt $VERSION filter=$FILTER context=$context boot=$BOOT_IMAGE"
+		fingerprint "$apk" "$API_IMPL" "$DEX2OAT" "${BOOT_FILES[@]}" "$DEX_DIR"/art/*.jar
+	)"
+	if [[ $FORCE == 0 && -s "$odex" && -s "$out/$name.vdex" && -f "$stamp" && "$(cat "$stamp")" == "$want" ]]; then
+		continue
+	fi
+	if [[ $CHECK == 1 ]]; then
+		status=1
+		continue
+	fi
+	mkdir -p "$out"
+	rm -f "$odex" "$out/$name.vdex" "$out/$name.art" "$stamp"
+	log "compiling $(basename "$apk") ($FILTER)"
+	start=$SECONDS
+	if nice -n 5 "$DEX2OAT" --dex-file="$apk" --oat-file="$odex" --instruction-set="$ISA" --host \
+		--boot-image="$BOOT_IMAGE" --class-loader-context="$context" --compiler-filter="$FILTER" \
+		-j"$(nproc)" >"$out/$name.dexopt.log" 2>&1; then
+		printf '%s\n' "$want" >"$stamp"
+		log "compiled $(basename "$apk") in $((SECONDS - start)) s ($(du -h "$odex" | cut -f1))"
+		# ART's own copy in its cache was compiled without the context and is never used while this
+		# one is up to date: free the space (hundreds of MB for a large app)
+		cached="$CACHE/$(printf '%s' "${apk#/}" | tr / @)@classes"
+		rm -f "$cached.dex" "$cached.vdex" "$cached.art"
+	else
+		rc=$?
+		rm -f "$odex" "$out/$name.vdex"
+		log "dex2oat failed for $(basename "$apk") (exit $rc, $out/$name.dexopt.log); the app runs from the APK"
+		status=1
+	fi
+done
+exit $status

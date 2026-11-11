@@ -1,0 +1,41 @@
+@@@
+			applicationInfo.packageName = _name;
+			applicationInfo.uid = -1;
+===
+			applicationInfo.packageName = _name;
+			// AOSP: the uid the package manager assigned at install; ATL runs the app as this process's uid
+			applicationInfo.uid = android.os.Process.myUid();
+@@@
+			Slog.i(TAG, "Package " + pkg.packageName + ": APK Signature Scheme v3" + (validate ? " (verified)" : ""));
+===
+			pkg.tlSigningScheme = 3;
+			Slog.i(TAG, "Package " + pkg.packageName + ": APK Signature Scheme v3" + (validate ? " (verified)" : ""));
+@@@
+			Slog.i(TAG, "Package " + pkg.packageName + ": APK Signature Scheme v2" + (validate ? " (verified)" : ""));
+===
+			pkg.tlSigningScheme = 2;
+			Slog.i(TAG, "Package " + pkg.packageName + ": APK Signature Scheme v2" + (validate ? " (verified)" : ""));
+@@@
+		if ((flags & PackageManager.GET_SIGNATURES) != 0) {
+			int N = (p.mSignatures != null) ? p.mSignatures.length : 0;
+			if (N > 0) {
+				pi.signatures = new Signature[N];
+				System.arraycopy(p.mSignatures, 0, pi.signatures, 0, N);
+			}
+		}
+		return pi;
+===
+		if ((flags & PackageManager.GET_SIGNATURES) != 0) {
+			int N = (p.mSignatures != null) ? p.mSignatures.length : 0;
+			if (N > 0) {
+				pi.signatures = new Signature[N];
+				System.arraycopy(p.mSignatures, 0, pi.signatures, 0, N);
+			}
+		}
+		if ((flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0 && p.mSignatures != null) {
+			// AOSP: signers, rotation history (only the current signer of a v3 lineage is read here)
+			// and the scheme: v3/v2 from the APK Signing Block, else the JAR signature (v1)
+			pi.signingInfo = new SigningInfo(p.mSignatures.clone(), null,
+			                                 p.tlSigningScheme != 0 ? p.tlSigningScheme : 1);
+		}
+		return pi;

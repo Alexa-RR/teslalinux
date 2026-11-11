@@ -1,0 +1,16 @@
+@@@
+		mediaPlayer.setDataSource(uri.getPath());
+===
+		try {
+			mediaPlayer.setDataSource(uri.getPath());
+		} catch (java.io.IOException e) {
+			throw new IllegalArgumentException(e); // AOSP: setDataSource failed
+		}
+@@@
+		mediaPlayer.setDataSource(path);
+===
+		try {
+			mediaPlayer.setDataSource(path);
+		} catch (java.io.IOException e) {
+			throw new IllegalArgumentException(e); // AOSP: setDataSource failed
+		}

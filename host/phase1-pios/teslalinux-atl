@@ -1,0 +1,109 @@
+#!/bin/bash
+# teslalinux: start Waze under the Android Translation Layer on the car display (the Pi host).
+# Runs as the `tesla` user from teslalinux-atl.service, after tacomp (the Wayland compositor that
+# feeds the car browser) and gps.py (the location feed on 127.0.0.1:9997). Everything here mirrors
+# what the VM test runs (tools/atl-vm/run-waze.sh) proved, minus the VM-only software rendering.
+set -euo pipefail
+
+# ---- configuration (overridable from /etc/teslalinux/atl.env, read by the unit) ----
+# Pi OS: the dist's prefix (tools/pios/install.sh); the Alpine image's init script sets /opt/atl
+ATL_PREFIX="${ATL_PREFIX:-/opt/teslalinux}"                # ATL + api-impl + host ART
+APP_DIR="${TESLALINUX_APP_DIR:-/var/lib/teslalinux/apps/com.waze}"  # base.apk + split_config.*.apk (tools/apps/install-app.sh)
+DATA_DIR="${ANDROID_APP_DATA_DIR:-/var/lib/tesla/android/waze}"
+SIZE="${TACOMP_SIZE:-1088x832@30}"                          # same as the compositor output
+DENSITY="${ATL_DENSITY_DPI:-213}"                           # ro.sf.lcd_density equivalent for the car screen
+SDK_INT="${ATL_SDK_INT:-32}"
+
+W="${SIZE%%x*}"; rest="${SIZE#*x}"; H="${rest%%@*}"
+
+APKS=("$APP_DIR/base.apk")
+for f in "$APP_DIR"/split_config.*.apk; do [[ -f "$f" ]] && APKS+=("$f"); done
+[[ -f "${APKS[0]}" ]] || { echo "teslalinux-atl: no base.apk in $APP_DIR (run tools/apps/install-app.sh)" >&2; exit 1; }
+
+# the compositor socket (tacomp.service) must be up; the unit orders us after it, this is the guard
+for _ in $(seq 1 100); do [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] && break; sleep 0.1; done
+[[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] || { echo "teslalinux-atl: no compositor socket $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" >&2; exit 1; }
+# the session bus (teslalinux-dbus.service): GTK and libportal use it, and libportal's xdp_portal_new()
+# aborts the whole app when there is none
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+bus="${DBUS_SESSION_BUS_ADDRESS#unix:path=}"
+for _ in $(seq 1 50); do [[ -S "$bus" ]] && break; sleep 0.1; done
+[[ -S "$bus" ]] || { echo "teslalinux-atl: no session bus at $bus (teslalinux-dbus.service)" >&2; exit 1; }
+
+# ---- rendering: V3D through Mesa, GTK's GL renderer (the VM used llvmpipe + cairo) ----
+# "ngl": GTK 4.18 (trixie) removed the old "gl" name and falls back to its default with a warning,
+# which can be Vulkan (v3dv), where every SurfaceView frame (the map, a GL texture) is copied
+export GDK_BACKEND=wayland
+export GSK_RENDERER="${GSK_RENDERER:-ngl}"
+unset LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER MESA_GL_VERSION_OVERRIDE MESA_GLES_VERSION_OVERRIDE
+
+# ---- ATL knobs proven in the VM ----
+export ATL_UGLY_ENABLE_LOCATION=1 ATL_FORCE_FULLSCREEN=1 ATL_DISABLE_WINDOW_DECORATIONS=1
+export ATL_LOCATION_SOURCE="${ATL_LOCATION_SOURCE:-tesla:127.0.0.1:9997}"
+export ATL_DENSITY_DPI="$DENSITY"
+# the VM's debug knobs stay off in the car; TESLALINUX_ATL_DEBUG=1 in /etc/teslalinux/atl.env keeps the
+# ATL_DEBUG_* / ANDROID_LOG_TAGS set there (view dumps, touch traces: tools/atl-vm/tap.sh-style debugging)
+if [[ "${TESLALINUX_ATL_DEBUG:-0}" != 1 ]]; then
+  unset ATL_OSK ATL_CHECK_JNI ATL_DEBUG_DUMPVIEWS ATL_DEBUG_TOUCH ATL_DEBUG_KEY ATL_DEBUG_IME ATL_DEBUG_VSYNC ATL_DEBUG_SURFACE
+fi
+# the keyboard chosen on the settings page (teslalinux-set-keyboard): with the device's own keyboard
+# (the page types through tacomp's text-input-v3) the app's built-in keyboard stays hidden
+if [[ "${TESLALINUX_KEYBOARD:-builtin}" == device ]]; then
+  export ATL_OSK=none
+fi
+export ANDROID_LOG_TAGS="${ANDROID_LOG_TAGS:-*:w}"
+export ANDROID_APP_DATA_DIR="$DATA_DIR"
+mkdir -p "$DATA_DIR" "$HOME/.cache/art" "$HOME/.local/share/android_translation_layer"
+
+# ---- the Android data directory (Environment.getDataDirectory(); /data does not exist here) and in
+# it the packed time zone data: libcore's java.util.TimeZone reads only
+# $ANDROID_DATA/misc/zoneinfo/current/tzdata or $ANDROID_ROOT/usr/share/zoneinfo/tzdata (AOSP's
+# ZoneCompactor format), never /usr/share/zoneinfo, and without it every zone is GMT. ANDROID_ROOT is
+# not usable for this: ART would also look for its boot image there. The file is built from the
+# system's IANA data, again whenever the tzdata package is newer (tools/atl-vm/mk-android-tzdata.py).
+export ANDROID_DATA="${ANDROID_DATA:-$HOME/android-data}"
+TZDATA="$ANDROID_DATA/misc/zoneinfo/current/tzdata"
+MKTZ="${TESLALINUX_MKTZDATA:-/usr/local/lib/teslalinux/mk-android-tzdata.py}"
+if [[ -r "$MKTZ" && ( ! -s "$TZDATA" || /usr/share/zoneinfo/tzdata.zi -nt "$TZDATA" ) ]]; then
+  python3 "$MKTZ" "$TZDATA" || echo "teslalinux-atl: could not build $TZDATA; time zones fall back to GMT" >&2
+fi
+
+# ---- time zone and locale: the system's, as Android's framework passes persist.sys.timezone and
+# persist.sys.locale to the runtime (ART otherwise falls back to its own defaults: en_US, imperial
+# units in Waze, and a zone that is not the car's). TESLALINUX_TIMEZONE / TESLALINUX_LOCALE (atl.env)
+# override them, e.g. TESLALINUX_LOCALE=en_IL.
+JVM_OPTS=()
+TZNAME="${TESLALINUX_TIMEZONE:-$(timedatectl show -p Timezone --value 2>/dev/null || true)}"
+[[ -n "$TZNAME" ]] || TZNAME="$(readlink -f /etc/localtime 2>/dev/null | sed -n 's|.*/zoneinfo/||p')"
+if [[ -n "$TZNAME" ]]; then
+  export TZ="$TZNAME"
+  JVM_OPTS+=(-X "-Duser.timezone=$TZNAME")
+fi
+if [[ -z "${TESLALINUX_LOCALE:-}" && -r /etc/default/locale ]]; then
+  TESLALINUX_LOCALE="$(sed -n 's/^LANG=//p' /etc/default/locale | tr -d '"' | head -1)"
+fi
+LOC="${TESLALINUX_LOCALE:-${LANG:-}}"; LOC="${LOC%%.*}"; LOC="${LOC%%@*}"
+case "$LOC" in
+  ""|C|POSIX) ;;
+  *_*) JVM_OPTS+=(-X "-Duser.locale=${LOC%%_*}-${LOC#*_}" -X "-Duser.language=${LOC%%_*}" -X "-Duser.region=${LOC#*_}"); export LANG="$LOC.UTF-8" ;;
+  *) JVM_OPTS+=(-X "-Duser.locale=$LOC" -X "-Duser.language=$LOC"); export LANG="$LOC.UTF-8" ;;
+esac
+
+export PATH="$ATL_PREFIX/bin:$PATH" LD_LIBRARY_PATH="$ATL_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+command -v android-translation-layer >/dev/null || { echo "teslalinux-atl: android-translation-layer not in $ATL_PREFIX/bin" >&2; exit 1; }
+
+# the app's code compiled ahead of time when the app or the runtime changed, as Android's dexopt
+# does after an install or a system update (host/teslalinux-dexopt; a no-op when up to date). Without
+# it ART runs the whole app from the APK (it rejects its own compiled code, see that script).
+DEXOPT="${TESLALINUX_DEXOPT_BIN:-/usr/local/bin/teslalinux-dexopt}"
+# Opt-in (TESLALINUX_DEXOPT=1 in atl.env). The map stall seen with it was a frozen Compose layer, fixed
+# for both runtimes (native-wrapper-pending-draw.sh). Measured on the VM (Nov 10, same UI sequence,
+# three runs each): the speed filter costs the main thread 20-25% more CPU than ART's JIT, which
+# compiles with the inline caches it profiled; only the first start after an install is faster
+# (2 s to the map instead of 21 s while ART compiles its cache copy). A profile-guided filter
+# (speed-profile from the JIT's saved profiles) is the candidate to make it a win.
+if [[ -x "$DEXOPT" && "${TESLALINUX_DEXOPT:-0}" == 1 ]]; then
+  ATL_PREFIX="$ATL_PREFIX" "$DEXOPT" "${APKS[@]}" || true
+fi
+
+exec android-translation-layer "${APKS[@]}" -w "$W" -h "$H" --sdk-int "$SDK_INT" ${JVM_OPTS[@]+"${JVM_OPTS[@]}"} "$@"

@@ -1,0 +1,59 @@
+@@@
+	public void setBackgroundTintList(ColorStateList tint) {}
+===
+	/** AOSP: the background's tint list (kept across setBackground*), applied through applyBackgroundTint(). */
+	public void setBackgroundTintList(ColorStateList tint) {
+		tlBgTintList = tint;
+		tlHasBgTintList = true;
+		applyBackgroundTint();
+	}
+@@@
+	public ColorStateList getBackgroundTintList() { return null; }
+===
+	public ColorStateList getBackgroundTintList() { return tlBgTintList; }
+@@@
+	public PorterDuff.Mode getBackgroundTintMode() { return null; }
+===
+	public PorterDuff.Mode getBackgroundTintMode() { return tlBgTintMode; }
+@@@
+	public void setBackgroundTintMode(PorterDuff.Mode tintMode) {}
+===
+	/** AOSP: the blending mode of the background tint (SRC_IN when only a tint list is given). */
+	public void setBackgroundTintMode(PorterDuff.Mode tintMode) {
+		tlBgTintMode = tintMode;
+		tlHasBgTintMode = true;
+		applyBackgroundTint();
+	}
+@@@
+		if (a.hasValue(com.android.internal.R.styleable.View_backgroundTint))
+			backgroundTint = a.getColor(com.android.internal.R.styleable.View_backgroundTint, 0);
+===
+		// AOSP View(Context, AttributeSet, ...): a colour state list, and its blending mode
+		if (a.hasValue(com.android.internal.R.styleable.View_backgroundTint)) {
+			tlBgTintList = a.getColorStateList(com.android.internal.R.styleable.View_backgroundTint);
+			tlHasBgTintList = true;
+		}
+		if (a.hasValue(com.android.internal.R.styleable.View_backgroundTintMode)) {
+			tlBgTintMode = Drawable.parseTintMode(a.getInt(com.android.internal.R.styleable.View_backgroundTintMode, -1), null);
+			tlHasBgTintMode = tlBgTintMode != null;
+		}
+@@@
+		this.background = backgroundDrawable;
+		if (backgroundDrawable != null) {
+			backgroundDrawable.setCallback(this);
+			if (backgroundTint != 0)
+				backgroundDrawable.setTint(backgroundTint);
+		}
+		native_setBackgroundDrawable(widget, backgroundDrawable != null ? backgroundDrawable.paintable : 0);
+===
+		this.background = backgroundDrawable;
+		if (backgroundDrawable != null) {
+			backgroundDrawable.setCallback(this);
+			// AOSP setBackgroundDrawable(): the view's background tint applies to every new background
+			applyBackgroundTint();
+		}
+		native_setBackgroundDrawable(widget, this.background != null ? this.background.paintable : 0);
+@@@
+	private int backgroundTint = 0;
+===
+	/* background tint: tlBgTintList / tlBgTintMode (View.java+bgtint.frag) */

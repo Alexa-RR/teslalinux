@@ -1,0 +1,12 @@
+@@@
+	public final InputDevice getDevice() {
+		return InputDevice.getDevice(0 /*FIXME*/);
+	}
+===
+	/**
+	 * AOSP: the device that generated the event (the input manager's device of getDeviceId()), or
+	 * null when there is none (an event an app made up with an unknown device id).
+	 */
+	public final InputDevice getDevice() {
+		return InputDevice.getDevice(getDeviceId());
+	}

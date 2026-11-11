@@ -1,0 +1,21 @@
+@@@
+	public int getUnicodeChar(int metaState) {
+		// return getKeyCharacterMap().get(mKeyCode, metaState);
+		return unicodeValue;
+	}
+===
+	public int getUnicodeChar(int metaState) {
+		/* teslalinux: the character comes from the GTK keyval (gdk_keyval_to_unicode, set natively),
+		 * which reports control characters for keys that AOSP's Generic.kcm gives none or another
+		 * one: ENTER is '\n' (GDK: '\r'), TAB is '\t', and DEL, FORWARD_DEL, ESCAPE and the other
+		 * C0/DEL controls produce no character. ViewRootImpl's typing-key test and the text editors
+		 * rely on that. */
+		final int c = unicodeValue;
+		if (c == '\r')
+			return '\n';
+		if (c == '\t' || c == '\n')
+			return c;
+		if (c < 0x20 || c == 0x7f)
+			return 0;
+		return c;
+	}

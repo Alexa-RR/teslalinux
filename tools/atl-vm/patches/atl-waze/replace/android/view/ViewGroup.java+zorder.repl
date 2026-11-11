@@ -1,0 +1,39 @@
+@@@
+		int sortedIndex = index;
+		for (View v : children) {
+			if (v.getZ() != 0.0f) {
+				// sort children by z-order
+				ArrayList<View> sortedChildren = new ArrayList<View>(children);
+				sortedChildren.sort(new Comparator<View>() {
+					@Override
+					public int compare(View o1, View o2) {
+						return (int)(o1.getZ() - o2.getZ());
+					}
+				});
+				sortedIndex = sortedChildren.indexOf(child);
+				break;
+			}
+		}
+		native_addView(widget, child.widget, sortedIndex, params);
+===
+		// the widget goes in at the child index (the drawing order while no child has a Z); with a
+		// Z anywhere the widgets are re-stacked in AOSP's Z order (tlRestackChildren)
+		native_addView(widget, child.widget, index, params);
+		if (tlAnyChildZ())
+			tlRestackChildren();
+@@@
+	public void bringChildToFront(View child) {
+		// TODO: actually implement this (might make sense to implement it in the subclasses instead), when applicable
+	}
+===
+	/** AOSP: moves the child to the end of the child list (drawn last among equal Z), then lays out again */
+	public void bringChildToFront(View child) {
+		final int index = children.indexOf(child);
+		if (index >= 0 && index != children.size() - 1) {
+			children.remove(index);
+			children.add(child);
+			tlRestackChildren();
+			requestLayout();
+			invalidate();
+		}
+	}

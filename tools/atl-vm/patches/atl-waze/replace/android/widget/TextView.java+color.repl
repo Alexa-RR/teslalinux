@@ -1,0 +1,85 @@
+@@@
+	public void setTextColor(int color) {
+		native_setTextColor(color);
+	}
+	public void setTextColor(ColorStateList colors) {
+		if (colors != null) {
+			this.colors = colors;
+			native_setTextColor(colors.getDefaultColor()); // TODO: do this properly
+		}
+	}
+===
+	/** AOSP: one colour for every state */
+	public void setTextColor(int color) {
+		setTextColor(ColorStateList.valueOf(color));
+	}
+
+	/** AOSP: a colour state list, resolved against the drawable state now and on every state change */
+	public void setTextColor(ColorStateList colors) {
+		if (colors == null)
+			throw new NullPointerException();
+		this.colors = colors;
+		tlTextColor = colors;
+		tlCurTextColor = colors.getColorForState(getDrawableState(), colors.getDefaultColor());
+		tlApplyNativeColor();
+	}
+@@@
+	public final ColorStateList getTextColors() { return colors; }
+	public static ColorStateList getTextColors(Context context, TypedArray attrs) { return new ColorStateList(new int[][] {new int[0]}, new int[1]); }
+===
+	public final ColorStateList getTextColors() {
+		return tlTextColor != null ? tlTextColor : ColorStateList.valueOf(getCurrentTextColor());
+	}
+
+	/** AOSP (deprecated): the textColor of attrs, else the one of its textAppearance */
+	public static ColorStateList getTextColors(Context context, TypedArray attrs) {
+		ColorStateList colors = attrs.getColorStateList(com.android.internal.R.styleable.TextView_textColor);
+		if (colors == null) {
+			final int ap = attrs.getResourceId(com.android.internal.R.styleable.TextView_textAppearance, 0);
+			if (ap != 0) {
+				final TypedArray appearance = context.obtainStyledAttributes(ap, com.android.internal.R.styleable.TextAppearance);
+				colors = appearance.getColorStateList(com.android.internal.R.styleable.TextAppearance_textColor);
+				appearance.recycle();
+			}
+		}
+		return colors;
+	}
+@@@
+	public void setHintTextColor(ColorStateList colorStateList) {}
+	public void setHintTextColor(int i) {}
+===
+	/** AOSP: the hint's colour state list */
+	public void setHintTextColor(ColorStateList colorStateList) {
+		tlHintTextColor = colorStateList;
+		if (colorStateList != null)
+			mCurHintTextColor = colorStateList.getColorForState(getDrawableState(), colorStateList.getDefaultColor());
+		tlApplyNativeColor();
+	}
+
+	public void setHintTextColor(int i) {
+		setHintTextColor(ColorStateList.valueOf(i));
+	}
+
+	public final ColorStateList getHintTextColors() {
+		return tlHintTextColor;
+	}
+@@@
+	public CharSequence getHint() { return "HINT"; }
+===
+	public CharSequence getHint() { return tlHint; }
+@@@
+	public void setHint(CharSequence s) {}
+===
+	/** AOSP: the text shown while the view's own text is empty */
+	public void setHint(CharSequence s) {
+		tlHint = s;
+		tlShowTextOrHint();
+	}
+@@@
+	public int getCurrentTextColor() {
+		return Color.CYAN;
+	}
+===
+	public int getCurrentTextColor() {
+		return tlTextColor != null ? tlCurTextColor : tlDefaultTextColor();
+	}

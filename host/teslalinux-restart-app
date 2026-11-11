@@ -1,0 +1,27 @@
+#!/bin/sh
+# teslalinux: restart the Android app (Waze under ATL) on the car display. Called by services/api/api.py
+# (POST /api/appRestart, the settings page's "Restart Waze") through one sudoers rule, like
+# teslalinux-apply-display. It restarts only the app's service; tacomp, the page and the other
+# services keep running, so the car's browser reconnects to the new app's first frame by itself.
+#   teslalinux-restart-app            restart (start it when it was stopped)
+#   teslalinux-restart-app status     print the service state: active | activating | inactive | failed | ...
+set -eu
+UNIT=teslalinux-atl
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+	# Pi OS / Debian (systemd)
+	case "${1:-restart}" in
+	restart) exec systemctl restart "$UNIT.service" ;;
+	status) systemctl is-active "$UNIT.service" || true; exit 0 ;;
+	esac
+elif command -v rc-service >/dev/null 2>&1; then
+	# Alpine image (OpenRC)
+	case "${1:-restart}" in
+	restart) exec rc-service "$UNIT" restart ;;
+	status) if rc-service "$UNIT" status >/dev/null 2>&1; then echo active; else echo inactive; fi; exit 0 ;;
+	esac
+else
+	echo "teslalinux-restart-app: neither systemd nor OpenRC" >&2
+	exit 1
+fi
+echo "usage: teslalinux-restart-app [restart|status]" >&2
+exit 2

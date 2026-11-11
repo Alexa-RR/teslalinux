@@ -1,0 +1,406 @@
+#!/bin/sh
+# teslalinux-tls: the car's TLS key, CSR and certificate on the Pi. The private key is generated here
+# and never leaves this machine; the certificate is issued in the cloud (.github/workflows/tls-renew.yml
+# signs our CSR through Let's Encrypt DNS-01) and published as public data; this tool fetches it and
+# installs it only after checking that it is ours. No DNS or ACME credentials exist on the Pi.
+#
+#   teslalinux-tls init        key (ECDSA P-256) + CSR if missing, self-signed placeholder for the same
+#                              key until a real chain is installed, baked chain if it matches (boot)
+#   teslalinux-tls export-csr  print the CSR to commit as host/tls/device.csr.pem
+#                              (during a rotation: the CSR of the new key)
+#   teslalinux-tls rotate      new key + CSR next to the current pair; the current pair keeps serving
+#                              until a chain for the new key arrives, then both are swapped together
+#   teslalinux-tls fetch       one download + verify + install attempt (exit 0 installed/unchanged)
+#   teslalinux-tls verify CHAIN  run every acceptance check on a local chain file, install nothing
+#   teslalinux-tls daemon      (OpenRC) fetch at start (jittered), every TLS_FETCH_INTERVAL (6 h),
+#                              exponential backoff on failure, SIGUSR1 = try now
+#   teslalinux-tls kick        an uplink came up (NetworkManager dispatcher / dhcpcd hook): start
+#                              teslalinux-tls-fetch.service (systemd) or wake the daemon (OpenRC),
+#                              unless the last success is less than TLS_KICK_MIN_AGE (600 s) old
+# On Pi OS (systemd) teslalinux-tls-fetch.timer runs `fetch` at boot and every 6 h with a random
+# delay; the service's Restart=on-failure with RestartSteps/RestartMaxDelaySec is the backoff.
+#   teslalinux-tls status      print the state file
+#
+# Acceptance (all must hold, else the chain is rejected and the current one stays):
+#   only CERTIFICATE PEM blocks, 1..5 of them, at most TLS_MAX_BYTES; the leaf's public key equals our
+#   private key's (or the pending rotation key's); the chain verifies against the system trust store
+#   for purpose sslserver; the leaf's SANs are exactly DEVICE_HOST, www., fullscreen., www.fullscreen.;
+#   key usage digitalSignature and EKU serverAuth (TLS_EXPECTED_SPKI=<sha256 of the DER public key>
+#   replaces the key comparison: the cloud renewer runs these same checks with only the CSR); notBefore <= now + skew, notAfter > now; and
+#   notAfter later than the installed chain's when that one is trusted (no downgrade to an older cert).
+# Then: temp file, fsync, rename, `nginx -t`, reload; on failure the previous files come back.
+set -u
+umask 077
+
+ENV_FILE=${TESLALINUX_ENV:-/etc/teslalinux/env}
+[ -r "$ENV_FILE" ] && . "$ENV_FILE"
+DEVICE_HOST=${DEVICE_HOST:-}
+TLS_CERT=${TLS_CERT:-/etc/teslalinux/tls/fullchain.pem}
+TLS_KEY=${TLS_KEY:-/etc/teslalinux/tls/privkey.pem}
+TLS_DIR=$(dirname "$TLS_KEY")
+TLS_PUBLIC_DIR=${TLS_PUBLIC_DIR:-/etc/teslalinux/tls-public}
+TLS_STATE=${TLS_STATE:-/var/lib/teslalinux/tls-state/tls.json}
+TLS_FETCH_URL=${TLS_FETCH_URL:-}
+TLS_CAFILE=${TLS_CAFILE:-/etc/ssl/certs/ca-certificates.crt}
+TLS_BAKED_CHAIN=${TLS_BAKED_CHAIN:-/usr/share/teslalinux/tls/fullchain.pem}
+TLS_MAX_BYTES=${TLS_MAX_BYTES:-65536}
+TLS_FETCH_INTERVAL=${TLS_FETCH_INTERVAL:-21600}
+TLS_CLOCK_SKEW=${TLS_CLOCK_SKEW:-600}
+TLS_BUILD_TIME_FILE=${TLS_BUILD_TIME_FILE:-/etc/teslalinux/build-time}
+TLS_NO_RELOAD=${TLS_NO_RELOAD:-0}
+TLS_EXPECTED_SPKI=${TLS_EXPECTED_SPKI:-}
+TLS_KICK_MIN_AGE=${TLS_KICK_MIN_AGE:-600}
+FETCH_UNIT=teslalinux-tls-fetch.service
+PIDFILE=${TLS_PIDFILE:-/run/teslalinux-tls.pid}
+NEXT_KEY="$TLS_DIR/privkey.next.pem"
+CSR="$TLS_DIR/device.csr.pem"
+NEXT_CSR="$TLS_DIR/device.next.csr.pem"
+EXPECTED_SANS="$DEVICE_HOST www.$DEVICE_HOST fullscreen.$DEVICE_HOST www.fullscreen.$DEVICE_HOST"
+
+log() { printf '%s teslalinux-tls: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
+REASON=""
+reject() { REASON=$*; log "reject: $*"; return 1; }
+
+TMP=""
+cleanup() { [ -n "$TMP" ] && rm -rf "$TMP"; }
+trap cleanup EXIT
+mktmp() { [ -n "$TMP" ] || TMP=$(mktemp -d "${TMPDIR:-/tmp}/teslalinux-tls.XXXXXX"); }
+
+# ---------------------------------------------------------------- helpers
+
+# "Nov  9 12:00:00 2026 GMT" (OpenSSL/LibreSSL default) or "2026-11-09 12:00:00Z" -> epoch seconds
+to_epoch() {
+	printf '%s\n' "$1" | awk '
+	function days(y, m, d) { if (m <= 2) { y--; m += 12 } return 365*y + int(y/4) - int(y/100) + int(y/400) + int((153*(m-3)+2)/5) + d - 719469 }
+	{
+		if ($0 ~ /^[0-9][0-9][0-9][0-9]-/) { split($0, a, /[-: TZ]+/); y=a[1]; mo=a[2]+0; d=a[3]; t=a[4] ":" a[5] ":" a[6] }
+		else { mo = index("JanFebMarAprMayJunJulAugSepOctNovDec", $1); if (!mo) exit 1; mo = (mo + 2) / 3; d=$2; t=$3; y=$4 }
+		split(t, h, ":"); printf "%d\n", days(y+0, mo, d+0) * 86400 + h[1]*3600 + h[2]*60 + h[3]
+	}'
+}
+cert_date() { to_epoch "$(openssl x509 -in "$1" -noout "-$2" 2>/dev/null | cut -d= -f2-)"; }
+sha256_stdin() { openssl dgst -sha256 -r | cut -d' ' -f1; }
+spki_of_key() { openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | sha256_stdin; }
+spki_of_cert() { openssl x509 -in "$1" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256_stdin; }
+first_cert() { awk '/-----BEGIN CERTIFICATE-----/{p=1} p{print} /-----END CERTIFICATE-----/{if(p) exit}' "$1"; }
+rest_certs() { awk '/-----BEGIN CERTIFICATE-----/{n++} n>1{print}' "$1"; }
+# the value lines of a text extension ("X509v3 Subject Alternative Name:" and the line after it)
+ext_line() { openssl x509 -in "$1" -noout -text 2>/dev/null | awk -v h="$2" 'f{sub(/^[ \t]+/, ""); print; exit} index($0, h){f=1}'; }
+sorted_words() { tr ', ' '\n\n' | sed '/^$/d' | sort | tr '\n' ' ' | sed 's/ $//'; }
+now() { date +%s; }
+random_below() { # $1 > 0
+	r=$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ')
+	echo $(( ${r:-$$} % $1 ))
+}
+json_str() { printf '%s' "$1" | tr -d '\000-\037"\\' ; }
+
+is_trusted_chain() { # $1 chain file: verifies against the trust store (purpose sslserver)
+	mktmp
+	first_cert "$1" >"$TMP/t-leaf.pem"
+	rest_certs "$1" >"$TMP/t-rest.pem"
+	set -- -purpose sslserver -x509_strict -no-CApath -no-CAstore -CAfile "$TLS_CAFILE"
+	[ -s "$TMP/t-rest.pem" ] && set -- "$@" -untrusted "$TMP/t-rest.pem"
+	openssl verify "$@" "$TMP/t-leaf.pem" >/dev/null 2>&1
+}
+
+clock_is_set() {
+	built=0
+	[ -r "$TLS_BUILD_TIME_FILE" ] && built=$(tr -dc 0-9 <"$TLS_BUILD_TIME_FILE")
+	[ "$(now)" -ge "${built:-0}" ]
+}
+
+reload_nginx() {
+	[ "$TLS_NO_RELOAD" = 1 ] && return 0
+	command -v nginx >/dev/null 2>&1 || return 0
+	if command -v rc-service >/dev/null 2>&1 && rc-service -e nginx 2>/dev/null; then
+		rc-service nginx status >/dev/null 2>&1 || return 0
+		rc-service nginx reload >/dev/null 2>&1 && return 0
+	fi
+	if command -v systemctl >/dev/null 2>&1 && systemctl is-active -q nginx 2>/dev/null; then
+		systemctl reload nginx && return 0
+	fi
+	nginx -s reload >/dev/null 2>&1 || true
+}
+nginx_config_ok() {
+	[ "$TLS_NO_RELOAD" = 1 ] && return 0
+	command -v nginx >/dev/null 2>&1 || return 0
+	nginx -t -q >/dev/null 2>&1
+}
+
+# ---------------------------------------------------------------- state file (read by api.py)
+
+write_state() { # result message
+	result=$1; msg=$(json_str "$2")
+	st_dir=$(dirname "$TLS_STATE")
+	mkdir -p "$st_dir" && chmod 0755 "$st_dir"
+	t=$(now)
+	prev_success=0
+	[ -r "$TLS_STATE" ] && prev_success=$(sed -n 's/.*"lastSuccess": *\([0-9]*\).*/\1/p' "$TLS_STATE" | head -n1)
+	case "$result" in installed|unchanged) prev_success=$t ;; esac
+	nb=0; na=0; trusted=false; self=false; issuer=""; chain_sha=""; spki=""
+	if [ -s "$TLS_CERT" ]; then
+		nb=$(cert_date "$TLS_CERT" startdate); na=$(cert_date "$TLS_CERT" enddate)
+		is_trusted_chain "$TLS_CERT" && trusted=true
+		mktmp; first_cert "$TLS_CERT" >"$TMP/s-leaf.pem"
+		[ "$(openssl x509 -in "$TMP/s-leaf.pem" -noout -subject 2>/dev/null | cut -d= -f2-)" = "$(openssl x509 -in "$TMP/s-leaf.pem" -noout -issuer 2>/dev/null | cut -d= -f2-)" ] && self=true
+		issuer=$(json_str "$(openssl x509 -in "$TMP/s-leaf.pem" -noout -issuer 2>/dev/null | cut -d= -f2-)")
+		chain_sha=$(sha256_stdin <"$TLS_CERT"); spki=$(spki_of_cert "$TMP/s-leaf.pem")
+	fi
+	rot=false; [ -s "$NEXT_KEY" ] && rot=true
+	tmp="$TLS_STATE.tmp"
+	printf '{"host": "%s", "notBefore": %s, "notAfter": %s, "trusted": %s, "selfSigned": %s, "issuer": "%s", "chainSha256": "%s", "spkiSha256": "%s", "rotationPending": %s, "lastAttempt": %s, "lastResult": "%s", "lastMessage": "%s", "lastSuccess": %s, "fetchUrl": "%s"}\n' \
+		"$(json_str "$DEVICE_HOST")" "${nb:-0}" "${na:-0}" "$trusted" "$self" "$issuer" "$chain_sha" "$spki" "$rot" "$t" "$result" "$msg" "${prev_success:-0}" "$(json_str "$TLS_FETCH_URL")" >"$tmp" \
+		&& chmod 0644 "$tmp" && mv -f "$tmp" "$TLS_STATE"
+}
+
+# ---------------------------------------------------------------- key, CSR, placeholder
+
+publish_csr() {
+	mkdir -p "$TLS_PUBLIC_DIR" && chmod 0755 "$TLS_PUBLIC_DIR"
+	src=$CSR; [ -s "$NEXT_CSR" ] && src=$NEXT_CSR
+	cp "$src" "$TLS_PUBLIC_DIR/.device.csr.pem.tmp" && chmod 0644 "$TLS_PUBLIC_DIR/.device.csr.pem.tmp" \
+		&& mv -f "$TLS_PUBLIC_DIR/.device.csr.pem.tmp" "$TLS_PUBLIC_DIR/device.csr.pem"
+}
+
+make_key() { # out
+	openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve -out "$1.tmp" 2>/dev/null \
+		&& chmod 0600 "$1.tmp" && sync && mv -f "$1.tmp" "$1"
+}
+make_csr() { # key out
+	san=$(for n in $EXPECTED_SANS; do printf 'DNS:%s,' "$n"; done | sed 's/,$//')
+	openssl req -new -key "$1" -subj "/CN=$DEVICE_HOST" -addext "subjectAltName=$san" -out "$2.tmp" 2>/dev/null \
+		&& chmod 0644 "$2.tmp" && mv -f "$2.tmp" "$2"
+}
+make_placeholder() {
+	san=$(for n in $EXPECTED_SANS; do printf 'DNS:%s,' "$n"; done | sed 's/,$//')
+	openssl req -x509 -new -key "$TLS_KEY" -subj "/CN=$DEVICE_HOST" -days 365 \
+		-addext "subjectAltName=$san" -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=serverAuth" \
+		-addext "basicConstraints=critical,CA:FALSE" -out "$TLS_CERT.tmp" 2>/dev/null \
+		&& sync && mv -f "$TLS_CERT.tmp" "$TLS_CERT"
+}
+
+cmd_init() {
+	mkdir -p "$TLS_DIR" && chmod 0700 "$TLS_DIR"
+	if [ ! -s "$TLS_KEY" ]; then
+		log "generating the device key (ECDSA P-256) in $TLS_KEY"
+		make_key "$TLS_KEY" || { log "key generation failed"; return 1; }
+	fi
+	chmod 0600 "$TLS_KEY"
+	if [ ! -s "$CSR" ] || [ "$(openssl req -in "$CSR" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256_stdin)" != "$(spki_of_key "$TLS_KEY")" ]; then
+		make_csr "$TLS_KEY" "$CSR" || { log "CSR generation failed"; return 1; }
+		log "new CSR for $EXPECTED_SANS: commit it with 'teslalinux-tls export-csr > host/tls/device.csr.pem'"
+	fi
+	publish_csr
+	if [ -s "$TLS_CERT" ]; then
+		mktmp; first_cert "$TLS_CERT" >"$TMP/i-leaf.pem"
+		if [ "$(spki_of_cert "$TMP/i-leaf.pem")" != "$(spki_of_key "$TLS_KEY")" ]; then
+			log "installed certificate does not match the key: replacing it with a placeholder"
+			rm -f "$TLS_CERT"
+		elif ! is_trusted_chain "$TLS_CERT" && [ "$(cert_date "$TLS_CERT" enddate)" -le "$(now)" ]; then
+			rm -f "$TLS_CERT"
+		fi
+	fi
+	if [ ! -s "$TLS_CERT" ] && [ -s "$TLS_BAKED_CHAIN" ]; then
+		if accept_chain "$TLS_BAKED_CHAIN"; then
+			install_chain "$TLS_BAKED_CHAIN" && log "installed the baked chain $TLS_BAKED_CHAIN"
+		else
+			log "baked chain not used: $REASON"
+		fi
+	fi
+	if [ ! -s "$TLS_CERT" ]; then
+		log "no certificate yet: self-signed placeholder for this key (the browser warns until the real one arrives)"
+		make_placeholder || { log "placeholder generation failed"; return 1; }
+	fi
+	chmod 0600 "$TLS_KEY"; chmod 0644 "$TLS_CERT"
+	[ -s "$TLS_STATE" ] || write_state init "key and certificate ready"
+	return 0
+}
+
+cmd_rotate() {
+	cmd_init >/dev/null 2>&1 || true
+	log "rotation: new key in $NEXT_KEY; the current pair keeps serving until its certificate arrives"
+	make_key "$NEXT_KEY" || { log "key generation failed"; return 1; }
+	make_csr "$NEXT_KEY" "$NEXT_CSR" || return 1
+	publish_csr
+	write_state rotating "new key generated; commit the new CSR and run the tls-renew workflow"
+	cat "$NEXT_CSR"
+}
+
+# ---------------------------------------------------------------- acceptance
+
+MATCHED_KEY=""
+accept_chain() { # $1 candidate chain; sets MATCHED_KEY (current or next key file) or REASON
+	f=$1; MATCHED_KEY=""; REASON=""
+	[ -s "$f" ] || { reject "empty download"; return 1; }
+	size=$(wc -c <"$f" | tr -d ' ')
+	[ "$size" -le "$TLS_MAX_BYTES" ] || { reject "chain is $size bytes (limit $TLS_MAX_BYTES)"; return 1; }
+	if grep -q '^-----BEGIN ' "$f" && [ -z "$(grep '^-----BEGIN ' "$f" | grep -v '^-----BEGIN CERTIFICATE-----$')" ]; then :; else
+		reject "not a PEM certificate chain (only CERTIFICATE blocks are accepted)"; return 1
+	fi
+	n=$(grep -c '^-----BEGIN CERTIFICATE-----$' "$f")
+	[ "$n" -ge 1 ] && [ "$n" -le 5 ] || { reject "$n certificates in the chain"; return 1; }
+	mktmp
+	first_cert "$f" >"$TMP/leaf.pem"
+	openssl x509 -in "$TMP/leaf.pem" -noout >/dev/null 2>&1 || { reject "leaf does not parse"; return 1; }
+	leaf_spki=$(spki_of_cert "$TMP/leaf.pem")
+	if [ -n "$TLS_EXPECTED_SPKI" ]; then
+		[ "$leaf_spki" = "$TLS_EXPECTED_SPKI" ] || { reject "leaf public key is not the CSR's (spki $leaf_spki)"; return 1; }
+		MATCHED_KEY="spki:$TLS_EXPECTED_SPKI"
+	elif [ -s "$TLS_KEY" ] && [ "$leaf_spki" = "$(spki_of_key "$TLS_KEY")" ]; then
+		MATCHED_KEY=$TLS_KEY
+	elif [ -s "$NEXT_KEY" ] && [ "$leaf_spki" = "$(spki_of_key "$NEXT_KEY")" ]; then
+		MATCHED_KEY=$NEXT_KEY
+	else
+		reject "leaf public key is not ours (spki $leaf_spki)"; return 1
+	fi
+	got=$(ext_line "$TMP/leaf.pem" "X509v3 Subject Alternative Name" | sorted_words)
+	want=$(for n in $EXPECTED_SANS; do printf 'DNS:%s\n' "$n"; done | sorted_words)
+	[ "$got" = "$want" ] || { reject "SANs '$got' differ from '$want'"; return 1; }
+	ext_line "$TMP/leaf.pem" "X509v3 Key Usage" | grep -q "Digital Signature" || { reject "key usage lacks digitalSignature"; return 1; }
+	ext_line "$TMP/leaf.pem" "X509v3 Extended Key Usage" | grep -q "TLS Web Server Authentication" || { reject "EKU lacks serverAuth"; return 1; }
+	clock_is_set || { REASON="clock not set yet (before the image build time)"; log "defer: $REASON"; return 2; }
+	t=$(now)
+	nb=$(cert_date "$TMP/leaf.pem" startdate); na=$(cert_date "$TMP/leaf.pem" enddate)
+	[ -n "$nb" ] && [ -n "$na" ] || { reject "validity dates unreadable"; return 1; }
+	[ "$nb" -le $((t + TLS_CLOCK_SKEW)) ] || { reject "not valid yet (notBefore $nb, now $t)"; return 1; }
+	[ "$na" -gt "$t" ] || { reject "expired (notAfter $na, now $t)"; return 1; }
+	is_trusted_chain "$f" || { reject "does not chain to the system trust store ($TLS_CAFILE) for TLS server use"; return 1; }
+	if [ -s "$TLS_CERT" ] && is_trusted_chain "$TLS_CERT"; then
+		cur_na=$(cert_date "$TLS_CERT" enddate)
+		if [ "$(sha256_stdin <"$f")" = "$(sha256_stdin <"$TLS_CERT")" ]; then
+			REASON="unchanged"; return 3
+		fi
+		[ "$na" -gt "$cur_na" ] || { reject "not newer than the installed certificate (notAfter $na <= $cur_na)"; return 1; }
+	fi
+	return 0
+}
+
+install_chain() { # $1 accepted chain; MATCHED_KEY says which key it is for
+	mkdir -p "$TLS_DIR" && chmod 0700 "$TLS_DIR"
+	cp "$1" "$TLS_CERT.new" && chmod 0644 "$TLS_CERT.new" || return 1
+	sync
+	[ -s "$TLS_CERT" ] && cp -p "$TLS_CERT" "$TLS_CERT.prev"
+	rotated=0
+	if [ "$MATCHED_KEY" = "$NEXT_KEY" ]; then
+		cp -p "$TLS_KEY" "$TLS_KEY.prev"
+		mv -f "$NEXT_KEY" "$TLS_KEY" && mv -f "$NEXT_CSR" "$CSR"
+		rotated=1
+	fi
+	mv -f "$TLS_CERT.new" "$TLS_CERT"
+	sync
+	if ! nginx_config_ok; then
+		log "nginx -t failed with the new certificate: restoring the previous one"
+		[ -s "$TLS_CERT.prev" ] && mv -f "$TLS_CERT.prev" "$TLS_CERT"
+		if [ "$rotated" = 1 ]; then
+			mv -f "$TLS_KEY" "$NEXT_KEY"; mv -f "$CSR" "$NEXT_CSR" 2>/dev/null
+			mv -f "$TLS_KEY.prev" "$TLS_KEY"
+			make_csr "$TLS_KEY" "$CSR"
+		fi
+		sync; reload_nginx
+		REASON="nginx -t failed; previous certificate restored"
+		return 1
+	fi
+	[ "$rotated" = 1 ] && { rm -f "$TLS_KEY.prev"; publish_csr; log "rotation complete: the new key is now in use"; }
+	reload_nginx
+	return 0
+}
+
+cmd_verify() { # local check of a file, no install
+	accept_chain "$1"; rc=$?
+	case $rc in
+		0) echo "accept (key: $MATCHED_KEY)"; return 0 ;;
+		3) echo "accept (unchanged)"; return 0 ;;
+		2) echo "defer: $REASON"; return 2 ;;
+		*) echo "reject: $REASON"; return 1 ;;
+	esac
+}
+
+cmd_fetch() {
+	[ -n "$TLS_FETCH_URL" ] || { log "TLS_FETCH_URL not set in $ENV_FILE"; write_state failed "TLS_FETCH_URL not configured"; return 1; }
+	case "$TLS_FETCH_URL" in https://*) ;; *) log "TLS_FETCH_URL must be https"; write_state failed "TLS_FETCH_URL is not https"; return 1 ;; esac
+	[ -s "$TLS_KEY" ] || cmd_init || return 1
+	mktmp
+	if ! curl -fsS --proto '=https' --tlsv1.2 --cacert "$TLS_CAFILE" --max-filesize "$TLS_MAX_BYTES" \
+		--connect-timeout 15 --max-time 60 --retry 0 -o "$TMP/chain.pem" "$TLS_FETCH_URL" 2>"$TMP/curl.err"; then
+		err=$(head -c 200 "$TMP/curl.err")
+		log "download failed: $err"
+		write_state failed "download failed: $err"
+		return 1
+	fi
+	accept_chain "$TMP/chain.pem"; rc=$?
+	case $rc in
+		3) log "certificate unchanged"; write_state unchanged "certificate unchanged"; return 0 ;;
+		2) write_state deferred "$REASON"; return 1 ;;
+		0) ;;
+		*) write_state rejected "$REASON"; return 1 ;;
+	esac
+	if install_chain "$TMP/chain.pem"; then
+		log "installed a new certificate (notAfter $(openssl x509 -in "$TLS_CERT" -noout -enddate | cut -d= -f2-))"
+		write_state installed "new certificate installed"
+		return 0
+	fi
+	write_state failed "$REASON"
+	return 1
+}
+
+# ---------------------------------------------------------------- daemon
+
+WAKE=0
+cmd_daemon() {
+	echo $$ >"$PIDFILE"
+	trap 'WAKE=1; [ -n "${SLEEPER:-}" ] && kill "$SLEEPER" 2>/dev/null' USR1
+	trap 'rm -f "$PIDFILE"; cleanup; exit 0' TERM INT
+	cmd_init || true
+	fail_delay=60
+	delay=$((5 + $(random_below 55)))   # boot: soon, but not in lockstep with every other service
+	last_ok=0
+	while :; do
+		SLEEPER=""
+		if [ "$delay" -gt 0 ]; then
+			sleep "$delay" & SLEEPER=$!
+			wait "$SLEEPER" 2>/dev/null
+			kill "$SLEEPER" 2>/dev/null
+		fi
+		if [ "$WAKE" = 1 ] && [ $(( $(now) - last_ok )) -lt 600 ]; then
+			WAKE=0; delay=$TLS_FETCH_INTERVAL; continue  # just succeeded; an uplink flap is no reason
+		fi
+		WAKE=0
+		if cmd_fetch; then
+			last_ok=$(now); fail_delay=60
+			delay=$(( TLS_FETCH_INTERVAL - TLS_FETCH_INTERVAL / 10 + $(random_below $(( TLS_FETCH_INTERVAL / 5 + 1 ))) ))
+		else
+			delay=$(( fail_delay + $(random_below $(( fail_delay / 4 + 1 ))) ))
+			fail_delay=$(( fail_delay * 2 )); [ "$fail_delay" -gt "$TLS_FETCH_INTERVAL" ] && fail_delay=$TLS_FETCH_INTERVAL
+			log "next attempt in ${delay}s"
+		fi
+	done
+}
+
+cmd_kick() {
+	last=0
+	[ -r "$TLS_STATE" ] && last=$(sed -n 's/.*"lastSuccess": *\([0-9]*\).*/\1/p' "$TLS_STATE" | head -n1)
+	if [ $(( $(now) - ${last:-0} )) -lt "$TLS_KICK_MIN_AGE" ]; then
+		return 0  # fetched a moment ago; an uplink flap is no reason to ask again
+	fi
+	if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+		systemctl start --no-block "$FETCH_UNIT" 2>/dev/null && return 0
+	fi
+	[ -s "$PIDFILE" ] && kill -USR1 "$(cat "$PIDFILE")" 2>/dev/null
+	return 0
+}
+
+case "${1:-}" in
+	init|export-csr|rotate|fetch|verify|daemon)
+		[ -n "$DEVICE_HOST" ] || { echo "teslalinux-tls: DEVICE_HOST missing (in $ENV_FILE or the environment)" >&2; exit 2; } ;;
+esac
+case "${1:-}" in
+	init) cmd_init ;;
+	export-csr) [ -s "$CSR" ] || cmd_init >/dev/null 2>&1; if [ -s "$NEXT_CSR" ]; then cat "$NEXT_CSR"; else cat "$CSR"; fi ;;
+	rotate) cmd_rotate ;;
+	fetch) cmd_fetch ;;
+	verify) [ -n "${2:-}" ] || { echo "usage: teslalinux-tls verify CHAIN" >&2; exit 2; }; cmd_verify "$2" ;;
+	daemon) cmd_daemon ;;
+	kick) cmd_kick ;;
+	status) cat "$TLS_STATE" 2>/dev/null || echo "no state yet" ;;
+	*) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 2 ;;
+esac

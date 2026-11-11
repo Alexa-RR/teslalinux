@@ -1,0 +1,211 @@
+@@@
+	public int getChangingConfigurations() {
+		return 0;
+	}
+
+	public void setChangingConfigurations(int bitmap) {}
+
+	public ConstantState getConstantState() {
+		return new ConstantState() {
+			@Override
+			public Drawable newDrawable(Resources res) {
+				return Drawable.this;
+			}
+
+			@Override
+			public Drawable newDrawable() {
+				return Drawable.this;
+			}
+
+			@Override
+			public int getChangingConfigurations() {
+				return Drawable.this.getChangingConfigurations();
+			}
+		};
+	}
+===
+	/** AOSP: the configuration changes this drawable depends on (set by Resources when it loads it). */
+	public int getChangingConfigurations() {
+		return mChangingConfigurations;
+	}
+
+	/** AOSP: sets the configuration changes this drawable depends on. */
+	public void setChangingConfigurations(int configs) {
+		mChangingConfigurations = configs;
+	}
+
+	/**
+	 * AOSP: a drawable that does not override this has no constant state (null). ATL's own
+	 * paintable-backed Drawable (created from a path or a native paintable) has one: the paintable is
+	 * immutable shared data, like the Bitmap of AOSP's BitmapState, so new drawables share it.
+	 */
+	public ConstantState getConstantState() {
+		if (getClass() == Drawable.class && paintable != 0)
+			return new TlPaintableState(paintable, mChangingConfigurations);
+		return null;
+	}
+
+	/** The constant state of a paintable-backed Drawable: new drawables share the native paintable. */
+	static final class TlPaintableState extends ConstantState {
+		private final long mPaintable;
+		private final int mChangingConfigurations;
+
+		TlPaintableState(long paintable, int changingConfigurations) {
+			mPaintable = paintable;
+			mChangingConfigurations = changingConfigurations;
+		}
+
+		@Override
+		public Drawable newDrawable(Resources res) {
+			return newDrawable();
+		}
+
+		@Override
+		public Drawable newDrawable() {
+			Drawable d = new Drawable(mPaintable);
+			d.mChangingConfigurations = mChangingConfigurations;
+			return d;
+		}
+
+		@Override
+		public int getChangingConfigurations() {
+			return mChangingConfigurations;
+		}
+	}
+@@@
+	public void clearColorFilter() {}
+
+	public final int getLevel() { return 0; }
+	public final boolean setLevel(int level) { return false; }
+===
+	/** AOSP: removes the colour filter. */
+	public void clearColorFilter() {
+		setColorFilter(null);
+	}
+
+	/** AOSP: the current level (0..10000). */
+	public final int getLevel() {
+		return mLevel;
+	}
+
+	/**
+	 * AOSP: sets the level (0..10000) that level-aware drawables (clip, scale, level-list, rotate,
+	 * progress) use; returns what onLevelChange returns when the level changed.
+	 */
+	public final boolean setLevel(int level) {
+		if (mLevel != level) {
+			mLevel = level;
+			return onLevelChange(level);
+		}
+		return false;
+	}
+@@@
+	public void setAlpha(int alpha) {}
+
+	public boolean getPadding(Rect padding) {
+		return false;
+	}
+===
+	/**
+	 * AOSP declares this abstract; ATL's plain (paintable) drawable keeps the alpha and draws the
+	 * paintable with it (see draw). Subclasses with their own paint override it.
+	 */
+	public void setAlpha(int alpha) {
+		alpha &= 0xFF;
+		if (mTlAlpha != alpha) {
+			mTlAlpha = alpha;
+			invalidateSelf();
+		}
+	}
+
+	/** AOSP: no padding (all zero) unless a subclass has some; true when there is padding. */
+	public boolean getPadding(Rect padding) {
+		padding.set(0, 0, 0, 0);
+		return false;
+	}
+@@@
+	public int getMinimumWidth() {
+		return 10; // FIXME
+	}
+	public int getMinimumHeight() {
+		return 10; // FIXME
+	}
+===
+	/** AOSP: the suggested minimum width, the intrinsic width or 0 when there is none. */
+	public int getMinimumWidth() {
+		final int intrinsicWidth = getIntrinsicWidth();
+		return intrinsicWidth > 0 ? intrinsicWidth : 0;
+	}
+
+	/** AOSP: the suggested minimum height, the intrinsic height or 0 when there is none. */
+	public int getMinimumHeight() {
+		final int intrinsicHeight = getIntrinsicHeight();
+		return intrinsicHeight > 0 ? intrinsicHeight : 0;
+	}
+@@@
+	public boolean setLayoutDirection(int layoutDirection) {
+		return false;
+	}
+===
+	/**
+	 * AOSP: sets the resolved layout direction (View.LAYOUT_DIRECTION_LTR or _RTL); returns what
+	 * onLayoutDirectionChanged returns when it changed.
+	 */
+	public final boolean setLayoutDirection(int layoutDirection) {
+		if (mLayoutDirection != layoutDirection) {
+			mLayoutDirection = layoutDirection;
+			return onLayoutDirectionChanged(layoutDirection);
+		}
+		return false;
+	}
+@@@
+	public int getLayoutDirection() {
+		return LayoutDirection.LTR;
+	}
+===
+	/** AOSP: the resolved layout direction. */
+	public int getLayoutDirection() {
+		return mLayoutDirection;
+	}
+@@@
+	public static Drawable createFromResourceStream(Resources resources, TypedValue value, InputStream is, String file,
+	                                                Object object) {
+		if (!file.endsWith(".9.png")) {
+===
+	/** AOSP: a drawable from a stream (no resources, so no density information). */
+	public static Drawable createFromStream(InputStream is, String srcName) {
+		return createFromResourceStream(null, null, is, srcName, null);
+	}
+
+	/** AOSP: a drawable from a stream, with the resources and value giving density information. */
+	public static Drawable createFromResourceStream(Resources res, TypedValue value, InputStream is, String srcName) {
+		return createFromResourceStream(res, value, is, srcName, null);
+	}
+
+	public static Drawable createFromResourceStream(Resources resources, TypedValue value, InputStream is, String file,
+	                                                Object object) {
+		if (is == null)
+			return null;
+		if (file == null || !file.endsWith(".9.png")) {
+@@@
+		public abstract Drawable newDrawable(Resources res);
+
+		public abstract Drawable newDrawable();
+===
+		/** AOSP: a new drawable from this state for the given resources (default: newDrawable()). */
+		public Drawable newDrawable(Resources res) {
+			return newDrawable();
+		}
+
+		public abstract Drawable newDrawable();
+@@@
+			case "nine-patch": {
+				return new NinePatchDrawable(resources, null, null, null, null);
+			}
+===
+			case "nine-patch": {
+				/* AOSP DrawableInflater: <nine-patch android:src=...> inflates its source image */
+				NinePatchDrawable drawable = new NinePatchDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}

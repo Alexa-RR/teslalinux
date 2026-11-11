@@ -1,0 +1,27 @@
+#cloud-config
+hostname: atlvm
+users:
+  - name: atl
+    groups: [wheel, video, input, audio]
+    shell: /bin/sh
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    # Alpine + OpenSSH: a locked ("!") shadow entry makes sshd reject the account outright.
+    lock_passwd: false
+    plain_text_passwd: atl
+    ssh_authorized_keys:
+      - @PUBKEY@
+ssh_pwauth: true
+disable_root: false
+package_update: false
+write_files:
+  - path: /etc/apk/repositories
+    content: |
+      https://dl-cdn.alpinelinux.org/alpine/edge/main
+      https://dl-cdn.alpinelinux.org/alpine/edge/community
+      https://dl-cdn.alpinelinux.org/alpine/edge/testing
+runcmd:
+  - [ sh, -c, "apk add -q sudo doas shadow || true" ]
+  - [ sh, -c, "sed -i 's/^atl:!/atl:*/' /etc/shadow; chmod 755 /home/atl; chmod 700 /home/atl/.ssh; chmod 600 /home/atl/.ssh/authorized_keys; chown -R atl:atl /home/atl" ]
+  - [ sh, -c, "echo 'permit nopass atl' > /etc/doas.d/atl.conf; chmod 600 /etc/doas.d/atl.conf" ]
+  - [ sh, -c, "sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config; rc-update add sshd default; rc-service sshd restart" ]
+  - [ sh, -c, "touch /var/lib/cloud/atl-seeded" ]

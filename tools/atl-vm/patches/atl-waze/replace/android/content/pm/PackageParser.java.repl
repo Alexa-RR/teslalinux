@@ -1,0 +1,15 @@
+@@@
+			JarFile jarFile = new JarFile(mArchiveSourcePath);
+
+			Certificate[] certs = null;
+
+			if ((flags & PARSE_IS_SYSTEM) != 0 || System.getenv("ATL_VALIDATE_CERTS") == null) {
+===
+			final boolean validate = (flags & PARSE_IS_SYSTEM) == 0 && System.getenv("ATL_VALIDATE_CERTS") != null;
+			// AOSP ApkSignatureVerifier order: APK Signature Scheme v3, then v2 (v4 needs fs-verity), then the JAR signature (v1).
+			Certificate[] certs = collectApkSigningBlockCertificates(pkg, validate);
+			JarFile jarFile = new JarFile(mArchiveSourcePath);
+
+			if (certs != null) {
+				// signed with the APK Signing Block: a v1 (JAR) signature is not required and usually absent
+			} else if (!validate) {

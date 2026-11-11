@@ -1,0 +1,113 @@
+@@@
+	public void drawBitmap(Bitmap bitmap, Rect src, Rect dst, Paint paint) {
+		if (src == null)
+===
+	public void drawBitmap(Bitmap bitmap, Rect src, Rect dst, Paint paint) {
+		if (paint != null && tlNeeds(paint, true)) {
+			final Bitmap fb = bitmap;
+			final Rect fs = src == null ? null : new Rect(src), fd = new Rect(dst);
+			tlDraw(new TlOp(fd.left, fd.top, fd.right, fd.bottom) {
+				void draw(Paint p) { drawBitmap(fb, fs, fd, p); }
+				// Skia: an image's coverage is its destination rectangle (its alpha is source alpha)
+				void coverage(Paint p) { drawRect(fd.left, fd.top, fd.right, fd.bottom, p); }
+			}, paint, true);
+			return;
+		}
+		if (paint != null && paint.getAlpha() < 255) {
+			// AOSP: the paint's alpha fades the bitmap (the native draw ignores it)
+			if (paint.getAlpha() == 0)
+				return;
+			Paint opaque = new Paint(paint);
+			opaque.setAlpha(255);
+			native_pushOpacity(snapshot, paint.getAlpha() / 255f);
+			drawBitmap(bitmap, src, dst, opaque);
+			native_pop(snapshot, 1);
+			return;
+		}
+		if (src == null)
+@@@
+		native_drawText(snapshot, text, x, y, paint != null ? paint.paint : default_paint.paint);
+	}
+===
+		if (paint != null && tlTextDecorated(paint)) {
+			tlDrawDecoratedText(text, x, y, paint);
+			return;
+		}
+		if (paint != null && tlNeeds(paint, false)) {
+			final String ftx = text;
+			final float fx = x, fy = y;
+			// generous text bounds: the advance (any alignment) and a text size around the baseline
+			float tw = paint.measureText(text), ts = paint.getTextSize();
+			tlDraw(new TlOp(x - tw - ts, y - 2 * ts, x + tw + ts, y + ts) {
+				void draw(Paint p) { drawText(ftx, fx, fy, p); }
+			}, paint, false);
+			return;
+		}
+		native_drawText(snapshot, text, x, y, paint != null ? paint.paint : default_paint.paint);
+	}
+@@@
+	public void drawLine(float startX, float startY, float stopX, float stopY, Paint paint) {
+		native_drawLine(snapshot, startX, startY, stopX, stopY, paint != null ? paint.paint : default_paint.paint);
+	}
+===
+	/** AOSP: a line is always stroked (the style is ignored), with the paint's cap and path effect. */
+	public void drawLine(float startX, float startY, float stopX, float stopY, Paint paint) {
+		Paint p = paint != null ? paint : default_paint;
+		if (p.getStrokeCap() != Paint.Cap.BUTT || p.getPathEffect() != null || tlNeeds(p, false)) {
+			Path lp = new Path();
+			lp.moveTo(startX, startY);
+			lp.lineTo(stopX, stopY);
+			Paint sp = p;
+			if (p.getStyle() != Paint.Style.STROKE) {
+				sp = new Paint(p);
+				sp.setStyle(Paint.Style.STROKE);
+			}
+			drawPath(lp, sp);
+			return;
+		}
+		native_drawLine(snapshot, startX, startY, stopX, stopY, p.paint);
+	}
+@@@
+		native_drawLines(snapshot, points, offset, count, paint != null ? paint.paint : default_paint.paint);
+===
+		// AOSP: count floats from offset, four per line (a trailing partial line is ignored); the
+		// stock native loop stepped one float at a time and drew lines between unrelated coordinates
+		for (int i = offset; i + 3 < offset + count; i += 4)
+			drawLine(points[i], points[i + 1], points[i + 2], points[i + 3], paint);
+@@@
+	public void drawRoundRect(float left, float top, float right, float bottom, float rx, float ry, Paint paint) {
+		native_drawRoundRect(snapshot, left, top, right, bottom, rx, ry, paint != null ? paint.paint : default_paint.paint);
+	}
+===
+	public void drawRoundRect(float left, float top, float right, float bottom, float rx, float ry, Paint paint) {
+		Paint p = paint != null ? paint : default_paint;
+		// Skia (SkRRect::setRectXY): radii that do not fit are scaled down together
+		float w = Math.abs(right - left), h = Math.abs(bottom - top);
+		rx = Math.max(0f, rx);
+		ry = Math.max(0f, ry);
+		if ((rx * 2 > w || ry * 2 > h) && rx > 0 && ry > 0) {
+			float s = Math.min(w / (2 * rx), h / (2 * ry));
+			rx *= s;
+			ry *= s;
+		}
+		if (rx == 0 || ry == 0) {
+			drawRect(left, top, right, bottom, p);
+			return;
+		}
+		// the native stroke is a GSK border inside the rectangle; AOSP centres the stroke on the
+		// outline, which the GSK path stroke does
+		if (p.getStyle() != Paint.Style.FILL || p.getPathEffect() != null) {
+			Path rp = new Path();
+			rp.addRoundRect(left, top, right, bottom, rx, ry, Path.Direction.CW);
+			drawPath(rp, p);
+			return;
+		}
+		if (tlNeeds(p, false)) {
+			final float fl = left, ft = top, fr = right, fb = bottom, frx = rx, fry = ry;
+			tlDraw(new TlOp(fl, ft, fr, fb) {
+				void draw(Paint q) { drawRoundRect(fl, ft, fr, fb, frx, fry, q); }
+			}, p, false);
+			return;
+		}
+		native_drawRoundRect(snapshot, left, top, right, bottom, rx, ry, p.paint);
+	}

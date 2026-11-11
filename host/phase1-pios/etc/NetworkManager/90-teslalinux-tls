@@ -1,0 +1,15 @@
+#!/bin/sh
+# teslalinux: NetworkManager dispatcher hook (/etc/NetworkManager/dispatcher.d/90-teslalinux-tls).
+# An uplink (LTE stick, Ethernet, phone tether) came up or connectivity changed: check for a new car
+# certificate now instead of waiting for teslalinux-tls-fetch.timer. `teslalinux-tls kick` starts
+# teslalinux-tls-fetch.service unless the last success is under 10 minutes old.
+IFACE=$1 ACTION=$2
+AP_IFACE=wlan0
+[ -r /etc/teslalinux/env ] && . /etc/teslalinux/env
+[ "$IFACE" = "$AP_IFACE" ] && exit 0
+case "$ACTION" in
+	up|dhcp4-change|dhcp6-change|connectivity-change)
+		/usr/local/bin/teslalinux-tls kick >/dev/null 2>&1 || true
+		;;
+esac
+exit 0

@@ -1,0 +1,14 @@
+[Unit]
+Description=teslalinux: render host configs (when env/settings changed) and ensure the TLS key + certificate
+DefaultDependencies=no
+After=local-fs.target
+Before=hostapd.service dnsmasq.service nftables.service nginx.service tacomp.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'S=/etc/teslalinux/.rendered; P=/var/lib/teslalinux/state/props.json; if [ ! -e $S ] || [ /etc/teslalinux/env -nt $S ] || { [ -e $P ] && [ $P -nt $S ]; }; then /usr/local/bin/teslalinux-render --root / --layout pios; fi'
+ExecStart=/bin/sh -c '. /etc/teslalinux/env; [ -s "$TLS_KEY" ] && [ -s "$TLS_CERT" ] || /usr/local/bin/teslalinux-tls init'
+
+[Install]
+WantedBy=sysinit.target

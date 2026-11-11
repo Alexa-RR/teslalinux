@@ -1,0 +1,35 @@
+@@@
+		a.recycle();
+		onCreateDrawableState(0);
+	}
+===
+		tlReadTransformAttrs(a);
+		a.recycle();
+		onCreateDrawableState(0);
+	}
+@@@
+	public void setElevation(float elevation) {
+		this.elevation = elevation;
+	}
+===
+	/** AOSP: the base Z of the view; siblings are drawn in Z order */
+	public void setElevation(float elevation) {
+		if (this.elevation != elevation) {
+			this.elevation = elevation;
+			tlZChanged();
+			invalidate();
+		}
+	}
+@@@
+	public void setTranslationZ(float translationZ) {
+		mTranslationZ = translationZ;
+	}
+===
+	/** AOSP: Z relative to the elevation (animated by state list animators); siblings are drawn in Z order */
+	public void setTranslationZ(float translationZ) {
+		if (mTranslationZ != translationZ) {
+			mTranslationZ = translationZ;
+			tlZChanged();
+			invalidate();
+		}
+	}

@@ -1,0 +1,85 @@
+@@@
+	public void onCreate() {
+		System.out.println("Service.onCreate() called");
+	}
+
+	public void onDestroy() {
+		System.out.println("Service.onDestroy() called");
+	}
+===
+	public void onCreate() {
+		System.out.println("Service.onCreate() called");
+		tlRegister(true);
+	}
+
+	public void onDestroy() {
+		System.out.println("Service.onDestroy() called");
+		tlRegister(false);
+	}
+@@@
+	public int onStartCommand(Intent intent, int flags, int startId) {
+		System.out.println("Service.onStartCommand(" + intent + ", " + flags + ", " + startId + ") called");
+		return 0;
+	}
+
+	public void startForeground(int id, Notification notification) {
+		System.out.println("startForeground(" + id + ", " + notification + ") called");
+		this.notification_id = id;
+	}
+
+	public void stopForeground(boolean remove) {
+		System.out.println("stopForeground(" + remove + ") called");
+		if (remove)
+			new NotificationManager().cancel(notification_id);
+	}
+
+	public void stopForeground(int remove) {
+		stopForeground(remove == 1);
+	}
+===
+	/** AOSP: the deprecated onStart, then START_STICKY (START_STICKY_COMPATIBILITY for apps older than API 5). */
+	public int onStartCommand(Intent intent, int flags, int startId) {
+		System.out.println("Service.onStartCommand(" + intent + ", " + flags + ", " + startId + ") called");
+		tlStarted = true;
+		onStart(intent, startId);
+		return getApplicationInfo().targetSdkVersion < android.os.Build.VERSION_CODES.ECLAIR ? START_STICKY_COMPATIBILITY : START_STICKY;
+	}
+
+	/** AOSP: the service becomes a foreground service and its notification is posted. */
+	public void startForeground(int id, Notification notification) {
+		startForeground(id, notification, FOREGROUND_SERVICE_TYPE_MANIFEST);
+	}
+
+	public void startForeground(int id, Notification notification, int foregroundServiceType) {
+		System.out.println("startForeground(" + id + ", " + notification + ", " + foregroundServiceType + ") called");
+		if (id == 0)
+			throw new IllegalArgumentException("startForeground: the notification id must not be 0");
+		if (notification == null)
+			throw new IllegalArgumentException("null notification");
+		if (tlForeground && notification_id != id && !tlDetached)
+			new NotificationManager().tlCancelForService(notification_id);
+		this.notification_id = id;
+		tlForegroundType = foregroundServiceType == FOREGROUND_SERVICE_TYPE_MANIFEST ? tlManifestForegroundType() : foregroundServiceType;
+		tlForeground = true;
+		tlDetached = false;
+		notification.flags |= Notification.FLAG_FOREGROUND_SERVICE;
+		((NotificationManager) getSystemService("notification")).notify(id, notification);
+	}
+
+	@Deprecated
+	public void stopForeground(boolean removeNotification) {
+		stopForeground(removeNotification ? STOP_FOREGROUND_REMOVE : STOP_FOREGROUND_LEGACY);
+	}
+
+	/** AOSP: leaves the foreground state; the notification is removed (REMOVE) or stays, detached from the service (DETACH). */
+	public void stopForeground(int notificationBehavior) {
+		System.out.println("stopForeground(" + notificationBehavior + ") called");
+		if (!tlForeground)
+			return;
+		tlForeground = false;
+		tlForegroundType = 0;
+		if ((notificationBehavior & STOP_FOREGROUND_REMOVE) != 0)
+			new NotificationManager().tlCancelForService(notification_id);
+		else
+			tlDetached = (notificationBehavior & STOP_FOREGROUND_DETACH) != 0;
+	}

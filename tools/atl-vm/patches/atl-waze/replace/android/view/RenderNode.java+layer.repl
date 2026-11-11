@@ -1,0 +1,77 @@
+@@@
+			transformed_node = nativeTransform(clipped != 0 ? clipped : render_node, scaleX, scaleY, translationX, translationY, rotation, pivotX, pivotY);
+			if (clipped != 0)
+				nativeUnref(clipped);
+===
+			// HWUI order (native-rendernode-layer.sh): clip, then the layer alpha over the content, then
+			// the layer matrix T(t+p) . 3D camera rotation . rotateZ . scale . T(-p)
+			final long unlayered = clipped != 0 ? clipped : render_node;
+			// a node with a layer (setLayerType, setUseCompositingLayer) is drawn into it and the layer
+			// composited with the layer paint's colour filter and alpha (native-gfx-canvas.sh)
+			final long layered = tlLayerKeep(unlayered);
+			final long content = layered != 0 ? layered : unlayered;
+			final long faded = alpha < 1.0f ? nativeOpacityKeep(content, alpha) : 0;
+			transformed_node = nativeLayerTransformKeep(faded != 0 ? faded : content, scaleX, scaleY, translationX, translationY,
+			                                            rotation, rotationX, rotationY, cameraDistance, pivotX, pivotY);
+			if (faded != 0)
+				nativeUnref(faded);
+			if (layered != 0)
+				nativeUnref(layered);
+			if (clipped != 0)
+				nativeUnref(clipped);
+@@@
+	public boolean setAlpha(float alpha) {
+		boolean changed = this.alpha != alpha;
+		this.alpha = alpha;
+		return changed;
+	}
+===
+	public boolean setAlpha(float alpha) {
+		boolean changed = this.alpha != alpha;
+		if (changed)
+			tlDropTransformed();
+		this.alpha = alpha;
+		return changed;
+	}
+@@@
+	public boolean setRotationX(float rotationX) {
+		boolean changed = this.rotationX != rotationX;
+		this.rotationX = rotationX;
+		return changed;
+	}
+===
+	public boolean setRotationX(float rotationX) {
+		boolean changed = this.rotationX != rotationX;
+		if (changed)
+			tlDropTransformed();
+		this.rotationX = rotationX;
+		return changed;
+	}
+@@@
+	public boolean setRotationY(float rotationY) {
+		boolean changed = this.rotationY != rotationY;
+		this.rotationY = rotationY;
+		return changed;
+	}
+===
+	public boolean setRotationY(float rotationY) {
+		boolean changed = this.rotationY != rotationY;
+		if (changed)
+			tlDropTransformed();
+		this.rotationY = rotationY;
+		return changed;
+	}
+@@@
+	public boolean setCameraDistance(float cameraDistance) {
+		boolean changed = this.cameraDistance != cameraDistance;
+		this.cameraDistance = cameraDistance;
+		return changed;
+	}
+===
+	public boolean setCameraDistance(float cameraDistance) {
+		boolean changed = this.cameraDistance != cameraDistance;
+		if (changed)
+			tlDropTransformed();
+		this.cameraDistance = cameraDistance;
+		return changed;
+	}

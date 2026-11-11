@@ -1,0 +1,8 @@
+# teslalinux: dhcpcd runs this (as /etc/dhcpcd.exit-hook) on every lease event. When an uplink (LTE
+# stick, Ethernet, phone tether) gets an address, the certificate fetcher tries at once instead of
+# waiting for its next timer. The hotspot interface is excluded in dhcpcd.conf (denyinterfaces).
+case "$reason" in
+	BOUND|BOUND6|REBOOT|REBOOT6|REBIND|REBIND6|INFORM|INFORM6|ROUTERADVERT)
+		/usr/local/bin/teslalinux-tls kick >/dev/null 2>&1 || true
+		;;
+esac

@@ -1,0 +1,1 @@
+console=tty1 root=PARTUUID=CHANGEME-02 rootfstype=ext4 rootwait=0 fsck.repair=yes rw quiet loglevel=3 psi=1 cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory coherent_pool=1M pcie_aspm=off systemd.show_status=0 rd.systemd.show_status=0 nokaslr

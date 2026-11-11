@@ -1,0 +1,34 @@
+@@@
+	public void onDraw(Canvas canvas) {
+		if (canvas instanceof GskCanvas)
+			native_drawContent(widget, ((GskCanvas)canvas).snapshot);
+	}
+
+	protected void dispatchDraw(Canvas canvas) {
+		if (canvas instanceof GskCanvas)
+			native_drawChildren(widget, ((GskCanvas)canvas).snapshot);
+	}
+===
+	/* teslalinux (offscreen): a view draws into any canvas with a target, a Canvas(Bitmap) included
+	 * (AOSP View.draw on a bitmap canvas, androidx drawToBitmap); see Canvas.tlGskCanvas and
+	 * native-zoffscreen-draw.sh for views that are not on screen */
+	public void onDraw(Canvas canvas) {
+		final GskCanvas gsk = canvas.tlGskCanvas();
+		if (gsk != null)
+			native_drawContent(widget, gsk.snapshot);
+	}
+
+	protected void dispatchDraw(Canvas canvas) {
+		final GskCanvas gsk = canvas.tlGskCanvas();
+		if (gsk != null)
+			native_drawChildren(widget, gsk.snapshot);
+	}
+@@@
+		if (canvas instanceof GskCanvas)
+			native_drawBackground(widget, ((GskCanvas)canvas).snapshot);
+		onDraw(canvas);
+===
+		final GskCanvas tlGsk = canvas.tlGskCanvas();
+		if (tlGsk != null)
+			native_drawBackground(widget, tlGsk.snapshot);
+		onDraw(canvas);

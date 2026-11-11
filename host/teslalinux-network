@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+"""teslalinux-network: the hotspot and LTE settings from the settings page, as root.
+
+Called by services/api/api.py (POST /api/network) through one sudoers rule; the request comes as JSON
+on stdin and was validated by the API. It is validated again here, because this runs as root.
+
+  teslalinux-network apply now|boot  < {"hotspot": {"ssid", "psk", "country"}, "lte": {"apn", "user",
+                                         "password", "roaming", "enabled"}}
+      Any key may be left out (unchanged); "psk"/"password" "" or missing keeps the stored secret.
+      Hotspot name, password and country go into /etc/teslalinux/env (AP_SSID, AP_PSK, AP_COUNTRY), the
+      file every host config is rendered from (host/teslalinux-render). The band and channel were
+      already saved by the API (tlprops, upstream's softap properties).
+      "now": render the network configs and restart hostapd and dnsmasq a moment later (the car drops
+      off the Wi-Fi and joins again, with the new password if it changed); "boot": the next start
+      renders them (teslalinux-netconfig sees the env file changed), as upstream applies Wi-Fi settings.
+      The LTE settings go to /etc/teslalinux/lte.env (root only) and, where NetworkManager runs (Pi OS),
+      into its mobile broadband profile "teslalinux-lte" (ModemManager modems: QMI/MBIM/serial), which
+      is brought up or down right away: a new APN does not disconnect the car. USB "HiLink" modems
+      (cdc_ether/cdc_ncm/rndis) are routers of their own; their APN lives in the modem and NetworkManager
+      or dhcpcd simply takes their DHCP lease, so for those the profile changes nothing.
+  teslalinux-network lte-state
+      The stored LTE settings, password left out, as JSON (lte.env is root only).
+  apply's "wifi": {"enabled", "prefer": "lte"|"wifi", "add": {"ssid", "psk", "hidden", "open"}, "remove": SSID}
+      The backup Wi-Fi: a second Wi-Fi card joins one of the saved networks and teslalinux-uplink routes
+      through it when LTE has no internet (prefer "lte") or whenever it is connected (prefer "wifi").
+      Saved in /etc/teslalinux/wifi-client.json (root only) with the WPA key (PBKDF2 of the password,
+      as wpa_passphrase computes it), never the password itself; rendered into NetworkManager profiles
+      "teslalinux-wifi-*" or /etc/teslalinux/wpa_supplicant-client.conf. The newest network ranks first.
+  teslalinux-network wifi-state
+      The backup Wi-Fi settings and its card, without keys, as JSON.
+  teslalinux-network wifi-scan
+      The networks the backup card sees, strongest first, as JSON.
+"""
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+ENV = os.environ.get("TESLALINUX_ENV", "/etc/teslalinux/env")
+LTE_ENV = os.environ.get("TESLALINUX_LTE_ENV", "/etc/teslalinux/lte.env")
+NM_PROFILE = "teslalinux-lte"
+RENDER = os.environ.get("TESLALINUX_RENDER", "/usr/local/bin/teslalinux-render")
+
+# the same rules as api.py (and hostapd / 802.11i: SSID 1-32 bytes, WPA2 passphrase 8-63 printable ASCII
+# or 64 hex digits, ISO 3166 country)
+PSK_RE = re.compile(r"^(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})$")
+COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
+APN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$|^$")
+CRED_RE = re.compile(r"^[\x20-\x7e]{0,64}$")
+
+
+def die(msg):
+    print("teslalinux-network: " + msg, file=sys.stderr)
+    sys.exit(2)
+
+
+def valid_ssid(s):
+    return isinstance(s, str) and 1 <= len(s.encode("utf-8")) <= 32 and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+
+
+def sh_quote(v):
+    return "'" + v.replace("'", "'\\''") + "'"
+
+
+def set_env_keys(path, values):
+    """Replace KEY=... lines (or append them) in the sourced sh env file, keeping everything else."""
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    seen = set()
+    out = []
+    for line in lines:
+        m = re.match(r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=", line)
+        if m and m.group(1) in values:
+            key = m.group(1)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append("%s=%s" % (key, sh_quote(values[key])))
+        else:
+            out.append(line)
+    for key, v in values.items():
+        if key not in seen:
+            out.append("%s=%s" % (key, sh_quote(v)))
+    # the env file holds the hotspot password: keep its mode and owner (the installer makes it
+    # root:tesla 0640, readable by the API only)
+    try:
+        st = os.stat(path)
+        mode, owner = st.st_mode & 0o7777, (st.st_uid, st.st_gid)
+    except FileNotFoundError:
+        mode, owner = 0o640, None
+    write_file(path, "\n".join(out) + "\n", mode, owner)
+
+
+def write_file(path, data, mode, owner=None):
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+    if owner is not None:
+        os.chown(tmp, *owner)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def read_lte():
+    st = {"apn": "", "user": "", "password": "", "roaming": False, "enabled": True}
+    try:
+        with open(LTE_ENV) as f:
+            for line in f:
+                m = re.match(r"^LTE_([A-Z]+)=(.*)$", line.strip())
+                if not m:
+                    continue
+                k, v = m.group(1).lower(), m.group(2)
+                if v.startswith("'") and v.endswith("'") and len(v) >= 2:
+                    v = v[1:-1].replace("'\\''", "'")
+                if k in ("roaming", "enabled"):
+                    st[k] = v == "1"
+                elif k in st:
+                    st[k] = v
+    except FileNotFoundError:
+        pass
+    return st
+
+
+def write_lte(st):
+    data = "# teslalinux LTE (teslalinux-network, from the settings page)\n" + "".join(
+        "LTE_%s=%s\n" % (k.upper(), sh_quote(("1" if st[k] else "0") if isinstance(st[k], bool) else st[k]))
+        for k in ("apn", "user", "password", "roaming", "enabled"))
+    os.makedirs(os.path.dirname(LTE_ENV), exist_ok=True)
+    write_file(LTE_ENV, data, 0o600)
+
+
+def nm_running():
+    if not shutil.which("nmcli"):
+        return False
+    r = subprocess.run(["nmcli", "-t", "-f", "RUNNING", "general"], capture_output=True, text=True)
+    return r.returncode == 0 and r.stdout.strip() == "running"
+
+
+def apply_lte_nm(st):
+    """The ModemManager modem's profile in NetworkManager. nmcli takes the secrets as arguments only
+    here, as root, never through the API's process list."""
+    exists = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show"], capture_output=True,
+                            text=True).stdout.splitlines()
+    settings = ["gsm.apn", st["apn"], "gsm.username", st["user"], "gsm.password", st["password"],
+                "gsm.password-flags", "0", "gsm.home-only", "no" if st["roaming"] else "yes",
+                "connection.autoconnect", "yes" if st["enabled"] else "no",
+                "connection.autoconnect-retries", "0", "ipv4.route-metric", "50", "ipv6.method", "ignore"]
+    if NM_PROFILE in exists:
+        subprocess.run(["nmcli", "connection", "modify", NM_PROFILE] + settings, check=True)
+    else:
+        subprocess.run(["nmcli", "connection", "add", "type", "gsm", "ifname", "*", "con-name", NM_PROFILE]
+                       + settings, check=True)
+    has_modem = shutil.which("mmcli") and subprocess.run(["mmcli", "-L"], capture_output=True,
+                                                         text=True).stdout.find("/Modem/") >= 0
+    if st["enabled"] and has_modem:
+        # detached: registering on the network can take half a minute, the page should not wait for it
+        subprocess.Popen(["nmcli", "--wait", "60", "connection", "up", NM_PROFILE], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    elif not st["enabled"]:
+        subprocess.run(["nmcli", "connection", "down", NM_PROFILE], check=False, capture_output=True)
+
+
+def service(action, name):
+    if os.path.isdir("/run/systemd/system") and shutil.which("systemctl"):
+        return ["systemctl", action, name]
+    return ["rc-service", name, action]
+
+
+def apply_now():
+    """Render the network configs and restart the hotspot, detached: the HTTP reply reaches the car
+    before its Wi-Fi goes away."""
+    script = "sleep 2; %s --root / --layout %s --only net; %s; %s; %s" % (
+        RENDER, "pios" if os.path.isdir("/run/systemd/system") else "alpine",
+        " ".join(service("restart", "nftables")) + " >/dev/null 2>&1",
+        " ".join(service("restart", "dnsmasq")) + " >/dev/null 2>&1",
+        " ".join(service("restart", "hostapd")) + " >/dev/null 2>&1")
+    subprocess.Popen(["sh", "-c", script], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+# ---------------------------------------------------------------- backup Wi-Fi (second Wi-Fi card)
+
+WIFI_CLIENT = os.environ.get("TESLALINUX_WIFI_CLIENT", "/etc/teslalinux/wifi-client.json")
+WPA_CONF = os.environ.get("TESLALINUX_WPA_CONF", "/etc/teslalinux/wpa_supplicant-client.conf")
+NM_WIFI_PREFIX = "teslalinux-wifi-"
+MAX_NETWORKS = 16
+
+
+def read_wifi():
+    try:
+        with open(WIFI_CLIENT) as f:
+            c = json.load(f)
+        if isinstance(c, dict):
+            c.setdefault("enabled", True)
+            c.setdefault("prefer", "lte")
+            c.setdefault("iface", "")
+            c.setdefault("networks", [])
+            return c
+    except (OSError, ValueError):
+        pass
+    return {"enabled": True, "prefer": "lte", "iface": "", "networks": []}
+
+
+def ap_iface():
+    m = re.search(r"^\s*AP_IFACE=['\"]?([A-Za-z0-9_.-]+)", open(ENV).read() if os.path.exists(ENV) else "", re.M)
+    return m.group(1) if m else "wlan0"
+
+
+def env_value(key, default=""):
+    try:
+        text = open(ENV).read()
+    except OSError:
+        return default
+    m = re.search(r"^\s*%s=(?:'([^']*)'|\"([^\"]*)\"|(\S*))" % key, text, re.M)
+    return next((g for g in m.groups() if g is not None), default) if m else default
+
+
+def wireless_ifaces():
+    try:
+        names = sorted(os.listdir("/sys/class/net"))
+    except OSError:
+        return []
+    return [n for n in names if os.path.isdir("/sys/class/net/%s/wireless" % n) or os.path.exists("/sys/class/net/%s/phy80211" % n)]
+
+
+def wifi_iface(cfg):
+    ap = ap_iface()
+    if cfg.get("iface") and cfg["iface"] != ap and os.path.isdir("/sys/class/net/" + cfg["iface"]):
+        return cfg["iface"]
+    return next((n for n in wireless_ifaces() if n != ap), None)
+
+
+def wpa_psk(ssid, passphrase):
+    """The WPA2 pre-shared key (IEEE 802.11i: PBKDF2-HMAC-SHA1, the SSID as salt, 4096 rounds, 256 bits),
+    what wpa_passphrase computes: only this is stored, never the passphrase"""
+    if re.match(r"^[0-9A-Fa-f]{64}$", passphrase):
+        return passphrase.lower()
+    return hashlib.pbkdf2_hmac("sha1", passphrase.encode("utf-8"), ssid.encode("utf-8"), 4096, 32).hex()
+
+
+def nm_wifi_name(ssid):
+    return NM_WIFI_PREFIX + hashlib.sha1(ssid.encode("utf-8")).hexdigest()[:10]
+
+
+def render_wifi(cfg):
+    """The saved networks into NetworkManager profiles (Pi OS) or a wpa_supplicant config (elsewhere,
+    run by teslalinux-uplink)."""
+    iface = wifi_iface(cfg)
+    nets = cfg["networks"]
+    if nm_running():
+        existing = [n for n in subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show"], capture_output=True,
+                                              text=True).stdout.splitlines() if n.startswith(NM_WIFI_PREFIX)]
+        wanted = {nm_wifi_name(n["ssid"]): n for n in nets}
+        for name in existing:
+            if name not in wanted:
+                subprocess.run(["nmcli", "connection", "delete", name], capture_output=True)
+        for name, n in wanted.items():
+            settings = ["802-11-wireless.ssid", n["ssid"], "802-11-wireless.hidden", "yes" if n.get("hidden") else "no",
+                        "connection.interface-name", iface or "",
+                        "connection.autoconnect", "yes" if cfg["enabled"] else "no",
+                        "connection.autoconnect-priority", str(n.get("priority", 0)),
+                        "ipv4.route-metric", "600", "ipv6.method", "ignore"]
+            if n.get("psk"):
+                settings += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", n["psk"], "wifi-sec.psk-flags", "0"]
+            if name in existing:
+                if not n.get("psk"):
+                    # an open network now: the profile's old security settings go
+                    subprocess.run(["nmcli", "connection", "modify", name, "remove", "802-11-wireless-security"],
+                                   capture_output=True)
+                subprocess.run(["nmcli", "connection", "modify", name] + settings, check=True, capture_output=True,
+                               text=True)
+            else:
+                subprocess.run(["nmcli", "connection", "add", "type", "wifi", "con-name", name] + settings, check=True,
+                               capture_output=True, text=True)
+        if iface:
+            if cfg["enabled"] and nets:
+                subprocess.run(["nmcli", "device", "set", iface, "managed", "yes", "autoconnect", "yes"], capture_output=True)
+                subprocess.Popen(["nmcli", "--wait", "30", "device", "connect", iface], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            else:
+                subprocess.run(["nmcli", "device", "disconnect", iface], capture_output=True)
+        return
+    country = env_value("AP_COUNTRY", "US")
+    lines = ["# teslalinux backup Wi-Fi (host/teslalinux-network from the settings page; run by teslalinux-uplink)",
+             "ctrl_interface=/run/teslalinux-wpa", "update_config=0", "country=%s" % country, "ap_scan=1", ""]
+    for n in nets:
+        lines.append("network={")
+        lines.append("\tssid=%s" % n["ssid"].encode("utf-8").hex())  # hex: any byte is safe
+        if n.get("psk"):
+            lines += ["\tkey_mgmt=WPA-PSK", "\tpsk=%s" % n["psk"]]
+        else:
+            lines.append("\tkey_mgmt=NONE")
+        if n.get("hidden"):
+            lines.append("\tscan_ssid=1")
+        lines.append("\tpriority=%d" % int(n.get("priority", 0)))
+        lines.append("}")
+    write_file(WPA_CONF, "\n".join(lines) + "\n", 0o600)
+
+
+def apply_wifi(ops):
+    cfg = read_wifi()
+    if "enabled" in ops:
+        if not isinstance(ops["enabled"], bool):
+            die("invalid backup Wi-Fi switch")
+        cfg["enabled"] = ops["enabled"]
+    if "prefer" in ops:
+        if ops["prefer"] not in ("lte", "wifi"):
+            die("prefer must be lte or wifi")
+        cfg["prefer"] = ops["prefer"]
+    if "remove" in ops:
+        if not isinstance(ops["remove"], str):
+            die("invalid network to remove")
+        cfg["networks"] = [n for n in cfg["networks"] if n["ssid"] != ops["remove"]]
+    add = ops.get("add")
+    if add is not None:
+        if not isinstance(add, dict) or not valid_ssid(add.get("ssid")):
+            die("the network name must be 1-32 bytes without control characters")
+        pw = add.get("psk") or ""
+        if pw and (not isinstance(pw, str) or not PSK_RE.match(pw)):
+            die("the Wi-Fi password must be 8-63 characters (or 64 hex digits)")
+        hidden = add.get("hidden") is True
+        old = next((n for n in cfg["networks"] if n["ssid"] == add["ssid"]), None)
+        if old is not None and not pw and add.get("open") is not True:
+            pw_hex = old.get("psk", "")  # the same network again without a password: keep the stored key
+        else:
+            pw_hex = wpa_psk(add["ssid"], pw) if pw else ""
+        cfg["networks"] = [n for n in cfg["networks"] if n["ssid"] != add["ssid"]]
+        # the newest network first: the most recently added gets the highest priority
+        cfg["networks"].insert(0, {"ssid": add["ssid"], "psk": pw_hex, "hidden": hidden})
+        if len(cfg["networks"]) > MAX_NETWORKS:
+            die("at most %d saved networks" % MAX_NETWORKS)
+    for i, n in enumerate(cfg["networks"]):
+        n["priority"] = len(cfg["networks"]) - i
+    os.makedirs(os.path.dirname(WIFI_CLIENT), exist_ok=True)
+    write_file(WIFI_CLIENT, json.dumps(cfg, indent=1) + "\n", 0o600)
+    try:
+        render_wifi(cfg)
+    except subprocess.CalledProcessError as e:
+        die("NetworkManager refused the Wi-Fi profile (%s)" % ((e.stderr or "").strip() or e))
+
+
+def cmd_wifi_state():
+    cfg = read_wifi()
+    iface = wifi_iface(cfg)
+    print(json.dumps({"enabled": cfg["enabled"], "prefer": cfg["prefer"], "iface": iface, "present": bool(iface),
+                      "apIface": ap_iface(), "managed": nm_running(),
+                      "networks": [{"ssid": n["ssid"], "hidden": bool(n.get("hidden")), "open": not n.get("psk")}
+                                   for n in cfg["networks"]]}))
+
+
+def _iw_unescape(s):
+    return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s).encode("latin-1", "replace").decode("utf-8", "replace")
+
+
+def cmd_wifi_scan():
+    """Networks the second Wi-Fi card sees: [{ssid, signalDbm or signalPercent, secure, band}], strongest first"""
+    cfg = read_wifi()
+    iface = wifi_iface(cfg)
+    if not iface:
+        print(json.dumps({"iface": None, "networks": []}))
+        return
+    nets = {}
+    if nm_running():
+        out = subprocess.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ", "device", "wifi", "list", "ifname", iface,
+                              "--rescan", "yes"], capture_output=True, text=True, timeout=40).stdout
+        for line in out.splitlines():
+            parts = re.split(r"(?<!\\):", line)
+            if len(parts) < 4 or not parts[0]:
+                continue
+            ssid = parts[0].replace("\\:", ":").replace("\\\\", "\\")
+            sig = int(parts[1]) if parts[1].isdigit() else 0
+            freq = int(re.sub(r"\D", "", parts[3]) or 0)
+            n = {"ssid": ssid, "signalPercent": sig, "secure": parts[2] not in ("", "--"),
+                 "band": "5 GHz" if freq >= 5000 else "2.4 GHz"}
+            if ssid not in nets or sig > nets[ssid]["signalPercent"]:
+                nets[ssid] = n
+    else:
+        subprocess.run(["ip", "link", "set", iface, "up"], capture_output=True)
+        out = ""
+        for _ in range(3):  # "Device or resource busy" while wpa_supplicant scans: try again
+            r = subprocess.run(["iw", "dev", iface, "scan"], capture_output=True, text=True, timeout=40)
+            out = r.stdout
+            if r.returncode == 0:
+                break
+            time.sleep(2)
+        cur = None
+        for line in out.splitlines():
+            if line.startswith("BSS "):
+                cur = {"ssid": None, "signalDbm": -100, "secure": False, "band": None}
+                continue
+            if cur is None:
+                continue
+            t = line.strip()
+            if t.startswith("freq:"):
+                f = float(t.split()[1])
+                cur["band"] = "5 GHz" if f >= 5000 else "2.4 GHz"
+            elif t.startswith("signal:"):
+                cur["signalDbm"] = int(float(t.split()[1]))
+            elif t.startswith("SSID: "):
+                cur["ssid"] = _iw_unescape(t[6:])
+                if cur["ssid"] and (cur["ssid"] not in nets or cur["signalDbm"] > nets[cur["ssid"]]["signalDbm"]):
+                    nets[cur["ssid"]] = cur
+            elif t.startswith(("RSN:", "WPA:")) or ("capability:" in t and "Privacy" in t):
+                cur["secure"] = True
+    key = (lambda n: -n.get("signalPercent", 0)) if nm_running() else (lambda n: -n.get("signalDbm", -100))
+    print(json.dumps({"iface": iface, "networks": sorted(nets.values(), key=key)[:40]}))
+
+
+def cmd_apply(when):
+    if when not in ("now", "boot"):
+        die("apply now|boot")
+    try:
+        req = json.load(sys.stdin)
+    except ValueError:
+        die("request is not JSON")
+    if not isinstance(req, dict):
+        die("request is not an object")
+    hot = req.get("hotspot") or {}
+    lte = req.get("lte")
+    env_changes = {}
+    if "ssid" in hot:
+        if not valid_ssid(hot["ssid"]):
+            die("hotspot name must be 1-32 bytes without control characters")
+        env_changes["AP_SSID"] = hot["ssid"]
+    if hot.get("psk"):
+        if not isinstance(hot["psk"], str) or not PSK_RE.match(hot["psk"]):
+            die("hotspot password must be 8-63 printable characters (or 64 hex digits)")
+        env_changes["AP_PSK"] = hot["psk"]
+    if "country" in hot:
+        if not isinstance(hot["country"], str) or not COUNTRY_RE.match(hot["country"]):
+            die("country must be two capital letters")
+        env_changes["AP_COUNTRY"] = hot["country"]
+    if env_changes:
+        set_env_keys(ENV, env_changes)
+    if isinstance(lte, dict):
+        st = read_lte()
+        for k in ("apn", "user"):
+            if k in lte:
+                v = lte[k]
+                if not isinstance(v, str) or not (APN_RE if k == "apn" else CRED_RE).match(v):
+                    die("invalid LTE %s" % k)
+                st[k] = v
+        if lte.get("password"):
+            if not isinstance(lte["password"], str) or not CRED_RE.match(lte["password"]):
+                die("invalid LTE password")
+            st["password"] = lte["password"]
+        if lte.get("clearPassword") is True:
+            st["password"] = ""
+        for k in ("roaming", "enabled"):
+            if k in lte:
+                if not isinstance(lte[k], bool):
+                    die("invalid LTE %s" % k)
+                st[k] = lte[k]
+        write_lte(st)
+        if nm_running():
+            try:
+                apply_lte_nm(st)
+            except subprocess.CalledProcessError as e:
+                die("NetworkManager refused the LTE profile (%s)" % e)
+    wifi = req.get("wifi")
+    if wifi is not None:
+        if not isinstance(wifi, dict):
+            die("invalid backup Wi-Fi request")
+        apply_wifi(wifi)
+    # the hotspot restarts only for hotspot settings (the backup Wi-Fi and LTE need no restart)
+    if when == "now" and isinstance(req.get("hotspot"), dict):
+        apply_now()
+    print("ok")
+
+
+def cmd_lte_state():
+    st = read_lte()
+    st["passwordSet"] = bool(st.pop("password"))
+    st["managed"] = nm_running()
+    print(json.dumps(st))
+
+
+def main():
+    if os.geteuid() != 0:
+        die("run as root")
+    args = sys.argv[1:]
+    if len(args) == 2 and args[0] == "apply":
+        return cmd_apply(args[1])
+    if args == ["lte-state"]:
+        return cmd_lte_state()
+    if args == ["wifi-state"]:
+        return cmd_wifi_state()
+    if args == ["wifi-scan"]:
+        return cmd_wifi_scan()
+    die("usage: teslalinux-network apply now|boot < JSON | lte-state | wifi-state | wifi-scan")
+
+
+if __name__ == "__main__":
+    main()

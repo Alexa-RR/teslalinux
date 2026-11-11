@@ -1,0 +1,39 @@
+#!/bin/sh
+# teslalinux: set the device's language/region and time zone from the settings page. Called by
+# services/api/api.py (POST /api/locale) through one sudoers rule, like teslalinux-apply-display.
+#   teslalinux-set-locale LOCALE TIMEZONE      e.g. teslalinux-set-locale en_IL Asia/Jerusalem
+# LOCALE is language[_REGION] (ISO 639 + ISO 3166, as Android's persist.sys.locale); TIMEZONE an IANA
+# zone that exists in the system's tzdata. Writes /etc/teslalinux/locale.env (read by
+# teslalinux-atl.service and the launcher, which hand both to the app's runtime), sets the system
+# time zone (systemd: timedatectl; OpenRC: /etc/localtime + /etc/timezone), and restarts only the app,
+# only when something changed: the frontend may post the same values again.
+set -eu
+[ $# -eq 2 ] || { echo "usage: teslalinux-set-locale LOCALE TIMEZONE" >&2; exit 2; }
+LOC=$1 TZN=$2
+echo "$LOC" | grep -Eq '^[a-z]{2,3}(_[A-Z]{2}|_[0-9]{3})?$' || { echo "teslalinux-set-locale: locale '$LOC' is not language[_REGION]" >&2; exit 2; }
+echo "$TZN" | grep -Eq '^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$' || { echo "teslalinux-set-locale: time zone '$TZN' is not an IANA name" >&2; exit 2; }
+ZI=/usr/share/zoneinfo
+[ -f "$ZI/$TZN" ] || { echo "teslalinux-set-locale: no time zone $TZN in $ZI" >&2; exit 2; }
+F=/etc/teslalinux/locale.env
+NEW=$(printf '# teslalinux language/region and time zone (teslalinux-set-locale, from the settings page)\nTESLALINUX_LOCALE=%s\nTESLALINUX_TIMEZONE=%s\n' "$LOC" "$TZN")
+changed=1
+[ -r "$F" ] && [ "$(cat "$F")" = "$NEW" ] && changed=0
+if [ $changed = 1 ]; then
+	printf '%s\n' "$NEW" >"$F.tmp" && chmod 0644 "$F.tmp" && mv -f "$F.tmp" "$F"
+fi
+# the system clock's zone (logs, the Pi's own services); the app gets it through locale.env as well
+if [ -d /run/systemd/system ] && command -v timedatectl >/dev/null 2>&1; then
+	[ "$(timedatectl show -p Timezone --value 2>/dev/null)" = "$TZN" ] || timedatectl set-timezone "$TZN"
+else
+	if [ "$(readlink /etc/localtime 2>/dev/null)" != "$ZI/$TZN" ]; then
+		ln -sf "$ZI/$TZN" /etc/localtime
+		echo "$TZN" >/etc/timezone
+	fi
+fi
+[ $changed = 1 ] || exit 0
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+	systemctl is-active -q teslalinux-atl.service && systemctl restart teslalinux-atl.service
+elif command -v rc-service >/dev/null 2>&1; then
+	rc-service teslalinux-atl status >/dev/null 2>&1 && rc-service teslalinux-atl restart
+fi
+exit 0

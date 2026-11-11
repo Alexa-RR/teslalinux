@@ -1,0 +1,31 @@
+@@@
+		layout = native_constructor(text != null ? text.toString() : "", paint.paint, width);
+	}
+===
+		layout = native_constructor(text != null ? text.toString() : "", paint.paint, width);
+		tlApplyStyle(); /* teslalinux (+text) */
+	}
+@@@
+	public int getParagraphDirection(int line) {
+		if (line < 0 || line >= getLineCount())
+			throw new ArrayIndexOutOfBoundsException();
+		return /*DIR_LEFT_TO_RIGHT*/ 1;
+	}
+===
+	/* teslalinux (+text) 1: getParagraphDirection is in Layout.java+text.frag */
+@@@
+	public int getTopPadding() { return -5; }
+
+	public int getBottomPadding() { return 5; }
+
+	public boolean isRtlCharAt(int offset) { return false; }
+===
+	/* teslalinux (+text) 2: getTopPadding/getBottomPadding/isRtlCharAt are in Layout.java+text.frag */
+@@@
+	public int getEllipsisStart(int line) {
+		if (line < 0 || line >= getLineCount())
+			throw new ArrayIndexOutOfBoundsException();
+		return 0;
+	}
+===
+	/* teslalinux (+text) 3: getEllipsisStart is in Layout.java+text.frag */

@@ -1,0 +1,222 @@
+@@@
+	public ActivityInfo getReceiverInfo(ComponentName component,
+	                                    int flags) throws NameNotFoundException {
+		return null;
+	}
+===
+	/** AOSP: the manifest's receiver of that class; NameNotFoundException when there is none. */
+	public ActivityInfo getReceiverInfo(ComponentName component,
+	                                    int flags) throws NameNotFoundException {
+		PackageParser.Package pkg = tlPackage(component.getPackageName());
+		if (pkg != null) {
+			for (PackageParser.Activity r : pkg.receivers) {
+				if (r.className.equals(component.getClassName()))
+					return r.info;
+			}
+		}
+		throw new NameNotFoundException(component.toString());
+	}
+@@@
+	public String[] getPackagesForUid(int uid) {
+		return null;
+	}
+===
+	/** AOSP: the packages running as uid (this app's for its uid), or null. */
+	public String[] getPackagesForUid(int uid) {
+		PackageParser.Package pkg = ATLLoadedApp.getPrimaryApplication().pkg;
+		return uid == pkg.applicationInfo.uid ? new String[] {pkg.packageName} : null;
+	}
+@@@
+	public String getNameForUid(int uid) {
+		return "example user";
+	}
+===
+	/** AOSP: the package name of an app uid, or null for an unknown uid. */
+	public String getNameForUid(int uid) {
+		String[] pkgs = getPackagesForUid(uid);
+		return pkgs != null ? pkgs[0] : null;
+	}
+@@@
+	public FeatureInfo[] getSystemAvailableFeatures() {
+		return new FeatureInfo[0];
+	}
+===
+	/**
+	 * AOSP: every feature hasSystemFeature reports, plus the OpenGL ES version entry (a FeatureInfo
+	 * without a name), the one ActivityManager's ConfigurationInfo reports.
+	 */
+	public FeatureInfo[] getSystemAvailableFeatures() {
+		ArrayList<FeatureInfo> out = new ArrayList<>();
+		for (String name : tlKnownFeatures()) {
+			if (hasSystemFeature(name)) {
+				FeatureInfo fi = new FeatureInfo();
+				fi.name = name;
+				out.add(fi);
+			}
+		}
+		FeatureInfo gles = new FeatureInfo();
+		gles.reqGlEsVersion = new ConfigurationInfo().reqGlEsVersion;
+		out.add(gles);
+		return out.toArray(new FeatureInfo[0]);
+	}
+@@@
+	public List<ResolveInfo> queryIntentActivityOptions(
+	    ComponentName caller, Intent[] specifics, Intent intent, int flags) {
+		return null;
+	}
+===
+	/**
+	 * AOSP: the activities for the specific intents first (in order, each once), then the other
+	 * activities that handle intent.
+	 */
+	public List<ResolveInfo> queryIntentActivityOptions(
+	    ComponentName caller, Intent[] specifics, Intent intent, int flags) {
+		ArrayList<ResolveInfo> out = new ArrayList<>();
+		java.util.HashSet<String> seen = new java.util.HashSet<>();
+		if (specifics != null) {
+			for (Intent s : specifics) {
+				if (s == null)
+					continue;
+				ResolveInfo ri = resolveActivity(s, flags);
+				if (ri != null && ri.activityInfo != null && seen.add(ri.activityInfo.packageName + "/" + ri.activityInfo.name))
+					out.add(ri);
+			}
+		}
+		for (ResolveInfo ri : queryIntentActivities(intent, flags)) {
+			if (ri.activityInfo == null || seen.add(ri.activityInfo.packageName + "/" + ri.activityInfo.name))
+				out.add(ri);
+		}
+		return out;
+	}
+@@@
+	public ResolveInfo resolveService(Intent intent, int flags) {
+		return null;
+	}
+===
+	/** AOSP: the best service for the intent (the first of queryIntentServices), or null. */
+	public ResolveInfo resolveService(Intent intent, int flags) {
+		List<ResolveInfo> list = queryIntentServices(intent, flags);
+		return list == null || list.isEmpty() ? null : list.get(0);
+	}
+@@@
+		for (Service s : pkg.services) {
+			for (ServiceIntentInfo intentinfo : s.intents) {
+				if (s.getComponentName().equals(intent.getComponent()) || intentinfo.matchAction(intent.getAction())) {
+					ResolveInfo ri = new ResolveInfo();
+					ri.serviceInfo = s.info;
+					list.add(ri);
+				}
+			}
+		}
+		return list;
+===
+		// AOSP: an explicit intent names its one service; otherwise each service with a matching
+		// filter, once, best priority first
+		ComponentName explicit = intent.getComponent();
+		for (Service s : pkg.services) {
+			if (explicit != null) {
+				if (s.getComponentName().equals(explicit)) {
+					ResolveInfo ri = new ResolveInfo();
+					ri.serviceInfo = s.info;
+					list.add(ri);
+				}
+				continue;
+			}
+			if (s.intents == null)
+				continue;
+			for (ServiceIntentInfo intentinfo : s.intents) {
+				if (intentinfo.match(intent.getAction(), intent.getType(), intent.getScheme(), intent.getData(), intent.getCategories(), "PackageManager") >= 0) {
+					ResolveInfo ri = new ResolveInfo();
+					ri.serviceInfo = s.info;
+					ri.priority = intentinfo.priority;
+					list.add(ri);
+					break;
+				}
+			}
+		}
+		java.util.Collections.sort(list, new java.util.Comparator<ResolveInfo>() {
+			public int compare(ResolveInfo a, ResolveInfo b) {
+				return Integer.compare(b.priority, a.priority);
+			}
+		});
+		return list;
+@@@
+	public List<ResolveInfo> queryIntentContentProviders(Intent intent, int flags) {
+		return null;
+	}
+===
+	/** AOSP: the providers whose intent filters match (DocumentsProvider-style); empty when none. */
+	public List<ResolveInfo> queryIntentContentProviders(Intent intent, int flags) {
+		ArrayList<ResolveInfo> out = new ArrayList<>();
+		PackageParser.Package pkg = ATLLoadedApp.getPrimaryApplication().pkg;
+		for (PackageParser.Provider p : pkg.providers) {
+			if (intent.getComponent() != null) {
+				if (p.getComponentName().equals(intent.getComponent())) {
+					ResolveInfo ri = new ResolveInfo();
+					ri.providerInfo = p.info;
+					out.add(ri);
+				}
+				continue;
+			}
+			if (p.intents == null)
+				continue;
+			for (PackageParser.ProviderIntentInfo ii : p.intents) {
+				if (ii.match(intent.getAction(), intent.getType(), intent.getScheme(), intent.getData(), intent.getCategories(), "PackageManager") >= 0) {
+					ResolveInfo ri = new ResolveInfo();
+					ri.providerInfo = p.info;
+					ri.priority = ii.priority;
+					out.add(ri);
+					break;
+				}
+			}
+		}
+		return out;
+	}
+@@@
+	public Drawable getActivityIcon(ComponentName activityName) throws NameNotFoundException {
+		return null;
+	}
+===
+	/** AOSP: the activity's icon, else the application's, else the default icon. */
+	public Drawable getActivityIcon(ComponentName activityName) throws NameNotFoundException {
+		return getActivityInfo(activityName, 0).loadIcon(this);
+	}
+@@@
+	public String getInstallerPackageName(String packageName) {
+		return "com.example.installer";
+	}
+===
+	/**
+	 * AOSP: the package that installed packageName, or null when it was not installed by an
+	 * installer app (adb/side-loaded). ATL installs apps with tools/apps/install-app.sh, so there is
+	 * no installer package; an unknown package is an IllegalArgumentException.
+	 */
+	public String getInstallerPackageName(String packageName) {
+		if (tlPackage(packageName) == null)
+			throw new IllegalArgumentException("Unknown package: " + packageName);
+		return null;
+	}
+@@@
+	public void setComponentEnabledSetting(ComponentName componentName, int newState, int flags) {
+		return;
+	}
+===
+	/** AOSP: overrides the manifest's enabled state of a component; kept across restarts. */
+	public void setComponentEnabledSetting(ComponentName componentName, int newState, int flags) {
+		if (newState != COMPONENT_ENABLED_STATE_DEFAULT && newState != COMPONENT_ENABLED_STATE_ENABLED
+		    && newState != COMPONENT_ENABLED_STATE_DISABLED && newState != COMPONENT_ENABLED_STATE_DISABLED_USER
+		    && newState != COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED)
+			throw new IllegalArgumentException("Invalid new component state: " + newState);
+		tlCheckComponent(componentName);
+		tlSetComponentState(componentName, newState);
+	}
+@@@
+	public int getComponentEnabledSetting(ComponentName componentName) {
+		return -1;
+	}
+===
+	/** AOSP: the state set by setComponentEnabledSetting, COMPONENT_ENABLED_STATE_DEFAULT if none. */
+	public int getComponentEnabledSetting(ComponentName componentName) {
+		tlCheckComponent(componentName);
+		return tlGetComponentState(componentName);
+	}

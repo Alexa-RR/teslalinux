@@ -1,0 +1,477 @@
+@@@
+				setDescendantFocusability(TL_DESCENDANT_FOCUSABILITY_FLAGS[a.getInt(com.android.internal.R.styleable.ViewGroup_descendantFocusability, 0)]);
+			a.recycle();
+		}
+	}
+===
+				setDescendantFocusability(TL_DESCENDANT_FOCUSABILITY_FLAGS[a.getInt(com.android.internal.R.styleable.ViewGroup_descendantFocusability, 0)]);
+			tlInitFromAttributes(a); // AOSP initFromAttributes: clipChildren, clipToPadding & co. (layout)
+			a.recycle();
+		}
+		tlInitViewGroup();
+	}
+@@@
+		child.parent = this;
+		child.setLayoutParams(params);
+===
+		tlBeforeChildAdded(child);
+		child.parent = this;
+		child.setLayoutParams(params);
+@@@
+		if (callOnViewAdded) {
+			onViewAdded(child);
+===
+		tlChildAdded(child);
+		if (tlChildrenDrawingOrder)
+			tlScheduleDrawingOrder();
+		if (callOnViewAdded) {
+			onViewAdded(child);
+@@@
+		child.parent = null;
+		children.remove(child);
+		native_removeView(widget, child.widget);
+===
+		child.parent = null;
+		children.remove(child);
+		tlRemoveChildWidget(child);
+@@@
+			child.parent = null;
+			it.remove();
+			native_removeView(widget, child.widget);
+===
+			child.parent = null;
+			it.remove();
+			tlRemoveChildWidget(child);
+@@@
+		child.parent = null;
+		native_removeView(widget, child.widget);
+		if (onHierarchyChangeListener != null) {
+===
+		child.parent = null;
+		tlRemoveChildWidget(child);
+		if (onHierarchyChangeListener != null) {
+@@@
+	public void setMotionEventSplittingEnabled(boolean enabled) {}
+===
+	// (layout) setMotionEventSplittingEnabled: see ViewGroup+layout.frag
+@@@
+	public void startViewTransition(View view) {}
+	public void endViewTransition(View view) {}
+===
+	// (layout) startViewTransition: see ViewGroup+layout.frag
+@@@
+	public void focusableViewAvailable(View v) {}
+===
+	// (layout) focusableViewAvailable: see ViewGroup+layout.frag
+@@@
+	protected void setChildrenDrawingOrderEnabled(boolean enabled) {}
+===
+	// (layout) setChildrenDrawingOrderEnabled: see ViewGroup+layout.frag
+@@@
+	protected boolean isChildrenDrawingOrderEnabled() { return false; }
+===
+	// (layout) isChildrenDrawingOrderEnabled: see ViewGroup+layout.frag
+@@@
+	public void setClipToPadding(boolean clipToPadding) {}
+===
+	// (layout) setClipToPadding: see ViewGroup+layout.frag
+@@@
+	public void setTouchscreenBlocksFocus(boolean touchscreenBlocksFocus) {}
+===
+	// (layout) setTouchscreenBlocksFocus: see ViewGroup+layout.frag
+@@@
+	public void setClipChildren(boolean clipChildren) {}
+===
+	// (layout) setClipChildren: see ViewGroup+layout.frag
+@@@
+	protected void cleanupLayoutState(View child) {}
+===
+	// (layout) cleanupLayoutState: see ViewGroup+layout.frag
+@@@
+	public boolean shouldDelayChildPressedState() { return false; }
+===
+	// (layout) shouldDelayChildPressedState: see ViewGroup+layout.frag
+@@@
+	public boolean getClipToPadding() { return false; }
+===
+	// (layout) getClipToPadding: see ViewGroup+layout.frag
+@@@
+	public boolean getTouchscreenBlocksFocus() { return false; }
+===
+	// (layout) getTouchscreenBlocksFocus: see ViewGroup+layout.frag
+@@@
+	public void scheduleLayoutAnimation() {}
+===
+	// (layout) scheduleLayoutAnimation: see ViewGroup+layout.frag
+@@@
+	protected boolean checkLayoutParams(LayoutParams params) {
+		return true;
+	}
+===
+	// (layout) checkLayoutParams: see ViewGroup+layout.frag
+@@@
+	public void offsetChildrenTopAndBottom(int offset) {
+		// FIXME
+	}
+===
+	// (layout) offsetChildrenTopAndBottom: see ViewGroup+layout.frag
+@@@
+	public final void offsetDescendantRectToMyCoords(View descendant, Rect rect) {
+		// FIXME
+	}
+===
+	// (layout) offsetDescendantRectToMyCoords: see ViewGroup+layout.frag
+@@@
+	public boolean getClipChildren() {
+		return false;
+	}
+===
+	// (layout) getClipChildren: see ViewGroup+layout.frag
+@@@
+	public LayoutTransition getLayoutTransition() {
+		if (transition == null)
+			transition = new LayoutTransition();
+		return transition;
+	}
+===
+	/** AOSP: the transition set with setLayoutTransition (or android:animateLayoutChanges), null by default */
+	public LayoutTransition getLayoutTransition() {
+		return transition;
+	}
+@@@
+		public LayoutParams() {
+			// FIXME
+		}
+===
+		/** AOSP: the no-argument params of subclasses, which set their own fields */
+		public LayoutParams() {
+		}
+@@@
+		for (int i = 0; i < n; i++) {
+			final View child = children.get(i);
+			final float z = child.getZ();
+===
+		final int[] customOrder = tlCustomDrawingOrder(n); // (layout) AOSP getAndVerifyPreorderedIndex
+		for (int i = 0; i < n; i++) {
+			final View child = children.get(customOrder != null ? customOrder[i] : i);
+			final float z = child.getZ();
+@@@
+			int margin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_margin, -1);
+
+			int marginVertical = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginVertical, -1);
+			int marginHorizontal = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginHorizontal, -1);
+
+			int marginStart = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginStart, -1);
+			int marginEnd = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginEnd, -1);
+
+			leftMargin = 0;
+			topMargin = 0;
+			rightMargin = 0;
+			bottomMargin = 0;
+
+			if (margin >= 0) {
+				leftMargin = margin;
+				topMargin = margin;
+				rightMargin = margin;
+				bottomMargin = margin;
+			} else {
+				if (marginVertical >= 0) {
+					topMargin = marginVertical;
+					bottomMargin = marginVertical;
+				} else {
+					topMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginTop, 0);
+					bottomMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginBottom, 0);
+				}
+
+				if (marginHorizontal >= 0) {
+					leftMargin = marginHorizontal;
+					rightMargin = marginHorizontal;
+				} else {
+					leftMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginLeft, 0);
+					rightMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginRight, 0);
+
+					if (marginStart >= 0) {
+						leftMargin = marginStart;
+					}
+
+					if (marginEnd >= 0) {
+						rightMargin = marginEnd;
+					}
+				}
+			}
+
+			a.recycle();
+		}
+===
+			// AOSP MarginLayoutParams(Context, AttributeSet): margin, marginHorizontal and marginVertical
+			// win over the single sides; a side that is not given stays undefined (RTL compatibility)
+			int margin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_margin, -1);
+			if (margin >= 0) {
+				leftMargin = margin;
+				topMargin = margin;
+				rightMargin = margin;
+				bottomMargin = margin;
+			} else {
+				int horizontalMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginHorizontal, -1);
+				int verticalMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginVertical, -1);
+				if (horizontalMargin >= 0) {
+					leftMargin = horizontalMargin;
+					rightMargin = horizontalMargin;
+				} else {
+					leftMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginLeft, UNDEFINED_MARGIN);
+					if (leftMargin == UNDEFINED_MARGIN) {
+						mMarginFlags |= LEFT_MARGIN_UNDEFINED_MASK;
+						leftMargin = DEFAULT_MARGIN_RESOLVED;
+					}
+					rightMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginRight, UNDEFINED_MARGIN);
+					if (rightMargin == UNDEFINED_MARGIN) {
+						mMarginFlags |= RIGHT_MARGIN_UNDEFINED_MASK;
+						rightMargin = DEFAULT_MARGIN_RESOLVED;
+					}
+				}
+				startMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginStart, DEFAULT_MARGIN_RELATIVE);
+				endMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginEnd, DEFAULT_MARGIN_RELATIVE);
+				if (verticalMargin >= 0) {
+					topMargin = verticalMargin;
+					bottomMargin = verticalMargin;
+				} else {
+					topMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginTop, DEFAULT_MARGIN_RESOLVED);
+					bottomMargin = a.getDimensionPixelSize(com.android.internal.R.styleable.ViewGroup_MarginLayout_layout_marginBottom, DEFAULT_MARGIN_RESOLVED);
+				}
+				if (isMarginRelative()) {
+					mMarginFlags |= NEED_RESOLUTION_MASK;
+				}
+			}
+			// AOSP: apps without android:supportsRtl (Waze) or older than API 17 keep left/right margins
+			// over start/end ones; start/end then only fill a side left undefined
+			final android.content.pm.ApplicationInfo info = context.getApplicationInfo();
+			if (info == null || info.targetSdkVersion < 17 || !info.hasRtlSupport()) {
+				mMarginFlags |= RTL_COMPATIBILITY_MODE_MASK;
+			}
+			// Layout direction is LTR by default
+			mMarginFlags |= View.LAYOUT_DIRECTION_LTR;
+			// ATL lays out with these fields directly: resolve now for the default direction (AOSP
+			// does it when the params are set on a view, which resolveLayoutDirection repeats)
+			if ((mMarginFlags & NEED_RESOLUTION_MASK) == NEED_RESOLUTION_MASK)
+				doResolveMargins();
+			a.recycle();
+		}
+@@@
+		public MarginLayoutParams(ViewGroup.MarginLayoutParams source) {
+			super();
+			width = source.width;
+			height = source.height;
+			leftMargin = source.leftMargin;
+			topMargin = source.topMargin;
+			rightMargin = source.rightMargin;
+			bottomMargin = source.bottomMargin;
+		}
+===
+		public MarginLayoutParams(ViewGroup.MarginLayoutParams source) {
+			super();
+			width = source.width;
+			height = source.height;
+			leftMargin = source.leftMargin;
+			topMargin = source.topMargin;
+			rightMargin = source.rightMargin;
+			bottomMargin = source.bottomMargin;
+			// AOSP: the relative margins and their resolution state come along
+			startMargin = source.startMargin;
+			endMargin = source.endMargin;
+			mMarginFlags = source.mMarginFlags;
+		}
+@@@
+		public void setMargins(int left, int top, int right, int bottom) {
+			leftMargin = left;
+			topMargin = top;
+			rightMargin = right;
+			bottomMargin = bottom;
+		}
+
+		public int getMarginStart() {
+			return leftMargin;
+		}
+
+		public int getMarginEnd() {
+			return rightMargin;
+		}
+
+		public void setMarginStart(int marginStart) {
+			leftMargin = marginStart;
+		}
+		public void setMarginEnd(int marginEnd) {
+			rightMargin = marginEnd;
+		}
+
+		private int tlLayoutDirection = View.LAYOUT_DIRECTION_LTR;
+
+		public int getLayoutDirection() { return tlLayoutDirection; }
+
+		/** AOSP: the resolved layout direction of these params (LTR/RTL), used by start/end margins. */
+		public void setLayoutDirection(int layoutDirection) {
+			if (layoutDirection != View.LAYOUT_DIRECTION_LTR && layoutDirection != View.LAYOUT_DIRECTION_RTL)
+				return;
+			tlLayoutDirection = layoutDirection;
+		}
+
+		public void resolveLayoutDirection(int layoutDirection) {
+			setLayoutDirection(layoutDirection);
+		}
+
+		public boolean isMarginRelative() { return false; }
+===
+		/* AOSP MarginLayoutParams relative margins (frameworks/base ViewGroup.java, Apache 2.0) */
+		/** @hide the value of a start/end margin that was not set */
+		public static final int DEFAULT_MARGIN_RELATIVE = Integer.MIN_VALUE;
+		private static final int DEFAULT_MARGIN_RESOLVED = 0;
+		private static final int UNDEFINED_MARGIN = DEFAULT_MARGIN_RELATIVE;
+		private static final int LAYOUT_DIRECTION_MASK = 0x00000003;
+		private static final int LEFT_MARGIN_UNDEFINED_MASK = 0x00000004;
+		private static final int RIGHT_MARGIN_UNDEFINED_MASK = 0x00000008;
+		private static final int RTL_COMPATIBILITY_MODE_MASK = 0x00000010;
+		private static final int NEED_RESOLUTION_MASK = 0x00000020;
+		private int startMargin = DEFAULT_MARGIN_RELATIVE;
+		private int endMargin = DEFAULT_MARGIN_RELATIVE;
+		/** layout direction (LTR/RTL), undefined-side and resolution flags */
+		byte mMarginFlags;
+
+		public void setMargins(int left, int top, int right, int bottom) {
+			leftMargin = left;
+			topMargin = top;
+			rightMargin = right;
+			bottomMargin = bottom;
+			mMarginFlags &= ~LEFT_MARGIN_UNDEFINED_MASK;
+			mMarginFlags &= ~RIGHT_MARGIN_UNDEFINED_MASK;
+			if (isMarginRelative()) {
+				mMarginFlags |= NEED_RESOLUTION_MASK;
+				doResolveMargins(); // ATL reads the fields without a resolution pass
+			} else {
+				mMarginFlags &= ~NEED_RESOLUTION_MASK;
+			}
+		}
+
+		/** AOSP: start/top/end/bottom margins, resolved for the layout direction */
+		public void setMarginsRelative(int start, int top, int end, int bottom) {
+			startMargin = start;
+			topMargin = top;
+			endMargin = end;
+			bottomMargin = bottom;
+			mMarginFlags |= NEED_RESOLUTION_MASK;
+			doResolveMargins();
+		}
+
+		public void setMarginStart(int start) {
+			startMargin = start;
+			mMarginFlags |= NEED_RESOLUTION_MASK;
+			doResolveMargins();
+		}
+
+		public int getMarginStart() {
+			if (startMargin != DEFAULT_MARGIN_RELATIVE)
+				return startMargin;
+			if ((mMarginFlags & NEED_RESOLUTION_MASK) == NEED_RESOLUTION_MASK)
+				doResolveMargins();
+			switch (mMarginFlags & LAYOUT_DIRECTION_MASK) {
+				case View.LAYOUT_DIRECTION_RTL:
+					return rightMargin;
+				case View.LAYOUT_DIRECTION_LTR:
+				default:
+					return leftMargin;
+			}
+		}
+
+		public void setMarginEnd(int end) {
+			endMargin = end;
+			mMarginFlags |= NEED_RESOLUTION_MASK;
+			doResolveMargins();
+		}
+
+		public int getMarginEnd() {
+			if (endMargin != DEFAULT_MARGIN_RELATIVE)
+				return endMargin;
+			if ((mMarginFlags & NEED_RESOLUTION_MASK) == NEED_RESOLUTION_MASK)
+				doResolveMargins();
+			switch (mMarginFlags & LAYOUT_DIRECTION_MASK) {
+				case View.LAYOUT_DIRECTION_RTL:
+					return leftMargin;
+				case View.LAYOUT_DIRECTION_LTR:
+				default:
+					return rightMargin;
+			}
+		}
+
+		/** AOSP: whether a start or an end margin was set */
+		public boolean isMarginRelative() {
+			return (startMargin != DEFAULT_MARGIN_RELATIVE || endMargin != DEFAULT_MARGIN_RELATIVE);
+		}
+
+		/** AOSP: the resolved layout direction of these params (LTR/RTL), used by start/end margins. */
+		public void setLayoutDirection(int layoutDirection) {
+			if (layoutDirection != View.LAYOUT_DIRECTION_LTR && layoutDirection != View.LAYOUT_DIRECTION_RTL)
+				return;
+			if (layoutDirection != (mMarginFlags & LAYOUT_DIRECTION_MASK)) {
+				mMarginFlags &= ~LAYOUT_DIRECTION_MASK;
+				mMarginFlags |= (layoutDirection & LAYOUT_DIRECTION_MASK);
+				if (isMarginRelative())
+					mMarginFlags |= NEED_RESOLUTION_MASK;
+				else
+					mMarginFlags &= ~NEED_RESOLUTION_MASK;
+			}
+		}
+
+		public int getLayoutDirection() {
+			return (mMarginFlags & LAYOUT_DIRECTION_MASK);
+		}
+
+		/** AOSP: start/end margins become left/right ones for the view's layout direction */
+		public void resolveLayoutDirection(int layoutDirection) {
+			setLayoutDirection(layoutDirection);
+			if (!isMarginRelative() || (mMarginFlags & NEED_RESOLUTION_MASK) != NEED_RESOLUTION_MASK)
+				return;
+			doResolveMargins();
+		}
+
+		private void doResolveMargins() {
+			if ((mMarginFlags & RTL_COMPATIBILITY_MODE_MASK) == RTL_COMPATIBILITY_MODE_MASK) {
+				// if left or right margins are not defined and if we have some start or right
+				// margin defined then use those
+				if ((mMarginFlags & LEFT_MARGIN_UNDEFINED_MASK) == LEFT_MARGIN_UNDEFINED_MASK && startMargin > DEFAULT_MARGIN_RELATIVE)
+					leftMargin = startMargin;
+				if ((mMarginFlags & RIGHT_MARGIN_UNDEFINED_MASK) == RIGHT_MARGIN_UNDEFINED_MASK && endMargin > DEFAULT_MARGIN_RELATIVE)
+					rightMargin = endMargin;
+			} else {
+				// relative margins override what has been defined for left and right margins
+				switch (mMarginFlags & LAYOUT_DIRECTION_MASK) {
+					case View.LAYOUT_DIRECTION_RTL:
+						leftMargin = (endMargin > DEFAULT_MARGIN_RELATIVE) ? endMargin : leftMargin;
+						rightMargin = (startMargin > DEFAULT_MARGIN_RELATIVE) ? startMargin : rightMargin;
+						break;
+					case View.LAYOUT_DIRECTION_LTR:
+					default:
+						leftMargin = (startMargin > DEFAULT_MARGIN_RELATIVE) ? startMargin : leftMargin;
+						rightMargin = (endMargin > DEFAULT_MARGIN_RELATIVE) ? endMargin : rightMargin;
+						break;
+				}
+			}
+			mMarginFlags &= ~NEED_RESOLUTION_MASK;
+		}
+
+		/** @hide AOSP */
+		public boolean isLayoutRtl() {
+			return ((mMarginFlags & LAYOUT_DIRECTION_MASK) == View.LAYOUT_DIRECTION_RTL);
+		}
+@@@
+		public MarginLayoutParams(LayoutParams params) {
+			super();
+			width = params.width;
+			height = params.height;
+		}
+===
+		public MarginLayoutParams(LayoutParams params) {
+			super();
+			width = params.width;
+			height = params.height;
+			// AOSP: no margin from the source; left and right count as undefined (RTL compatibility)
+			mMarginFlags |= LEFT_MARGIN_UNDEFINED_MASK;
+			mMarginFlags |= RIGHT_MARGIN_UNDEFINED_MASK;
+		}

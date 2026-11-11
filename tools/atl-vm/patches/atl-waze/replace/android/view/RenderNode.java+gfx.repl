@@ -1,0 +1,58 @@
+@@@
+		return new GskCanvas(nativeCreateSnapshot()) {
+===
+		return new GskCanvas(nativeCreateSnapshot()) {
+			{
+				// the display list's own snapshot: transfer modes can compose with its content
+				tlBaseComposable = true;
+			}
+@@@
+	public boolean setLayerType(int layerType) {
+		return false;
+	}
+
+	public boolean hasOverlappingRendering() {
+		return false;
+	}
+
+	public boolean setHasOverlappingRendering(boolean hasOverlappingRendering) {
+		return false;
+	}
+
+	public boolean setLayerPaint(Paint paint) {
+		return false;
+	}
+===
+	/** AOSP: View.LAYER_TYPE_NONE, _SOFTWARE or _HARDWARE; a layer composites the content with the layer paint. */
+	public boolean setLayerType(int layerType) {
+		boolean changed = tlLayerType != layerType;
+		tlLayerType = layerType;
+		if (changed)
+			tlDropTransformed();
+		return changed;
+	}
+
+	public int getLayerType() {
+		return tlLayerType;
+	}
+
+	/**
+	 * AOSP: whether the content overlaps (true by default). HWUI may then skip the layer for alpha;
+	 * GSK's opacity node always fades the content as one group, which is the overlapping result.
+	 */
+	public boolean hasOverlappingRendering() {
+		return tlOverlapping;
+	}
+
+	public boolean setHasOverlappingRendering(boolean hasOverlappingRendering) {
+		boolean changed = tlOverlapping != hasOverlappingRendering;
+		tlOverlapping = hasOverlappingRendering;
+		return changed;
+	}
+
+	/** AOSP: the paint the layer is composited with (alpha and colour filter). */
+	public boolean setLayerPaint(Paint paint) {
+		tlLayerPaint = paint != null ? new Paint(paint) : null;
+		tlDropTransformed();
+		return true;
+	}

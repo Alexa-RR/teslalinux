@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Teslalinux</title>
+  <link rel="icon" type="image/png" href="./assets/teslalinux-logo.png" />
+  <link rel="shortcut icon" type="image/png" href="./assets/teslalinux-logo.png" />
+  <link rel="apple-touch-icon" href="./assets/teslalinux-logo.png" />
+
+  <link rel="stylesheet" href="./css/app.css" />
+
+
+  <script defer src="./js/vendor/reconnecting/reconnecting-websocket.js"></script>
+  <script defer src="./js/gps/estimator.js"></script>
+  <script defer src="./js/audio/audioplayback.js"></script>
+
+  <script defer src="./js/core/shared.js"></script>
+  <script defer src="./js/core/api-client.js"></script>
+  <script defer src="./js/display/display-renderer-manager.js"></script>
+  <script defer src="./js/display/display-controller.js"></script>
+  <script defer src="./js/touchscreen/touchscreen-controller.js"></script>
+  <script defer src="./js/gps/gps-controller.js"></script>
+  <script defer src="./js/audio/audio-controller.js"></script>
+  <script defer src="./js/release-notes/release-notes-data.js"></script>
+  <script defer src="./js/release-notes/release-notes-controller.js"></script>
+  <script defer src="./js/settings/settings-controller.js"></script>
+  <script defer src="./js/home/home-controller.js"></script>
+  <script defer src="./js/shell/shell-controller.js"></script>
+  <script defer src="./js/core/app.js"></script>
+  <!-- teslalinux: certificate notice (README.teslalinux.md) -->
+  <script defer src="./js/core/cert-warning.js"></script>
+  <!-- teslalinux: the device keyboard (Settings > Keyboard, README.teslalinux.md) -->
+  <script defer src="./js/keyboard/device-keyboard.js"></script>
+</head>
+<body>
+  <div id="connectivity-banner" hidden role="status" aria-live="polite">
+    <span class="material-symbols-rounded connectivity-banner-icon">wifi_off</span>
+    <span id="connectivity-banner-text">
+      Connection with Teslalinux services lost. The app will restart when it comes back.
+    </span>
+  </div>
+
+  <section id="home-shell">
+    <div id="home-stage" aria-label="Teslalinux virtual display">
+      <div id="display-root">
+        <img id="image" alt="" />
+        <canvas id="canvas"></canvas>
+        <div id="touch-layer" aria-hidden="true"></div>
+      </div>
+      <div id="display-loading" aria-live="polite" aria-label="Loading display" hidden>
+        <svg class="loading-spinner" viewBox="0 0 66 66" role="presentation" aria-hidden="true">
+          <circle class="loading-spinner-circle" cx="33" cy="33" r="28"></circle>
+        </svg>
+      </div>
+
+      <div id="home-controls">
+        <button id="home-audio-button" class="home-control-button" type="button" title="Toggle audio">
+          <span class="material-symbols-rounded home-control-icon">volume_off</span>
+        </button>
+        <button id="home-update-button" class="home-control-button update" type="button" title="Open updater" hidden>
+          <span class="material-symbols-rounded home-control-icon">download</span>
+        </button>
+        <button id="home-settings-button" class="home-control-button" type="button" title="Open app pages">
+          <span class="material-symbols-rounded home-control-icon">settings</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section id="panel-shell" hidden>
+    <header class="app-bar">
+      <h1 id="app-title">About</h1>
+    </header>
+
+    <main id="panel-content">
+      <section id="page-about" class="panel-page">
+        <div class="page-center">
+          <div class="about-content">
+            <img class="about-logo" src="./assets/teslalinux-logo.svg" alt="Teslalinux logo" />
+            <div class="about-name">Teslalinux</div>
+            <div class="about-message">
+              Android apps in your Tesla's browser, served from a Raspberry Pi with an LTE modem.
+            </div>
+            <div class="about-fork">
+              Teslalinux is a fork of Tesla Android (github.com/tesla-android). Tesla Android runs
+              full Android on the Pi; Teslalinux runs Linux and runs each app under the Android
+              Translation Layer. This page, its display, touch, GPS and audio protocols come from
+              Tesla Android.
+            </div>
+            <div class="about-version-label">Based on the Tesla Android web app</div>
+            <div class="about-version-value" data-app-version></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-release-notes" class="panel-page" hidden>
+        <div class="release-upstream-note">
+          The release history of Tesla Android, the project Teslalinux is forked from.
+        </div>
+        <div class="release-layout">
+          <div id="release-versions"></div>
+          <div id="release-details"></div>
+        </div>
+      </section>
+
+      <section id="page-donations" class="panel-page" hidden>
+        <div class="page-center">
+          <div class="donation-content">
+            <div class="donation-text">
+              Teslalinux is built on Tesla Android (github.com/tesla-android): its web app, its
+              protocols and its car integration. To support the original project, donate to
+              Tesla Android:
+            </div>
+            <img
+              class="donation-qr"
+              alt="Tesla Android donations QR code"
+              src="./assets/donations-qr.svg"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section id="page-settings" class="panel-page" hidden>
+        <div class="settings-layout">
+          <aside id="settings-sidebar"></aside>
+          <div class="settings-content-wrap">
+            <div id="settings-content"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Main navigation">
+      <button class="bottom-nav-button" data-page="home" type="button">
+        <span class="material-symbols-rounded bottom-nav-icon">code</span>
+        <span class="bottom-nav-label">Teslalinux</span>
+      </button>
+      <button class="bottom-nav-button" data-page="about" type="button">
+        <span class="material-symbols-rounded bottom-nav-icon">info_outline</span>
+        <span class="bottom-nav-label">About</span>
+      </button>
+      <button class="bottom-nav-button" data-page="releaseNotes" type="button">
+        <span class="material-symbols-rounded bottom-nav-icon">notes</span>
+        <span class="bottom-nav-label">Release Notes</span>
+      </button>
+      <button class="bottom-nav-button" data-page="donations" type="button">
+        <span class="material-symbols-rounded bottom-nav-icon">favorite</span>
+        <span class="bottom-nav-label">Credits</span>
+      </button>
+      <button class="bottom-nav-button" data-page="settings" type="button">
+        <span class="material-symbols-rounded bottom-nav-icon">settings</span>
+        <span class="bottom-nav-label">Settings</span>
+      </button>
+    </nav>
+  </section>
+
+  <div id="display-type-dialog" hidden>
+    <div class="dialog-card">
+      <h2>Display Type</h2>
+      <p>
+        Are you using a rear display?<br />
+        Certain features won't function on the main screen in motion.<br />
+        You can change the selection in Teslalinux Settings.
+      </p>
+      <div class="dialog-actions">
+        <button id="main-display-button" class="primary" type="button">MAIN DISPLAY</button>
+        <button id="rear-display-button" type="button">REAR DISPLAY</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

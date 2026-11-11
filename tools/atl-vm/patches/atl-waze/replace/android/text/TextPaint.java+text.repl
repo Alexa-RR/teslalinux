@@ -1,0 +1,16 @@
+@@@
+		super(/*flags*/);
+===
+		super(flags); /* teslalinux (+text): AOSP passes the flags on */
+@@@
+		super(/*p*/);
+===
+		super(p); /* teslalinux (+text): AOSP copies the paint */
+@@@
+		//super.set(tp);
+===
+		super.set(tp); /* teslalinux (+text): AOSP copies the Paint part too */
+@@@
+	public void reset() {}
+===
+	/* teslalinux (+text): AOSP TextPaint inherits Paint.reset() (the empty override kept old state) */

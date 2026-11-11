@@ -1,0 +1,450 @@
+@@@
+	private TextPaint paint = new TextPaint();
+===
+	private TextPaint paint = new TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+@@@
+		TypedArray a = context.obtainStyledAttributes(attrs, com.android.internal.R.styleable.TextView, defStyleAttr, 0);
+		try {
+			if (a.hasValue(com.android.internal.R.styleable.TextView_text)) {
+				setText(a.getText(com.android.internal.R.styleable.TextView_text));
+			}
+			if (a.hasValue(com.android.internal.R.styleable.TextView_hint)) {
+				setHint(a.getText(com.android.internal.R.styleable.TextView_hint));
+			}
+
+			int ap = a.getResourceId(com.android.internal.R.styleable.TextView_textAppearance, -1);
+			if (ap != -1) {
+				TypedArray aa = context.obtainStyledAttributes(ap, com.android.internal.R.styleable.TextAppearance);
+				if (aa.hasValue(com.android.internal.R.styleable.TextAppearance_textColor)) {
+					setTextColor(aa.getColorStateList(com.android.internal.R.styleable.TextAppearance_textColor));
+				}
+				if (aa.hasValue(com.android.internal.R.styleable.TextAppearance_textSize)) {
+					setTextSize(aa.getDimensionPixelSize(com.android.internal.R.styleable.TextAppearance_textSize, 10));
+				}
+				aa.recycle();
+			}
+			if (a.hasValue(com.android.internal.R.styleable.TextView_textColor)) {
+				setTextColor(a.getColorStateList(com.android.internal.R.styleable.TextView_textColor));
+			}
+			if (a.hasValue(com.android.internal.R.styleable.TextView_textSize)) {
+				setTextSize(a.getDimensionPixelSize(com.android.internal.R.styleable.TextView_textSize, 10));
+			}
+
+			if (a.hasValue(com.android.internal.R.styleable.TextView_textStyle)) {
+				int textStyle = a.getInt(com.android.internal.R.styleable.TextView_textStyle, 0);
+				setTypeface(getTypeface(), textStyle);
+			}
+
+			if (a.hasValue(com.android.internal.R.styleable.TextView_textAllCaps)) {
+				boolean allCaps = a.getBoolean(com.android.internal.R.styleable.TextView_textAllCaps, false);
+				setAllCaps(allCaps);
+			}
+		} catch (java.lang.Exception e) {
+			System.out.println("exception while inflating TextView:");
+			e.printStackTrace();
+		}
+
+		a.recycle();
+		haveCustomMeasure = false;
+===
+		haveCustomMeasure = false;
+		try {
+			tlInit(context, attrs, defStyleAttr, defStyleRes);
+		} catch (RuntimeException e) {
+			System.out.println("exception while inflating TextView:");
+			e.printStackTrace();
+			tlInInit = false;
+			tlRenderText();
+		}
+@@@
+	public void setText(CharSequence text, BufferType type) {
+		this.text = text == null ? "" : text;
+		native_setText(text != null ? text.toString() : null);
+
+		if (text instanceof android.text.Spanned)
+			native_set_markup(1);
+		if (!isLayoutRequested())
+			requestLayout();
+	}
+===
+	public void setText(CharSequence text, BufferType type) {
+		tlSetText(text, type);
+	}
+@@@
+	public void append(CharSequence text, int start, int end) {
+		setText(SpannableStringBuilder.valueOf(this.text).append(text, start, end));
+	}
+===
+	public void append(CharSequence text, int start, int end) {
+		if (!(this.text instanceof Editable))
+			setText(this.text, BufferType.EDITABLE);
+		((Editable) this.text).append(text, start, end);
+	}
+@@@
+	public void setTextSize(int unit, float size) {
+		if (unit != TypedValue.COMPLEX_UNIT_SP)
+			System.out.println("setTextSize called with non-SP unit (" + unit + "), we don't currently handle that");
+		setTextSize(size);
+	}
+	public native void setTextSize(float size);
+===
+	/* teslalinux (+text) 1: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void setTypeface(Typeface tf, int style) {
+		String[] classesToRemove = {"ATL-font-bold", "ATL-font-italic"};
+		native_removeClasses(widget, classesToRemove);
+
+		switch (style) {
+			case Typeface.BOLD:
+				native_addClass(widget, "ATL-font-bold");
+				break;
+			case Typeface.ITALIC:
+				native_addClass(widget, "ATL-font-italic");
+				break;
+			case Typeface.BOLD_ITALIC:
+				native_addClass(widget, "ATL-font-bold");
+				native_addClass(widget, "ATL-font-italic");
+				break;
+			default:
+				break;
+		}
+	}
+	public void setTypeface(Typeface tf) {}
+	public void setLineSpacing(float add, float mult) {}
+	public final void setLinksClickable(boolean whether) {}
+===
+	/* teslalinux (+text) 2: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void setInputType(int type) {}
+	public void setFilters(InputFilter[] filters) {}
+	public void setCursorVisible(boolean visible) {}
+===
+	/* teslalinux (+text) 3: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void addTextChangedListener(TextWatcher watcher) {}
+	public void removeTextChangedListener(TextWatcher watcher) {}
+===
+	/* teslalinux (+text) 4: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public TransformationMethod getTransformationMethod() {
+		return null;
+	}
+===
+	/* teslalinux (+text) 5: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void setLinkTextColor(ColorStateList colorStateList) {}
+
+	public void setSingleLine() {}
+	public void setSelection(int i) {}
+	public void setSelection(int i, int j) {}
+
+	public int getSelectionStart() {
+		return 0;
+	}
+
+	public int getSelectionEnd() {
+		return 0;
+	}
+
+	public void setEllipsize(TextUtils.TruncateAt truncateAt) {}
+
+	public void setTextAppearance(Context context, int appearance) {}
+
+	public void setMaxLines(int maxLines) {}
+
+	public void setMinWidth(int minWidth) {}
+	public void setMaxWidth(int maxWidth) {}
+
+	public Typeface getTypeface() { return null; }
+
+	public float getTextSize() { return 10; }
+===
+	/* teslalinux (+text) 6: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public int getCompoundPaddingTop() { return 0; }
+	public int getCompoundPaddingBottom() { return 0; }
+===
+	/* teslalinux (+text) 7: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void setCompoundDrawablePadding(int pad) {}
+
+	protected native void native_setCompoundDrawables(long widget, long left, long top, long right, long bottom);
+
+	// just to prevent garbage collection while native side uses it
+	private Drawable drawableLeft = null;
+	private Drawable drawableTop = null;
+	private Drawable drawableRight = null;
+	private Drawable drawableBottom = null;
+
+	public void setCompoundDrawables(Drawable left, Drawable top, Drawable right, Drawable bottom) {
+		native_setCompoundDrawables(widget,
+		                            left != null ? left.paintable : 0,
+		                            top != null ? top.paintable : 0,
+		                            right != null ? right.paintable : 0,
+		                            bottom != null ? bottom.paintable : 0);
+		drawableLeft = left;
+		drawableTop = top;
+		drawableRight = right;
+		drawableBottom = bottom;
+	}
+===
+	/* teslalinux (+text) 8: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void setSaveEnabled(boolean enabled) {}
+
+	public final void setAutoLinkMask(int mask) {}
+
+	public void setEditableFactory(Editable.Factory factory) {}
+
+	public KeyListener getKeyListener() { return null; }
+
+	public int getInputType() { return tlInputType; }
+
+	public final void setTransformationMethod(TransformationMethod method) {}
+
+	public InputFilter[] getFilters() { return new InputFilter[0]; }
+
+	public int getMaxLines() { return -1; }
+
+	public void setCompoundDrawablesRelative(Drawable start, Drawable top, Drawable end, Drawable bottom) {
+		setCompoundDrawables(start, top, end, bottom);
+	}
+
+	public int getLineCount() { return 1; }
+
+	public URLSpan[] getUrls() { return new URLSpan[0]; }
+
+	public void setMovementMethod(MovementMethod method) {}
+
+	public void setTextIsSelectable(boolean selectable) {}
+
+	public MovementMethod getMovementMethod() {
+		return new BaseMovementMethod();
+	}
+===
+	/* teslalinux (+text): AOSP input type */
+	public int getInputType() { return tlInputType; }
+@@@
+	public int getMinHeight() { return 0; }
+	public int getMinWidth() { return 0; }
+	public void setMinHeight(int minHeight) {}
+	public void setMaxHeight(int maxHeight) {}
+
+	public void setHorizontallyScrolling(boolean whether) {}
+	public boolean getHorizontallyScrolling() {
+		return false;
+	}
+===
+	/* teslalinux (+text) 10: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public Layout getLayout() {
+		return new BoringLayout(getText(), getPaint(), getWidth(), Layout.Alignment.ALIGN_NORMAL, 1, 0, new BoringLayout.Metrics(), false);
+	}
+===
+	/* teslalinux (+text) 11: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void setSingleLine(boolean singleLine) {}
+
+	public int getCompoundPaddingLeft() { return 0; }
+
+	public int getCompoundPaddingRight() { return 0; }
+===
+	/* teslalinux (+text) 12: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public float getLetterSpacing() { return 0.f; }
+
+	public void setCompoundDrawablesRelativeWithIntrinsicBounds(int start, int top, int end, int bottom) {}
+
+	public void setCompoundDrawablesRelativeWithIntrinsicBounds(Drawable start, Drawable top, Drawable end, Drawable bottom) {}
+
+	public boolean getLinksClickable() { return true; }
+
+	public boolean isTextSelectable() { return true; }
+
+	public void setCompoundDrawablesWithIntrinsicBounds(int left, int top, int right, int bottom) {}
+
+	public void setCompoundDrawablesWithIntrinsicBounds(Drawable left, Drawable top, Drawable right, Drawable bottom) {}
+===
+	/* teslalinux (+text) 13: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public Drawable[] getCompoundDrawablesRelative() { return new Drawable[4]; }
+
+	public Drawable[] getCompoundDrawables() { return new Drawable[4]; }
+
+	public void setTextAppearance(int dummy) {}
+===
+	/* teslalinux (+text) 14: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public Editable getEditableText() {
+		return new SpannableStringBuilder(getText());
+	}
+===
+	/* teslalinux (+text) 15: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public int getMaxWidth() { return 1000; }
+
+	public void nullLayouts() {}
+
+	public void setLinkTextColor(int color) {}
+
+	public void setCustomSelectionActionModeCallback(ActionMode.Callback actionModeCallback) {}
+
+	public int getExtendedPaddingTop() { return 0; }
+
+	public void setRawInputType(int type) {}
+
+	public TextUtils.TruncateAt getEllipsize() { return null; }
+
+	public void setLines(int lines) {}
+
+	public int getMinLines() {
+		return -1;
+	}
+
+	public void setMinLines(int lines) {}
+
+	public void setSelectAllOnFocus(boolean selectAllOnFocus) {}
+
+	public int getCompoundDrawablePadding() { return 0; }
+
+	public int getPaintFlags() { return 0; }
+
+	public void setPaintFlags(int flags) {}
+
+	public int getLineHeight() {
+		return 10; // FIXME
+	}
+
+	public int getMaxHeight() {
+		return -1;
+	}
+===
+	/* teslalinux (+text) 16: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public int getAutoSizeStepGranularity() {
+		return -1;
+	}
+
+	public void setAutoSizeTextTypeUniformWithPresetSizes(int[] presetSizes, int unit) {}
+
+	public void setCompoundDrawableTintList(ColorStateList tint) {}
+===
+	/* teslalinux (+text) 17: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public boolean getIncludeFontPadding() { return include_padding; }
+
+	public void setIncludeFontPadding(boolean includePadding) {
+		include_padding = includePadding;
+	}
+
+	public float getLineSpacingExtra() { return 0.f; }
+
+	public float getLineSpacingMultiplier() { return 1.f; }
+===
+	/* teslalinux (+text) 18: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public Bundle getInputExtras(boolean key) {
+		return new Bundle();
+	}
+
+	public void setError(CharSequence error) {
+		System.out.println("ERROR: " + error);
+	}
+
+	public int getTotalPaddingLeft() { return 0; }
+
+	public int getTotalPaddingTop() { return 0; }
+
+	public int getTotalPaddingRight() { return 0; }
+
+	public int getTotalPaddingBottom() { return 0; }
+===
+	/* teslalinux (+text) 19: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void setShadowLayer(float radius, float dx, float dy, int color) {}
+===
+	/* teslalinux (+text) 20: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	public void clearComposingText() {}
+
+	public void setKeyListener(KeyListener keyListener) {}
+
+	public int getAutoLinkMask() { return 0; }
+
+	public void setWidth(int width) {}
+	public void setHeight(int height) {}
+
+	public void setFreezesText(boolean freezesText) {}
+
+	public void setLetterSpacing(float letterSpacing) {}
+
+	public void setMarqueeRepeatLimit(int marqueeLimit) {}
+
+	public void setShowSoftInputOnFocus(boolean showSoftInputOnFocus) {}
+===
+	/* teslalinux (+text) 21: replaced by the AOSP implementation in TextView.java+text.frag */
+@@@
+	protected void tlUpdateCompoundPadding() {
+		int l = getCompoundPaddingLeft();
+		int r = getCompoundPaddingRight();
+		if (l != tlCompoundLeft || r != tlCompoundRight) {
+			tlCompoundLeft = l;
+			tlCompoundRight = r;
+			native_setCompoundPadding(widget, l, r);
+		}
+	}
+===
+	protected void tlUpdateCompoundPadding() {
+		/* AOSP compound paddings include the view padding, which GTK applies as CSS padding */
+		int l = getCompoundPaddingLeft() - getPaddingLeft();
+		int r = getCompoundPaddingRight() - getPaddingRight();
+		int t = getCompoundPaddingTop() - getPaddingTop();
+		int b = getCompoundPaddingBottom() - getPaddingBottom();
+		if (l != tlCompoundLeft || r != tlCompoundRight || t != tlCompoundTop || b != tlCompoundBottom) {
+			tlCompoundLeft = l;
+			tlCompoundRight = r;
+			tlCompoundTop = t;
+			tlCompoundBottom = b;
+			native_setCompoundPadding4(widget, l, t, r, b);
+		}
+	}
+@@@
+	protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+		tlUpdateCompoundPadding();
+		super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+	}
+===
+	protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+		tlUpdateCompoundPadding();
+		super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+		tlMeasure(widthMeasureSpec, heightMeasureSpec);
+	}
+@@@
+		if (hint) {
+			native_setText(tlHint.toString());
+			if (tlHint instanceof android.text.Spanned)
+				native_set_markup(1);
+		} else {
+			native_setText(text != null ? text.toString() : null);
+		}
+===
+		tlShown = hint ? tlHint : mTransformed;
+		tlRenderText();
+@@@
+		if ((tlTextColor != null && tlTextColor.isStateful()) || (tlHintTextColor != null && tlHintTextColor.isStateful()))
+			tlUpdateTextColors();
+	}
+===
+		if ((tlTextColor != null && tlTextColor.isStateful()) || (tlHintTextColor != null && tlHintTextColor.isStateful()))
+			tlUpdateTextColors();
+		/* AOSP: the link colour and the compound drawables follow the state too */
+		if (tlLinkTextColor != null && tlLinkTextColor.isStateful()) {
+			tlLinkColorResolved = false;
+			tlRenderText();
+		}
+		final int[] state = getDrawableState();
+		for (Drawable d : tlShowing != null ? tlShowing : new Drawable[0]) {
+			if (d != null && d.isStateful() && d.setState(state))
+				invalidateDrawable(d);
+		}
+	}

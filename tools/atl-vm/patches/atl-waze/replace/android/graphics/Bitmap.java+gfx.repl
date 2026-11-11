@@ -1,0 +1,268 @@
+@@@
+	public static Bitmap createBitmap(Bitmap src, int x, int y, int width, int height, Matrix matrix, boolean filter) {
+		Bitmap dest = new Bitmap(width, height, src.getConfig());
+		Canvas canvas = new Canvas(dest);
+		canvas.concat(matrix);
+		canvas.drawBitmap(src, new Rect(x, y, x + width, y + height), new Rect(0, 0, width, height), null);
+		return dest;
+	}
+===
+	/** AOSP: the subset of src transformed by the matrix; the new bitmap is sized to the mapped bounds. */
+	public static Bitmap createBitmap(Bitmap src, int x, int y, int width, int height, Matrix matrix, boolean filter) {
+		if (x + width > src.getWidth())
+			throw new IllegalArgumentException("x + width must be <= bitmap.width()");
+		if (y + height > src.getHeight())
+			throw new IllegalArgumentException("y + height must be <= bitmap.height()");
+		if (width <= 0 || height <= 0)
+			throw new IllegalArgumentException("width and height must be > 0");
+		Rect srcR = new Rect(x, y, x + width, y + height);
+		RectF dstR = new RectF(0, 0, width, height);
+		if (matrix == null || matrix.isIdentity()) {
+			Bitmap dest = new Bitmap(width, height, src.getConfig());
+			dest.hasAlpha = src.hasAlpha;
+			new Canvas(dest).drawBitmap(src, srcR, new Rect(0, 0, width, height), null);
+			return dest;
+		}
+		RectF deviceR = new RectF();
+		matrix.mapRect(deviceR, dstR);
+		int neww = Math.round(deviceR.width()), newh = Math.round(deviceR.height());
+		Bitmap dest = new Bitmap(Math.max(1, neww), Math.max(1, newh), src.getConfig());
+		dest.hasAlpha = src.hasAlpha || !matrix.rectStaysRect();
+		Canvas canvas = new Canvas(dest);
+		canvas.translate(-deviceR.left, -deviceR.top);
+		canvas.concat(matrix);
+		Paint paint = new Paint();
+		paint.setFilterBitmap(filter);
+		canvas.drawBitmap(src, srcR, new Rect(0, 0, width, height), paint);
+		dest.tlDensity = src.tlDensity;
+		return dest;
+	}
+@@@
+	public static Bitmap createBitmap(int[] colors, int width, int height, Config config) {
+		return createBitmap(width, height, config);
+	}
+===
+	/** AOSP: a bitmap with the given colours (unpremultiplied ARGB, rows of width). */
+	public static Bitmap createBitmap(int[] colors, int width, int height, Config config) {
+		return createBitmap(colors, 0, width, width, height, config);
+	}
+
+	public static Bitmap createBitmap(int[] colors, int offset, int stride, int width, int height, Config config) {
+		if (width <= 0 || height <= 0)
+			throw new IllegalArgumentException("width and height must be > 0");
+		if (Math.abs(stride) < width)
+			throw new IllegalArgumentException("abs(stride) must be >= width");
+		int lastScanline = offset + (height - 1) * stride;
+		if (offset < 0 || (offset + width > colors.length) || lastScanline < 0 || (lastScanline + width > colors.length))
+			throw new ArrayIndexOutOfBoundsException();
+		Bitmap bitmap = createBitmap(width, height, config);
+		bitmap.setPixels(colors, offset, stride, 0, 0, width, height);
+		bitmap.mutable = false;
+		return bitmap;
+	}
+
+	public static Bitmap createBitmap(DisplayMetrics display, int[] colors, int offset, int stride, int width, int height, Config config) {
+		Bitmap bitmap = createBitmap(colors, offset, stride, width, height, config);
+		if (display != null)
+			bitmap.tlDensity = display.densityDpi;
+		return bitmap;
+	}
+
+	public static Bitmap createBitmap(DisplayMetrics display, int[] colors, int width, int height, Config config) {
+		return createBitmap(display, colors, 0, width, width, height, config);
+	}
+@@@
+	public void setDensity(int density) {}
+
+	public int getScaledWidth(int density) {
+		return width;
+	}
+
+	public int getScaledHeight(int density) {
+		return height;
+	}
+===
+	/** AOSP: the density the bitmap is meant for (Canvas and getScaledWidth/Height read it). */
+	public void setDensity(int density) {
+		tlDensity = density;
+	}
+
+	/** AOSP: the width scaled from the bitmap's density to the target density. */
+	public int getScaledWidth(int targetDensity) {
+		return tlScale(width, getDensity(), targetDensity);
+	}
+
+	public int getScaledHeight(int targetDensity) {
+		return tlScale(height, getDensity(), targetDensity);
+	}
+
+	public int getScaledWidth(DisplayMetrics metrics) {
+		return getScaledWidth(metrics.densityDpi);
+	}
+
+	public int getScaledHeight(DisplayMetrics metrics) {
+		return getScaledHeight(metrics.densityDpi);
+	}
+
+	public int getScaledWidth(Canvas canvas) {
+		return getScaledWidth(canvas.getDensity());
+	}
+
+	public int getScaledHeight(Canvas canvas) {
+		return getScaledHeight(canvas.getDensity());
+	}
+
+	/** AOSP scaleFromDensity: no scaling when either density is DENSITY_NONE or they are equal. */
+	private static int tlScale(int size, int sdensity, int tdensity) {
+		if (sdensity == DENSITY_NONE || tdensity == DENSITY_NONE || sdensity == tdensity)
+			return size;
+		return ((size * tdensity) + (sdensity >> 1)) / sdensity;
+	}
+@@@
+	public Bitmap copy(Bitmap.Config config, boolean isMutable) {
+		Bitmap bitmap = new Bitmap(width, height, config);
+		bitmap.texture = native_ref_texture(getTexture());
+		return bitmap;
+	}
+===
+	/** AOSP: a copy with the config and mutability asked for (the pixels are shared until either is drawn to). */
+	public Bitmap copy(Bitmap.Config config, boolean isMutable) {
+		if (recycled)
+			throw new IllegalStateException("Can't copy a recycled bitmap");
+		Bitmap bitmap = new Bitmap(width, height, config);
+		bitmap.texture = native_ref_texture(getTexture());
+		bitmap.mutable = isMutable;
+		bitmap.hasAlpha = hasAlpha;
+		bitmap.tlDensity = tlDensity;
+		bitmap.tlPremultiplied = tlPremultiplied;
+		return bitmap;
+	}
+@@@
+	public void copyPixelsToBuffer(Buffer buffer) {
+		if (config.gdk_memory_format == -1) {
+			System.out.println("copyPixelsToBuffer: format " + config.name() + " not implemented");
+			System.exit(1);
+		}
+		native_copy_to_buffer(getTexture(), buffer, config.gdk_memory_format, getRowBytes());
+		buffer.position(buffer.position() + getAllocationByteCount());
+	}
+===
+	/**
+	 * AOSP: copies the pixels in the bitmap's own memory layout into the buffer (premultiplied
+	 * unless setPremultiplied(false)), and advances its position.
+	 */
+	public void copyPixelsToBuffer(Buffer buffer) {
+		int needed = getAllocationByteCount();
+		int elements = buffer.remaining();
+		int shift = buffer instanceof java.nio.ByteBuffer ? 0 : buffer instanceof java.nio.ShortBuffer ? 1 : buffer instanceof java.nio.IntBuffer ? 2 : -1;
+		if (shift < 0)
+			throw new RuntimeException("unsupported Buffer subclass");
+		if (((long) elements << shift) < needed)
+			throw new RuntimeException("Buffer not large enough for pixels");
+		if (config == Config.RGB_565 || config == Config.ARGB_4444) {
+			byte[] out = tlPack16();
+			tlPut(buffer, out);
+			return;
+		}
+		int format = config.gdk_memory_format;
+		if (format == 5 && tlPremultiplied && hasAlpha)
+			format = 2; // GDK_MEMORY_R8G8B8A8_PREMULTIPLIED
+		native_copy_to_buffer(getTexture(), buffer, format, getRowBytes());
+		buffer.position(buffer.position() + (needed >> shift));
+	}
+@@@
+	public boolean compress(Bitmap.CompressFormat format, int quality, OutputStream stream) throws IOException {
+		if (format == CompressFormat.PNG) {
+			stream.write(native_save_to_png(getTexture()));
+			return true;
+		} else {
+			stream.write(("fixme Bitmap.compress " + format.name()).getBytes());
+			return false;
+		}
+	}
+===
+	/**
+	 * AOSP: writes a compressed version of the bitmap. PNG through GDK, JPEG and WebP through
+	 * gdk-pixbuf (JPEG drops alpha as Skia's encoder does: premultiplied colour over black); false
+	 * when the encoder is not available.
+	 */
+	public boolean compress(Bitmap.CompressFormat format, int quality, OutputStream stream) throws IOException {
+		if (recycled)
+			throw new IllegalStateException("Can't compress a recycled bitmap");
+		if (stream == null)
+			throw new NullPointerException();
+		if (quality < 0 || quality > 100)
+			throw new IllegalArgumentException("quality must be 0..100");
+		byte[] data;
+		if (format == CompressFormat.PNG) {
+			data = native_save_to_png(getTexture());
+		} else {
+			String name = format == CompressFormat.JPEG ? "jpeg" : "webp";
+			boolean lossless = format == CompressFormat.WEBP_LOSSLESS;
+			data = native_compress(getTexture(), name, quality, lossless);
+		}
+		if (data == null)
+			return false;
+		stream.write(data);
+		stream.flush();
+		return true;
+	}
+@@@
+	public void reconfigure(int width, int height, Bitmap.Config config) {}
+
+	public void setPremultiplied(boolean premultiplied) {}
+===
+	/**
+	 * AOSP: changes the bitmap's size and config within its allocation (the pixel content is
+	 * undefined afterwards; here it is cleared to transparent).
+	 */
+	public void reconfigure(int width, int height, Bitmap.Config config) {
+		if (width <= 0 || height <= 0)
+			throw new IllegalArgumentException("width and height must be > 0");
+		if (!isMutable())
+			throw new IllegalStateException("only mutables can be reconfigured");
+		int stride = (width * config.bytes_per_pixel + 3) & ~3;
+		if (tlAllocation == 0)
+			tlAllocation = getAllocationByteCount();
+		if ((long) stride * height > tlAllocation)
+			throw new IllegalArgumentException("Bitmap not large enough to support new configuration");
+		native_recycle(texture, snapshot);
+		texture = 0;
+		snapshot = 0;
+		this.width = width;
+		this.height = height;
+		this.config = config;
+		this.stride = stride;
+		eraseColor(0);
+	}
+
+	/** AOSP: whether raw pixel access (copyPixelsToBuffer) sees premultiplied colours. */
+	public void setPremultiplied(boolean premultiplied) {
+		tlPremultiplied = premultiplied;
+	}
+
+	public boolean isPremultiplied() {
+		return tlPremultiplied && hasAlpha && config != Config.RGB_565;
+	}
+@@@
+		} else {
+			Paint paint = new Paint();
+			paint.setColor(color);
+			new Canvas(this).drawRect(0, 0, width, height, paint);
+		}
+===
+		} else {
+			// AOSP: every pixel becomes the colour (not drawn over the old content)
+			native_recycle(texture, snapshot);
+			snapshot = native_erase_color(0, width, height);
+			texture = 0;
+			Paint paint = new Paint();
+			paint.setColor(color);
+			new Canvas(this).drawRect(0, 0, width, height, paint);
+		}
+		tlGeneration++;
+@@@
+	synchronized long getSnapshot() {
+===
+	synchronized long getSnapshot() {
+		tlGeneration++; // a canvas or setPixels is about to change the pixels

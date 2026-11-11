@@ -1,0 +1,31 @@
+[package]
+name = "tlplay"
+version = "1.1.0"
+edition = "2021"
+# Debian trixie (Pi OS 13) ships rustc 1.85: the build must work there natively (see README.md)
+rust-version = "1.85"
+description = "teslalinux: app version check and download for the car's updater: APKPure (default, no account) or Google Play through a token dispenser (gpapi; off by default)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "tlplay"
+path = "src/main.rs"
+
+[dependencies]
+# EFF's Google Play protocol library (the one behind apkeep); exact pins, Cargo.lock is committed
+gpapi = "=6.1.0"
+# CRC-32 and inflate for members of APKPure XAPKs read over HTTP ranges
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+googleplay-protobuf = "=3.0.0"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn"] }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "fs", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

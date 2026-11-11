@@ -1,0 +1,28 @@
+#!/bin/sh
+# teslalinux (Alpine/OpenRC): apply a new display state from the frontend. Called by
+# services/api/api.py through one sudoers rule, the counterpart of upstream's
+# configure_virtual_display() (tesla-android-configuration-manager.cpp:184-268): the compositor and
+# the app on it come back at the new size, encoder and quality.
+#   teslalinux-apply-display WIDTH HEIGHT DENSITY FPS ENCODER QUALITY
+# Restarts only when something changed: the frontend posts its display state on every page load.
+set -eu
+[ $# -eq 6 ] || { echo "usage: teslalinux-apply-display W H DENSITY FPS ENCODER QUALITY" >&2; exit 2; }
+int() { case "$1" in ''|*[!0-9]*) echo "teslalinux-apply-display: $2 '$1' is not a number" >&2; exit 2 ;; esac
+	[ "$1" -ge "$3" ] && [ "$1" -le "$4" ] || { echo "teslalinux-apply-display: $2 $1 outside $3..$4" >&2; exit 2; }; }
+int "$1" width 320 1920; int "$2" height 320 1920; int "$3" density 72 640; int "$4" fps 1 60; int "$6" quality 1 100
+case "$5" in m2m-jpeg|m2m-h264) ;; *) echo "teslalinux-apply-display: encoder '$5' unknown" >&2; exit 2 ;; esac
+# TESLALINUX_DISPLAY_ENV: local test runs only (sudo resets the environment on the car)
+F=${TESLALINUX_DISPLAY_ENV:-/etc/teslalinux/display.env}
+NEW=$(printf '# teslalinux display (teslalinux-render / teslalinux-apply-display from the frontend'"'"'s display state)\nTACOMP_SIZE=%sx%s@%s\nTACOMP_ENCODER=%s\nTACOMP_QUALITY=%s\nATL_DENSITY_DPI=%s\n' "$1" "$2" "$4" "$5" "$6" "$3")
+[ -r "$F" ] && [ "$(cat "$F")" = "$NEW" ] && exit 0
+OLD_DENSITY=$(sed -n 's/^ATL_DENSITY_DPI=//p' "$F" 2>/dev/null || true)
+printf '%s\n' "$NEW" >"$F.tmp" && chmod 0644 "$F.tmp" && mv -f "$F.tmp" "$F"
+# tacomp applies a new size, encoder or quality in place (reload: SIGHUP re-reads this file); the
+# app's window gets the new size and ATL turns it into a configuration change, as upstream resizes
+# its virtual display under a running app. Only a new density restarts the app (ATL takes it at start).
+if command -v rc-service >/dev/null 2>&1 && rc-service -e tacomp && rc-service tacomp status >/dev/null 2>&1; then
+	rc-service tacomp reload
+	if [ "$OLD_DENSITY" != "$3" ] && rc-service -e teslalinux-atl; then
+		rc-service teslalinux-atl restart >/dev/null 2>&1 || true
+	fi
+fi

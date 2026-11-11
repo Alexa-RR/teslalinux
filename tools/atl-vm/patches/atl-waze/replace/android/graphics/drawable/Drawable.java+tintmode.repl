@@ -1,0 +1,31 @@
+@@@
+	public static BlendMode parseBlendMode(int value, BlendMode defaultMode) {
+		return defaultMode;
+	}
+===
+	/** AOSP Drawable.parseBlendMode(): an android:tintMode attribute value as a BlendMode. */
+	public static BlendMode parseBlendMode(int value, BlendMode defaultMode) {
+		switch (value) {
+			case 3: return BlendMode.SRC_OVER;
+			case 5: return BlendMode.SRC_IN;
+			case 9: return BlendMode.SRC_ATOP;
+			// PorterDuff MULTIPLY maps to Skia's modulate, as in AOSP (b/73224934)
+			case 14: return BlendMode.MODULATE;
+			case 15: return BlendMode.SCREEN;
+			case 16: return BlendMode.PLUS;
+			default: return defaultMode;
+		}
+	}
+
+	/** AOSP Drawable.parseTintMode(): an android:tintMode attribute value as a PorterDuff mode. */
+	public static PorterDuff.Mode parseTintMode(int value, PorterDuff.Mode defaultMode) {
+		switch (value) {
+			case 3: return PorterDuff.Mode.SRC_OVER;
+			case 5: return PorterDuff.Mode.SRC_IN;
+			case 9: return PorterDuff.Mode.SRC_ATOP;
+			case 14: return PorterDuff.Mode.MULTIPLY;
+			case 15: return PorterDuff.Mode.SCREEN;
+			case 16: return PorterDuff.Mode.ADD;
+			default: return defaultMode;
+		}
+	}

@@ -1,0 +1,142 @@
+@@@
+		if (serviceClass == JobScheduler.class)
+			return job_scheduler;
+		return serviceClass.getConstructors()[0].newInstance();
+	}
+===
+		if (serviceClass == JobScheduler.class)
+			return job_scheduler;
+		/* teslalinux: interfaces (WindowManager) and managers without a public constructor used to throw
+		 * ArrayIndexOutOfBounds here. Route through the name-based lookup first, then any no-arg ctor. */
+		String tlName = tlSystemServiceName(serviceClass);
+		if (tlName != null) {
+			Object o = getSystemService(tlName);
+			if (o != null)
+				return o;
+		}
+		try {
+			java.lang.reflect.Constructor<?> c = serviceClass.getDeclaredConstructor();
+			c.setAccessible(true);
+			return c.newInstance();
+		} catch (NoSuchMethodException e) {
+			Slog.e(TAG, "getSystemService(" + serviceClass.getName() + "): no mapping and no no-arg constructor");
+			return null;
+		}
+	}
+
+	static String tlSystemServiceName(Class<?> c) {
+		switch (c.getName()) {
+			case "android.view.WindowManager": return "window";
+			case "android.view.LayoutInflater": return "layout_inflater";
+			case "android.app.ActivityManager": return "activity";
+			case "android.os.PowerManager": return "power";
+			case "android.app.AlarmManager": return "alarm";
+			case "android.app.NotificationManager": return "notification";
+			case "android.app.KeyguardManager": return "keyguard";
+			case "android.location.LocationManager": return "location";
+			case "android.app.SearchManager": return "search";
+			case "android.hardware.SensorManager": return "sensor";
+			case "android.os.storage.StorageManager": return "storage";
+			case "android.os.Vibrator": return "vibrator";
+			case "android.net.ConnectivityManager": return "connectivity";
+			case "android.net.wifi.WifiManager": return "wifi";
+			case "android.media.AudioManager": return "audio";
+			case "android.media.MediaRouter": return "media_router";
+			case "android.telephony.TelephonyManager": return "phone";
+			case "android.content.ClipboardManager": return "clipboard";
+			case "android.view.inputmethod.InputMethodManager": return "input_method";
+			case "android.app.UiModeManager": return "uimode";
+			case "android.hardware.usb.UsbManager": return "usb";
+			case "android.hardware.input.InputManager": return "input";
+			case "android.hardware.display.DisplayManager": return "display";
+			case "android.os.UserManager": return "user";
+			case "android.app.AppOpsManager": return "appops";
+			case "android.hardware.camera2.CameraManager": return "camera";
+			case "android.view.accessibility.AccessibilityManager": return "accessibility";
+			case "android.bluetooth.BluetoothManager": return "bluetooth";
+			case "android.app.job.JobScheduler": return "jobscheduler";
+			case "android.view.accessibility.CaptioningManager": return "captioning";
+			case "android.app.StatusBarManager": return "statusbar";
+			case "android.hardware.display.ColorDisplayManager": return "color_display";
+			default: return null;
+		}
+	}
+@@@
+		return targetApp.startOrBindService(intent, null) != null;
+	}
+===
+		/* teslalinux: ATL started the service but never delivered the connection; bound services
+		 * (Waze's navigation service, Play Core) need onServiceConnected with the service's binder. */
+		return targetApp.startOrBindService(intent, serviceConnection) != null;
+	}
+@@@
+			case "bluetooth":
+				return new BluetoothManager();
+===
+			case "bluetooth":
+				/* no Bluetooth feature on this device: Android returns null for the service too */
+				return getPackageManager().hasSystemFeature("android.hardware.bluetooth") ? new BluetoothManager() : null;
+@@@
+			default:
+				Slog.e(TAG, "!!!!!!! getSystemService: case >" + name + "< is not implemented yet");
+===
+			case "media_metrics":
+				return new android.media.metrics.MediaMetricsManager();
+			case "content_capture":
+				/* no content capture service on this device: Android returns null for the service too */
+				return null;
+			default:
+				Slog.e(TAG, "!!!!!!! getSystemService: case >" + name + "< is not implemented yet");
+@@@
+			case "android.hardware.display.ColorDisplayManager": return "color_display";
+===
+			case "android.hardware.display.ColorDisplayManager": return "color_display";
+			case "android.media.metrics.MediaMetricsManager": return "media_metrics";
+@@@
+			case "location":
+				return new LocationManager();
+===
+			case "location":
+				return new LocationManager();
+			case "download":
+				return new DownloadManager(this);
+@@@
+			case "android.location.LocationManager": return "location";
+===
+			case "android.location.LocationManager": return "location";
+			case "android.app.DownloadManager": return "download";
+@@@
+			case "connectivity":
+				return new ConnectivityManager();
+===
+			case "connectivity":
+				return new ConnectivityManager(this);
+@@@
+			} else if (intent.getData() != null) {
+				Slog.i(TAG, "starting extern activity with intent: " + intent);
+===
+			} else if (intent.getData() != null && (className = tlResolveViewIntent(intent)) != null) {
+				/* AOSP: the app's own activities' intent filters resolve a view intent (deep link) before
+				 * anything external gets to open it */
+				Slog.i(TAG, "startActivity: " + intent.getData() + " resolved to " + className);
+			} else if (intent.getData() != null) {
+				Slog.i(TAG, "starting extern activity with intent: " + intent);
+@@@
+		final String className_ = className;
+		final Intent intent_ = intent;
+===
+		final String className_ = className;
+		final Intent intent_ = intent;
+		/* AOSP singleTask/singleInstance (and FLAG_ACTIVITY_SINGLE_TOP): an existing instance gets onNewIntent */
+		final boolean tlSingle_ = tlResumesExisting(className, intent);
+@@@
+					if ((intent_.getFlags() & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0 && intent_.getComponent() != null) {
+						boolean found = Activity.nativeResumeActivity(
+						    ContextImpl.this.atl_loaded_app.loadClass(intent_.getComponent().getClassName())
+							.asSubclass(Activity.class),
+						    intent_);
+===
+					if (((intent_.getFlags() & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0 && intent_.getComponent() != null) || tlSingle_) {
+						boolean found = Activity.nativeResumeActivity(
+						    ContextImpl.this.atl_loaded_app.loadClass(className_).asSubclass(Activity.class),
+						    intent_);

@@ -1,0 +1,16 @@
+#!/bin/sh
+# teslalinux: NetworkManager dispatcher hook (/etc/NetworkManager/dispatcher.d/91-teslalinux-appupdate).
+# An uplink came up or connectivity changed: let the app updater run now. `teslalinux-appupdate kick`
+# starts teslalinux-appupdate.service only when something is waiting (a retry after a failure, an update
+# waiting for an unmetered uplink, a staged install) or the last check is over 10 minutes old; the
+# service itself decides whether Play is asked (once a day) and whether this uplink may download.
+IFACE=$1 ACTION=$2
+AP_IFACE=wlan0
+[ -r /etc/teslalinux/env ] && . /etc/teslalinux/env
+[ "$IFACE" = "$AP_IFACE" ] && exit 0
+case "$ACTION" in
+	up|connectivity-change)
+		[ -x /usr/local/bin/teslalinux-appupdate ] && /usr/local/bin/teslalinux-appupdate kick >/dev/null 2>&1
+		;;
+esac
+exit 0

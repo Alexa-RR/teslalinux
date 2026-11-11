@@ -1,0 +1,37 @@
+[Unit]
+# never give up restarting: a burst of restarts (display changes) must not leave the car without the app
+StartLimitIntervalSec=0
+Description=teslalinux: headless Wayland compositor + V4L2 encoder + display/touch WebSockets
+After=seatd.service
+Wants=seatd.service
+# Not After=network: the compositor only needs /dev/dri and /dev/video11.
+
+# tools/debvm/build-dist.sh builds it with its private wlroots 0.20 stack into /opt/teslalinux/tacomp
+# (RUNPATH), shipped in the dist that tools/pios/install.sh installs
+ConditionPathExists=/opt/teslalinux/tacomp/bin/tacomp
+
+[Service]
+User=tesla
+Group=tesla
+SupplementaryGroups=video render input
+Environment=XDG_RUNTIME_DIR=/run/tesla
+Environment=WAYLAND_DISPLAY=tesla-0
+Environment=WLR_BACKENDS=headless
+Environment=WLR_RENDERER=gles2
+Environment=TACOMP_SIZE=1088x832@60
+Environment=TACOMP_DISPLAY_PORT=9091
+Environment=TACOMP_TOUCH_PORT=9999
+# the device keyboard (/sockets/keyboard): text-input-v3 state to the page, its typing back
+Environment=TACOMP_IME_PORT=9996
+Environment=TACOMP_ENCODER=m2m-jpeg
+# only nginx (TLS, same host) talks to the three WebSocket servers
+Environment=TACOMP_BIND=127.0.0.1
+# the frontend's display state (teslalinux-render at boot, teslalinux-apply-display on a change)
+EnvironmentFile=-/etc/teslalinux/display.env
+ExecStart=/opt/teslalinux/tacomp/bin/tacomp
+Restart=always
+RestartSec=1
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

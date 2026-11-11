@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+# teslalinux: PipeWire for the tesla user in /run/tesla. The null sink "android" (pipewire.conf.d,
+# written by the image build) is the default sink: ATL's AudioTrack plays to ALSA "default", which
+# pipewire-alsa routes here, and audio.py captures android.monitor. WirePlumber and pipewire-pulse
+# are their own supervised services (teslalinux-wireplumber, teslalinux-pipewire-pulse).
+description="teslalinux PipeWire"
+command=/usr/bin/pipewire
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/teslalinux-pipewire.pid
+output_log=/var/log/teslalinux/pipewire.log
+error_log=/var/log/teslalinux/pipewire.log
+supervisor=supervise-daemon
+respawn_delay=1
+respawn_max=0
+
+depend() {
+	need localmount
+	after dbus
+}
+
+start_pre() {
+	checkpath -d -m 0700 -o tesla:tesla /run/tesla
+	checkpath -d -m 0755 -o tesla:tesla /var/log/teslalinux
+	export XDG_RUNTIME_DIR=/run/tesla HOME=/var/lib/tesla
+}

@@ -1,0 +1,14 @@
+@@@
+	public static boolean isExternalStorageLegacy() {
+		return true;
+	}
+===
+	/**
+	 * AOSP: whether the app sees shared storage in the legacy (pre-scoped) mode: apps targeting
+	 * below Q always, apps targeting R and later never (requestLegacyExternalStorage only counts
+	 * for Q targets, and ATL's manifest parser does not read it, which is its default false).
+	 */
+	public static boolean isExternalStorageLegacy() {
+		int target = android.atl.ATLLoadedApp.getPrimaryApplication().pkg.applicationInfo.targetSdkVersion;
+		return target < 29;
+	}

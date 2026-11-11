@@ -1,0 +1,27 @@
+@@@
+	public CharSequence loadLabel(PackageManager pm) {
+		CharSequence label = activityInfo.loadLabel(pm);
+		if (label == null) {
+			label = "fixme ResolveInfo.loadLabel";
+		}
+		return label;
+	}
+===
+	/** AOSP: the matched filter's label, else the component's label (which falls back to the app's, then its name). */
+	public CharSequence loadLabel(PackageManager pm) {
+		if (nonLocalizedLabel != null) {
+			return nonLocalizedLabel;
+		}
+		ComponentInfo ci = tlGetComponentInfo();
+		if (labelRes != 0 && ci != null) {
+			CharSequence label = pm.getText(ci.packageName, labelRes, ci.applicationInfo);
+			if (label != null) {
+				return label.toString().trim();
+			}
+		}
+		CharSequence data = ci != null ? ci.loadLabel(pm) : null;
+		if (data != null) {
+			data = data.toString().trim();
+		}
+		return data;
+	}

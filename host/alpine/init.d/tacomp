@@ -1,0 +1,43 @@
+#!/sbin/openrc-run
+# teslalinux: the display compositor (frames to the car browser, touch back)
+description="teslalinux display compositor"
+command=/usr/local/bin/tacomp
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/tacomp.pid
+output_log=/var/log/teslalinux/tacomp.log
+error_log=/var/log/teslalinux/tacomp.log
+directory=/var/lib/tesla
+supervisor=supervise-daemon
+respawn_delay=1
+respawn_max=0
+# reload: apply a new display state (size, encoder, quality) in place; tacomp re-reads display.env on SIGHUP
+extra_started_commands="reload"
+
+depend() {
+	need localmount
+	use seatd
+	after dbus teslalinux-netconfig
+}
+
+start_pre() {
+	checkpath -d -m 0700 -o tesla:tesla /run/tesla
+	checkpath -d -m 0755 -o tesla:tesla /var/log/teslalinux
+	# the frontend's display state (teslalinux-render at boot, teslalinux-apply-display on a change)
+	[ -r /etc/teslalinux/display.env ] && . /etc/teslalinux/display.env
+	export XDG_RUNTIME_DIR=/run/tesla WAYLAND_DISPLAY=tesla-0
+	export WLR_BACKENDS=headless WLR_RENDERER="${TACOMP_RENDERER:-gles2}"
+	export TACOMP_SIZE="${TACOMP_SIZE:-1088x832@60}" TACOMP_DISPLAY_PORT="${TACOMP_DISPLAY_PORT:-9091}"
+	export TACOMP_TOUCH_PORT="${TACOMP_TOUCH_PORT:-9999}" TACOMP_ENCODER="${TACOMP_ENCODER:-m2m-jpeg}"
+	export TACOMP_QUALITY="${TACOMP_QUALITY:-70}"
+	# the device keyboard (/sockets/keyboard): text-input-v3 state to the page, its typing back
+	export TACOMP_IME_PORT="${TACOMP_IME_PORT:-9996}"
+	# only nginx (TLS, same host) talks to the three WebSocket servers
+	export TACOMP_BIND="${TACOMP_BIND:-127.0.0.1}"
+}
+
+reload() {
+	ebegin "Applying the display state to tacomp"
+	supervise-daemon "$RC_SVCNAME" --signal HUP
+	eend $?
+}

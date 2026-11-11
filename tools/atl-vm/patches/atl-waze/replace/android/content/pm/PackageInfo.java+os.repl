@@ -1,0 +1,4 @@
+@@@
+	public SigningInfo signingInfo = new SigningInfo();
+===
+	public SigningInfo signingInfo;

@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""teslalinux-render: every host configuration of the car stack from one place.
+
+Inputs: /etc/teslalinux/env (hostname, hijack IP, hotspot, display, TLS paths, offline defaults) and
+the settings the frontend saved through /api (tlprops: upstream's persist.tesla-android.* names).
+Outputs: hostapd, dnsmasq, nftables, nginx (site + includes), the youtu.be redirect page and the
+display environment of tacomp/ATL. Run at image build (tools/image/build-alpine-pi.sh), by Pi OS
+provisioning, and at boot when the env file or the saved settings changed (teslalinux-netconfig),
+which is how the frontend's network settings are "applied during the next system startup".
+
+  teslalinux-render [--root DIR] [--layout alpine|pios] [--templates DIR] [--env FILE] [--state FILE]
+                    [--web-root PATH] [--only net|web|display]
+                    [--http-port 80] [--https-port 443] [--live]
+  --live: the rendered files reference their own location under --root (a self-contained tree for
+  a test nginx, e.g. tools/atl-vm/carstack.sh or host/local/web-local.sh); default: paths as on the car.
+"""
+import argparse
+import hashlib
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+for lib in (os.environ.get("TESLALINUX_LIB", ""), "/usr/local/lib/teslalinux", os.path.join(HERE, "..", "services", "api")):
+    if lib and os.path.exists(os.path.join(lib, "tlprops.py")):
+        sys.path.insert(0, lib)
+        break
+import tlprops as tp  # noqa: E402
+
+LAYOUTS = {
+    "alpine": {"hostapd": "/etc/hostapd/hostapd.conf", "dnsmasq": "/etc/dnsmasq.conf",
+               "nftables": "/etc/nftables.nft", "nginx_site": "/etc/nginx/http.d/teslalinux.conf",
+               "nginx_dir": "/etc/nginx"},
+    "pios": {"hostapd": "/etc/hostapd/hostapd.conf", "dnsmasq": "/etc/dnsmasq.conf",
+             "nftables": "/etc/nftables.conf", "nginx_site": "/etc/nginx/sites-available/teslalinux",
+             "nginx_dir": "/etc/nginx"},
+}
+NGINX_INCLUDES = ("teslalinux-tls.inc", "teslalinux-mime.inc", "teslalinux-static.inc", "teslalinux-app.inc",
+                  "teslalinux-nocache.inc", "teslalinux-api.inc", "teslalinux-ws.inc")
+REDIRECT_ROOT = "/var/www/teslalinux-redirect"
+DISPLAY_ENV = "/etc/teslalinux/display.env"
+STAMP = "/etc/teslalinux/.rendered"
+
+# upstream netd 0001 (+0004 removed hermes-prd.*, +0005 added www.tesla.com)
+OFFLINE_HOSTS = ("connman.vn.tesla.services", "www.teslamotors.com", "www.tesla.com",
+                 "connman.vn.cloud.tesla.cn", "www.tesla.cn")
+TELEMETRY_HOSTS = ("telemetry-prd.vn.tesla.services", "telemetry-prd.ap.tesla.services",
+                   "apf-api.prd.vn.cloud.tesla.com", "x1.ap.tesla.services", "s3.ap.tesla.services",
+                   "tesla-hermes-snapshot-eu.s3-eu-central-1.amazonaws.com",
+                   "tesla-hermes-snapshot.s3-us-west-2.amazonaws.com")
+FIRMWARE_HOSTS = ("va.teslamotors.com",)
+
+# 5 GHz 80 MHz blocks (first channel -> centre index) and the HT40 secondary-channel side
+VHT80 = {36: 42, 52: 58, 100: 106, 116: 122, 132: 138, 149: 155}
+HT40_PLUS_5G = {36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157}
+
+
+def band_lines(band, channel, width):
+    """hostapd lines for SoftApConfiguration band (1 = 2.4 GHz, 2 = 5 GHz) and SoftApInfo width
+    (1 = 20 MHz, 2 = 40 MHz, 3 = 80 MHz), the values the frontend's band list posts."""
+    if band == 1:
+        hw, lines = "g", []
+        if width >= 2:
+            lines.append("ht_capab=[%s][SHORT-GI-20][SHORT-GI-40]" % ("HT40+" if channel <= 7 else "HT40-"))
+        else:
+            lines.append("ht_capab=[SHORT-GI-20]")
+        return hw, lines
+    hw = "a"
+    lines = ["ieee80211ac=1"]
+    if width >= 2:
+        lines.append("ht_capab=[%s][SHORT-GI-20][SHORT-GI-40]" % ("HT40+" if channel in HT40_PLUS_5G else "HT40-"))
+    else:
+        lines.append("ht_capab=[SHORT-GI-20]")
+    if width >= 3:
+        start = max([c for c in VHT80 if c <= channel] or [36])
+        lines += ["vht_capab=[SHORT-GI-80]", "vht_oper_chwidth=1", "vht_oper_centr_freq_seg0_idx=%d" % VHT80[start]]
+    else:
+        lines.append("vht_oper_chwidth=0")
+    return hw, lines
+
+
+def subst(text, values):
+    for k, v in values.items():
+        text = text.replace("@%s@" % k, str(v))
+    left = [w for w in text.split("@") if w.isupper() and w.replace("_", "").isalnum()]
+    if left:
+        raise SystemExit("teslalinux-render: unrendered placeholder(s) %s" % ", ".join(sorted(set(left))))
+    return text
+
+
+def write(root, path, data, mode=0o644):
+    full = os.path.join(root, path.lstrip("/"))
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    try:
+        with open(full) as f:
+            if f.read() == data:
+                return False
+    except OSError:
+        pass
+    tmp = full + ".tl-tmp"
+    with open(tmp, "w") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, full)
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default="/")
+    ap.add_argument("--layout", default="alpine", choices=sorted(LAYOUTS))
+    ap.add_argument("--templates", default=os.environ.get("TESLALINUX_TEMPLATES", "/usr/share/teslalinux/templates"))
+    ap.add_argument("--env", default=tp.ENV_PATH)
+    ap.add_argument("--state", default=tp.STATE_PATH)
+    ap.add_argument("--web-root", default="/var/www/teslalinux")
+    ap.add_argument("--only", choices=("net", "web", "display"))
+    ap.add_argument("--http-port", type=int, default=80)
+    ap.add_argument("--https-port", type=int, default=443)
+    ap.add_argument("--live", action="store_true")
+    a = ap.parse_args()
+    if not os.path.isdir(a.templates):
+        a.templates = os.path.join(HERE, "phase1-pios", "etc")
+    env = tp.load_env(a.env)
+    p = tp.load(env, a.state)
+    lay = LAYOUTS[a.layout]
+    prefix = os.path.abspath(a.root).rstrip("/") if a.live else ""
+    need = ("DEVICE_HOST", "HIJACK_IP", "AP_IFACE", "AP_SSID", "AP_PSK", "AP_COUNTRY", "AP_SUBNET")
+    missing = [k for k in need if not env.get(k)]
+    if missing:
+        raise SystemExit("teslalinux-render: %s missing in %s" % (", ".join(missing), a.env))
+    host, hijack, subnet = env["DEVICE_HOST"], env["HIJACK_IP"], env["AP_SUBNET"]
+    tpl = lambda name: open(os.path.join(a.templates, name)).read()  # noqa: E731
+    changed = []
+
+    if a.only in (None, "net"):
+        band = tp.atoi(p[tp.BAND_TYPE], 2)
+        channel = tp.atoi(p[tp.CHANNEL], 44)
+        width = tp.atoi(p[tp.CHANNEL_WIDTH], 3)
+        if band not in (1, 2):
+            band = 2
+        hw, lines = band_lines(band, channel, width)
+        values = {k: env.get(k, "") for k in need}
+        values.update({"HW_MODE": hw, "CHANNEL": channel, "BAND_LINES": "\n".join(lines)})
+        if write(a.root, lay["hostapd"], subst(tpl("hostapd.conf"), values), 0o600):
+            changed.append("hostapd")
+
+        hosts = [host, "www." + host, "fullscreen." + host, "www.fullscreen." + host]
+        offline = []
+        if tp.atoi(p[tp.OFFLINE]) == 1:
+            offline += ["address=/%s/%s" % (h, hijack) for h in OFFLINE_HOSTS]
+        # upstream: telemetry / firmware-download hosts are blackholed when the switch is 0
+        if tp.atoi(p[tp.OFFLINE_TELEMETRY]) == 0:
+            offline += ["address=/%s/%s" % (h, hijack) for h in TELEMETRY_HOSTS]
+        if tp.atoi(p[tp.OFFLINE_FIRMWARE]) == 0:
+            offline += ["address=/%s/%s" % (h, hijack) for h in FIRMWARE_HOSTS]
+        values = {"AP_IFACE": env["AP_IFACE"], "AP_SUBNET": subnet,
+                  "HOST_ADDRESSES": "\n".join("address=/%s/%s" % (h, hijack) for h in hosts),
+                  "OFFLINE_BLOCK": "\n".join(offline) or "# (offline mode off)"}
+        if write(a.root, lay["dnsmasq"], subst(tpl("dnsmasq.conf"), values)):
+            changed.append("dnsmasq")
+        values = {"AP_IFACE": env["AP_IFACE"], "AP_SUBNET": subnet, "HIJACK_IP": hijack}
+        if write(a.root, lay["nftables"], subst(tpl("nftables.conf"), values), 0o755):
+            changed.append("nftables")
+
+    if a.only in (None, "web"):
+        values = {"DEVICE_HOST": host, "TLS_CERT": env.get("TLS_CERT", "/etc/teslalinux/tls/fullchain.pem"),
+                  "TLS_KEY": env.get("TLS_KEY", "/etc/teslalinux/tls/privkey.pem"), "WEB_ROOT": a.web_root,
+                  "REDIRECT_ROOT": prefix + REDIRECT_ROOT, "NGINX_DIR": prefix + lay["nginx_dir"],
+                  "HTTP_PORT": a.http_port, "HTTPS_PORT": a.https_port}
+        web = write(a.root, lay["nginx_site"], subst(tpl("nginx-site.conf"), values))
+        for inc in NGINX_INCLUDES:
+            web |= write(a.root, os.path.join(lay["nginx_dir"], inc), subst(tpl(inc), values))
+        web |= write(a.root, REDIRECT_ROOT + "/index.html", subst(tpl("www-redirect/index.html"), values))
+        if web:
+            changed.append("nginx")
+
+    if a.only in (None, "display"):
+        w, h = tp.atoi(p[tp.VD_WIDTH], 1088), tp.atoi(p[tp.VD_HEIGHT], 832)
+        fps, q = tp.atoi(p[tp.VD_REFRESH], 30), tp.atoi(p[tp.VD_QUALITY], 70)
+        enc = "m2m-jpeg" if tp.atoi(p[tp.VD_RENDERER], 0) == 0 else "m2m-h264"
+        data = ("# teslalinux display (teslalinux-render / teslalinux-apply-display from the frontend's display state)\n"
+                "TACOMP_SIZE=%dx%d@%d\nTACOMP_ENCODER=%s\nTACOMP_QUALITY=%d\nATL_DENSITY_DPI=%d\n"
+                % (w, h, fps, enc, q, tp.atoi(p[tp.VD_DENSITY], 200)))
+        if write(a.root, DISPLAY_ENV, data):
+            changed.append("display")
+
+    if a.only is None:
+        digest = hashlib.sha256()
+        for path in (a.env, a.state):
+            try:
+                with open(path, "rb") as f:
+                    digest.update(f.read())
+            except OSError:
+                pass
+        write(a.root, STAMP, digest.hexdigest() + "\n")
+    print("teslalinux-render: %s" % (", ".join(changed) if changed else "unchanged"))
+
+
+if __name__ == "__main__":
+    main()

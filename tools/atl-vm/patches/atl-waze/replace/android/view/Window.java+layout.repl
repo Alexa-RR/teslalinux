@@ -1,0 +1,55 @@
+@@@
+	public boolean requestFeature(int featureId) {
+		return false;
+	}
+===
+	// (layout) requestFeature: see Window+layout.frag
+@@@
+	public boolean hasFeature(int featureId) {
+		return false;
+	}
+===
+	// (layout) hasFeature: see Window+layout.frag
+@@@
+	public void setGravity(int gravity) {}
+===
+	// (layout) setGravity: see Window+layout.frag
+@@@
+	public void setDecorFitsSystemWindows(boolean fits) {}
+===
+	// (layout) setDecorFitsSystemWindows: see Window+layout.frag
+@@@
+	public void setStatusBarContrastEnforced(boolean enforced) {}
+===
+	// (layout) setStatusBarContrastEnforced: see Window+layout.frag
+@@@
+	public void setNavigationBarContrastEnforced(boolean enforced) {}
+===
+	// (layout) setNavigationBarContrastEnforced: see Window+layout.frag
+@@@
+		decorView.setId(android.R.id.content);
+===
+		decorView.setId(android.R.id.content);
+		// AOSP PhoneWindow: the decor applies the window's content insets policy (layout)
+		decorView.setFitsSystemWindows(true);
+		decorView.makeFrameworkOptionalFitsSystemWindows();
+@@@
+		decorView.removeAllViews();
+		decorView.addView(view);
+===
+		tlContentParentExplicitlySet = true; // AOSP PhoneWindow.setContentView (layout)
+		decorView.removeAllViews();
+		decorView.addView(view);
+@@@
+	public WindowInsetsController getInsetsController() {
+		return new InsetsController();
+	}
+===
+	/** AOSP: the window's one insets controller (layout) */
+	private InsetsController tlInsetsController;
+
+	public WindowInsetsController getInsetsController() {
+		if (tlInsetsController == null)
+			tlInsetsController = new InsetsController(this);
+		return tlInsetsController;
+	}

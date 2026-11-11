@@ -1,0 +1,16 @@
+[Unit]
+Description=teslalinux: /api config endpoint (port 8081)
+
+[Service]
+User=tesla
+Environment=TESLALINUX_API_BIND=127.0.0.1
+Environment=TESLALINUX_API_PORT=8081
+Environment=TESLALINUX_ENV=/etc/teslalinux/env
+Environment=TESLALINUX_STATE=/var/lib/teslalinux/state/props.json
+Environment=PYTHONPATH=/usr/local/lib/teslalinux
+ExecStart=/usr/bin/python3 /usr/local/lib/teslalinux/api.py
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

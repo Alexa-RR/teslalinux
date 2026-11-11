@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""teslalinux-system-update: update the operating system underneath the app, from the settings page.
+
+Called by services/api/api.py (GET/POST /api/systemUpdate) through one sudoers rule. The package
+manager is the distribution's own: apt on Pi OS / Debian, apk on Alpine. Our own pieces (the ATL
+prefix in /opt/teslalinux, tacomp, the web page) are not distribution packages and are not touched.
+
+  teslalinux-system-update check     refresh the package index, list the packages that would change
+  teslalinux-system-update upgrade   refresh, then install every update (apt-get upgrade / apk upgrade);
+                                     packages named in /etc/teslalinux/system-update.hold (one per line,
+                                     # comments) are held back: put a library our own builds link
+                                     against there (wlroots for tacomp on a rolling Alpine) to keep it
+  teslalinux-system-update reboot    restart the device a moment later
+  teslalinux-system-update state     the state as JSON (also readable without root, see STATE)
+
+check and upgrade run detached: the call returns at once, the work continues in the background with
+its output in LOG and its progress in STATE ({"phase": idle|checking|upgrading, "lastCheck",
+"lastUpgrade", "available": [{name, from, to}], "result", "message", "rebootRequired"}). One run at a
+time (a lock file); a second request while one runs is refused with exit 3.
+"""
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+STATE_DIR = os.environ.get("TESLALINUX_SYSUPDATE_DIR", "/var/lib/teslalinux/sysupdate")
+STATE = os.path.join(STATE_DIR, "state.json")
+LOCK = os.path.join(STATE_DIR, "lock")
+LOG = os.environ.get("TESLALINUX_SYSUPDATE_LOG", "/var/log/teslalinux/system-update.log")
+# what the package manager is doing right now, for the page's progress bar: {"step", "percent", "text",
+# "at"}; percent is null when the tool reports none (the page then shows an indeterminate bar)
+PROGRESS = os.path.join(STATE_DIR, "progress.json")
+HOLD = os.environ.get("TESLALINUX_SYSUPDATE_HOLD", "/etc/teslalinux/system-update.hold")
+
+
+def manager():
+    if shutil.which("apt-get") and shutil.which("dpkg"):
+        return "apt"
+    if shutil.which("apk"):
+        return "apk"
+    return None
+
+
+def read_state():
+    try:
+        with open(STATE) as f:
+            st = json.load(f)
+        if isinstance(st, dict):
+            return st
+    except (OSError, ValueError):
+        pass
+    return {"phase": "idle", "lastCheck": 0, "lastUpgrade": 0, "available": [], "result": "", "message": ""}
+
+
+def write_state(st):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.chmod(STATE_DIR, 0o755)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATE)
+
+
+def holds():
+    try:
+        with open(HOLD) as f:
+            return [w for w in (line.split("#", 1)[0].strip() for line in f) if re.match(r"^[A-Za-z0-9][A-Za-z0-9+._-]*$", w)]
+    except OSError:
+        return []
+
+
+def reboot_required():
+    """A newer kernel than the running one is installed (its modules are on disk), or the distribution
+    says so (Debian's /run/reboot-required)."""
+    if os.path.exists("/run/reboot-required") or os.path.exists("/var/run/reboot-required"):
+        return True
+    running = os.uname().release
+    try:
+        installed = os.listdir("/lib/modules")
+    except OSError:
+        return False
+    if running not in installed:
+        return True  # the running kernel's modules were replaced: a new kernel waits for a restart
+    # Pi OS installs kernel flavours side by side (v8, v8-16k, v7l...): compare within the running one's
+    flavour = re.sub(r"^[0-9.]+(-[0-9]+)?", "", running)
+    def key(v):
+        return [int(x) for x in re.findall(r"\d+", v.split("-", 1)[0])] + [int(x) for x in re.findall(r"-(\d+)", v)[:1]]
+    same = [v for v in installed if re.sub(r"^[0-9.]+(-[0-9]+)?", "", v) == flavour and os.path.isdir(os.path.join("/lib/modules", v, "kernel"))]
+    return bool(same) and max(same, key=key) != running
+
+
+def write_progress(step, percent=None, text=""):
+    tmp = PROGRESS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"step": step, "percent": None if percent is None else round(max(0.0, min(100.0, percent)), 1),
+                   "text": text, "at": time.time()}, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, PROGRESS)
+
+
+def follow_status(fd, pm, step):
+    """The package manager's machine-readable progress (apt's APT::Status-Fd, apk's --progress-fd) into
+    PROGRESS. apt: "dlstatus:N:PERCENT:TEXT" while downloading, "pmstatus:PKG:PERCENT:TEXT" while
+    installing; apk: "DONE/TOTAL"."""
+    last = 0.0
+    with os.fdopen(fd, "r", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            now = time.monotonic()
+            if pm == "apt":
+                parts = line.split(":", 3)
+                if len(parts) == 4 and parts[0] in ("dlstatus", "pmstatus"):
+                    try:
+                        pct = float(parts[2])
+                    except ValueError:
+                        continue
+                    kind = "Downloading" if parts[0] == "dlstatus" else "Installing"
+                    if step == "refresh":
+                        kind = "Refreshing package lists"
+                    if now - last > 0.25 or pct >= 100:
+                        write_progress(kind, pct, parts[3])
+                        last = now
+            else:
+                m = re.match(r"^(\d+)/(\d+)$", line)
+                if m and int(m.group(2)) > 0 and (now - last > 0.25 or m.group(1) == m.group(2)):
+                    write_progress("Refreshing package lists" if step == "refresh" else "Installing",
+                                   100.0 * int(m.group(1)) / int(m.group(2)))
+                    last = now
+
+
+def run(cmd, log, env=None, pm=None, step=None):
+    """cmd with its output in the log; with pm/step, its progress (see follow_status) in PROGRESS"""
+    log.write("\n$ %s\n" % " ".join(cmd))
+    log.flush()
+    e = dict(os.environ)
+    e.update(env or {})
+    if not pm:
+        return subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=e).returncode
+    import threading
+    r, w = os.pipe()
+    if pm == "apt":
+        cmd = cmd[:1] + ["-o", "APT::Status-Fd=%d" % w] + cmd[1:]
+    else:
+        cmd = cmd[:1] + ["--progress-fd", str(w)] + cmd[1:]
+    t = threading.Thread(target=follow_status, args=(r, pm, step), daemon=True)
+    t.start()
+    try:
+        p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=e, pass_fds=(w,))
+    finally:
+        os.close(w)
+    rc = p.wait()
+    t.join(timeout=5)
+    return rc
+
+
+APT_ENV = {"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l", "APT_LISTCHANGES_FRONTEND": "none"}
+
+
+def list_available(pm):
+    out = []
+    if pm == "apt":
+        # simulate the upgrade: "Inst name [old] (new suite [arch])"
+        r = subprocess.run(["apt-get", "-s", "-o", "Debug::NoLocking=1", "upgrade"], capture_output=True, text=True,
+                           env=dict(os.environ, **APT_ENV))
+        for line in r.stdout.splitlines():
+            m = re.match(r"^Inst (\S+) (?:\[(\S+)\] )?\((\S+)", line)
+            if m:
+                out.append({"name": m.group(1), "from": m.group(2) or "", "to": m.group(3)})
+    elif pm == "apk":
+        r = subprocess.run(["apk", "version", "-l", "<"], capture_output=True, text=True)
+        installed = {}
+        q = subprocess.run(["apk", "info", "-v"], capture_output=True, text=True).stdout.split()
+        for item in q:
+            m = re.match(r"^(.+)-([^-]+-r\d+)$", item)
+            if m:
+                installed[item] = (m.group(1), m.group(2))
+        for line in r.stdout.splitlines():
+            m = re.match(r"^(\S+)\s+<\s+(\S+)", line)
+            if m and m.group(1) in installed:
+                name, old = installed[m.group(1)]
+                out.append({"name": name, "from": old, "to": m.group(2)})
+    held = set(holds())
+    for p in out:
+        p["held"] = p["name"] in held
+    return out
+
+
+def refresh(pm, log):
+    write_progress("Refreshing package lists")
+    if pm == "apt":
+        return run(["apt-get", "-q", "update"], log, APT_ENV, pm, "refresh")
+    return run(["apk", "update"], log, None, pm, "refresh")
+
+
+def work(action):
+    pm = manager()
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    st = read_state()
+    st.update({"phase": "checking" if action == "check" else "upgrading", "started": int(time.time()),
+               "result": "", "message": ""})
+    write_state(st)
+    # line-buffered: the page streams this file while the run goes on
+    with open(LOG, "w", buffering=1) as log:
+        log.write("teslalinux-system-update %s (%s) %s\n" % (action, pm, time.strftime("%Y-%m-%d %H:%M:%S")))
+        rc = refresh(pm, log)
+        if rc != 0:
+            st.update({"phase": "idle", "result": "error",
+                       "message": "Could not reach the package servers (no internet?)"})
+            st["rebootRequired"] = reboot_required()
+            write_state(st)
+            return
+        write_progress("Reading the list of updates")
+        st["available"] = list_available(pm)
+        st["lastCheck"] = int(time.time())
+        if action == "upgrade":
+            write_progress("Downloading", 0.0)
+            held = holds()
+            if pm == "apt":
+                if held:
+                    run(["apt-mark", "hold"] + held, log)
+                rc = run(["apt-get", "-q", "-y", "-o", "Dpkg::Options::=--force-confdef",
+                          "-o", "Dpkg::Options::=--force-confold", "upgrade"], log, APT_ENV, pm, "upgrade")
+            else:
+                cmd = ["apk", "upgrade", "--no-interactive"]
+                if held:
+                    cmd += ["--ignore"] + held
+                rc = run(cmd, log, None, pm, "upgrade")
+            write_progress("Reading the list of updates")
+            st["lastUpgrade"] = int(time.time())
+            st["available"] = list_available(pm)
+            if rc == 0:
+                st["result"], st["message"] = "ok", "Updates installed"
+            else:
+                st["result"], st["message"] = "error", "The update failed (exit %d); details in %s" % (rc, LOG)
+        else:
+            pending = [p for p in st["available"] if not p["held"]]
+            st["result"] = "ok"
+            st["message"] = "%d update%s available" % (len(pending), "" if len(pending) == 1 else "s") if pending \
+                else "The system is up to date"
+        st["phase"] = "idle"
+        st["rebootRequired"] = reboot_required()
+        write_state(st)
+
+
+def start(action):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o644)  # readable: the API tells a run from a stale state by it
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("teslalinux-system-update: already running", file=sys.stderr)
+        sys.exit(3)
+    if manager() is None:
+        print("teslalinux-system-update: no apt or apk on this system", file=sys.stderr)
+        sys.exit(2)
+    # detach: the API answers right away; the child keeps the lock until the work is done
+    if os.fork() > 0:
+        os._exit(0)
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for n in (0, 1, 2):
+        os.dup2(devnull, n)
+    try:
+        work(action)
+    except Exception as e:  # the state must never stay "upgrading" after a crash
+        st = read_state()
+        st.update({"phase": "idle", "result": "error", "message": "Internal error: %s" % e})
+        write_state(st)
+    os._exit(0)
+
+
+def reboot():
+    cmd = "systemctl reboot" if os.path.isdir("/run/systemd/system") else "reboot"
+    subprocess.Popen(["sh", "-c", "sleep 2; sync; " + cmd], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def main():
+    args = sys.argv[1:]
+    if args == ["state"]:
+        st = read_state()
+        st["manager"] = manager()
+        print(json.dumps(st))
+        return
+    if os.geteuid() != 0:
+        print("teslalinux-system-update: run as root", file=sys.stderr)
+        sys.exit(2)
+    if args in (["check"], ["upgrade"]):
+        return start(args[0])
+    if args == ["reboot"]:
+        return reboot()
+    print("usage: teslalinux-system-update check|upgrade|reboot|state", file=sys.stderr)
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,67 @@
+@@@
+	public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter, String broadcastPermission, Handler scheduler) {
+		return registerReceiver(receiver, filter);
+	}
+===
+	/** AOSP: onReceive runs on scheduler's thread (the main thread when null). */
+	public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter, String broadcastPermission, Handler scheduler) {
+		Intent sticky = registerReceiver(receiver, filter);
+		if (receiver != null && scheduler != null)
+			tlReceiverSchedulers.put(receiver, scheduler);
+		return sticky;
+	}
+@@@
+		for (IntentFilter filter : receiverMap.keySet()) {
+			if (filter.matchAction(intent.getAction())) {
+				receiverMap.get(filter).onReceive(this, intent);
+			}
+		}
+===
+		for (IntentFilter filter : receiverMap.keySet()) {
+			if (filter.matchAction(intent.getAction())) {
+				tlDeliverBroadcast(receiverMap.get(filter), intent);
+			}
+		}
+@@@
+	public void unregisterReceiver(BroadcastReceiver receiver) {
+		while (receiverMap.values().remove(receiver))
+			;
+	}
+===
+	public void unregisterReceiver(BroadcastReceiver receiver) {
+		while (receiverMap.values().remove(receiver))
+			;
+		tlReceiverSchedulers.remove(receiver);
+	}
+@@@
+	public String[] fileList() {
+		return new String[0];
+	}
+===
+	/** AOSP: the names of the private files of this context's package (getFilesDir()). */
+	public String[] fileList() {
+		String[] list = getFilesDir().list();
+		return list != null ? list : new String[0];
+	}
+@@@
+	public void registerComponentCallbacks(ComponentCallbacks callbacks) {}
+
+	public void unregisterComponentCallbacks(ComponentCallbacks callbacks) {}
+===
+	/**
+	 * AOSP: a context's component callbacks are the application's (Context.registerComponentCallbacks
+	 * hands them to getApplicationContext(); Application keeps and dispatches them).
+	 */
+	public void registerComponentCallbacks(ComponentCallbacks callbacks) {
+		Context app = getApplicationContext();
+		if (app == null || app == this)
+			throw new IllegalStateException("registerComponentCallbacks on a context without an application");
+		app.registerComponentCallbacks(callbacks);
+	}
+
+	public void unregisterComponentCallbacks(ComponentCallbacks callbacks) {
+		Context app = getApplicationContext();
+		if (app == null || app == this)
+			throw new IllegalStateException("unregisterComponentCallbacks on a context without an application");
+		app.unregisterComponentCallbacks(callbacks);
+	}

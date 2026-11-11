@@ -1,0 +1,266 @@
+@@@
+	public static float GRAVITY_EARTH = 9.81f;
+
+	public Sensor getDefaultSensor(int type) {
+		return new Sensor(type);
+	}
+
+	public boolean registerListener(SensorEventListener listener, Sensor sensor, int samplingPeriodUs, Handler handler) {
+		return true; // we could try saying that the sensor doesn't exist and hope the app just doesn't use it then, but as long as we never call the handler the app should leave this alone
+	}
+
+	public boolean registerListener(final SensorEventListener listener, final Sensor sensor, int samplingPeriodUs) {
+		switch (sensor.getType()) {
+			case Sensor.TYPE_ORIENTATION:
+				new LocationManager().requestLocationUpdates(null, 0, 0, new LocationListener() {
+					@Override
+					public void onLocationChanged(Location location) {
+						listener.onSensorChanged(new SensorEvent(new float[] {location.getBearing()}, sensor));
+					}
+				});
+				return true;
+			case Sensor.TYPE_ACCELEROMETER:
+				register_accelerometer_listener_native(listener, sensor, samplingPeriodUs);
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	public void unregisterListener(final SensorEventListener listener) {
+		unregisterListener(listener, null);
+	}
+
+	public void unregisterListener(final SensorEventListener listener, Sensor sensor) {
+		System.out.println("STUB: andoroid.hw.SensorManager.unregisterListener");
+	}
+
+	native void register_accelerometer_listener_native(SensorEventListener listener, Sensor sensor, int sampling_period);
+
+	public List<Sensor> getSensorList(int type) {
+		return Arrays.asList(getDefaultSensor(type));
+	}
+===
+	/* teslalinux: AOSP SensorManager semantics over the sensors this runtime really has:
+	 *  - TYPE_ACCELEROMETER when an IIO accelerometer is present (ATL native source, /sys/bus/iio),
+	 *  - TYPE_ORIENTATION (deprecated API) derived from the GPS bearing (ATL's existing mapping),
+	 *  - nothing else: getDefaultSensor() returns null for sensors the device does not have, as on a
+	 *    phone without that sensor, so apps take their no-sensor paths instead of waiting for events. */
+	public static final float GRAVITY_EARTH = 9.80665f;
+	public static final float GRAVITY_SUN = 275.0f;
+	public static final float GRAVITY_MOON = 1.6f;
+	public static final float STANDARD_GRAVITY = 9.80665f;
+	public static final float MAGNETIC_FIELD_EARTH_MAX = 60.0f;
+	public static final float MAGNETIC_FIELD_EARTH_MIN = 30.0f;
+	public static final float PRESSURE_STANDARD_ATMOSPHERE = 1013.25f;
+	public static final float LIGHT_SUNLIGHT_MAX = 120000.0f;
+	public static final float LIGHT_SUNLIGHT = 110000.0f;
+	public static final float LIGHT_SHADE = 20000.0f;
+	public static final float LIGHT_OVERCAST = 10000.0f;
+	public static final float LIGHT_SUNRISE = 400.0f;
+	public static final float LIGHT_CLOUDY = 100.0f;
+	public static final float LIGHT_FULLMOON = 0.25f;
+	public static final float LIGHT_NO_MOON = 0.001f;
+	public static final int SENSOR_DELAY_FASTEST = 0;
+	public static final int SENSOR_DELAY_GAME = 1;
+	public static final int SENSOR_DELAY_UI = 2;
+	public static final int SENSOR_DELAY_NORMAL = 3;
+	public static final int SENSOR_STATUS_NO_CONTACT = -1;
+	public static final int SENSOR_STATUS_UNRELIABLE = 0;
+	public static final int SENSOR_STATUS_ACCURACY_LOW = 1;
+	public static final int SENSOR_STATUS_ACCURACY_MEDIUM = 2;
+	public static final int SENSOR_STATUS_ACCURACY_HIGH = 3;
+
+	/** One active registration: the listener plus the source it is wired to. */
+	private static final class Registration {
+		final SensorEventListener listener;
+		final Sensor sensor;
+		final Handler handler;
+		final LocationListener locationListener;
+		volatile boolean active = true;
+
+		Registration(SensorEventListener listener, Sensor sensor, Handler handler, LocationListener locationListener) {
+			this.listener = listener;
+			this.sensor = sensor;
+			this.handler = handler;
+			this.locationListener = locationListener;
+		}
+
+		void deliver(final SensorEvent event) {
+			if (!active)
+				return;
+			if (handler != null && handler.getLooper() != android.os.Looper.myLooper()) {
+				handler.post(new Runnable() {
+					@Override
+					public void run() {
+						if (active)
+							listener.onSensorChanged(event);
+					}
+				});
+			} else {
+				listener.onSensorChanged(event);
+			}
+		}
+	}
+
+	private static final java.util.concurrent.CopyOnWriteArrayList<Registration> sRegistrations = new java.util.concurrent.CopyOnWriteArrayList<>();
+	private static java.util.Map<Integer, Sensor> sSensors;
+
+	private static synchronized java.util.Map<Integer, Sensor> availableSensors() {
+		if (sSensors == null) {
+			sSensors = new java.util.LinkedHashMap<>();
+			if (hasIioAccelerometer())
+				sSensors.put(Sensor.TYPE_ACCELEROMETER, new Sensor(Sensor.TYPE_ACCELEROMETER));
+			if (System.getenv("ATL_UGLY_ENABLE_LOCATION") != null || System.getenv("ATL_LOCATION_SOURCE") != null)
+				sSensors.put(Sensor.TYPE_ORIENTATION, new Sensor(Sensor.TYPE_ORIENTATION));
+		}
+		return sSensors;
+	}
+
+	private static boolean hasIioAccelerometer() {
+		java.io.File[] devices = new java.io.File("/sys/bus/iio/devices").listFiles();
+		if (devices == null)
+			return false;
+		for (java.io.File d : devices) {
+			if (new java.io.File(d, "in_accel_x_raw").isFile() && new java.io.File(d, "in_mount_matrix").isFile())
+				return true;
+		}
+		return false;
+	}
+
+	public Sensor getDefaultSensor(int type) {
+		return availableSensors().get(type);
+	}
+
+	public Sensor getDefaultSensor(int type, boolean wakeUp) {
+		// none of the sensors here is a wake-up sensor
+		return wakeUp ? null : getDefaultSensor(type);
+	}
+
+	public List<Sensor> getSensorList(int type) {
+		if (type == Sensor.TYPE_ALL)
+			return new java.util.ArrayList<>(availableSensors().values());
+		Sensor s = getDefaultSensor(type);
+		return s == null ? java.util.Collections.<Sensor>emptyList() : java.util.Collections.singletonList(s);
+	}
+
+	public List<Sensor> getDynamicSensorList(int type) {
+		return java.util.Collections.emptyList();
+	}
+
+	public boolean isDynamicSensorDiscoverySupported() {
+		return false;
+	}
+
+	public boolean registerListener(SensorEventListener listener, Sensor sensor, int samplingPeriodUs) {
+		return registerListener(listener, sensor, samplingPeriodUs, 0, null);
+	}
+
+	public boolean registerListener(SensorEventListener listener, Sensor sensor, int samplingPeriodUs, Handler handler) {
+		return registerListener(listener, sensor, samplingPeriodUs, 0, handler);
+	}
+
+	public boolean registerListener(SensorEventListener listener, Sensor sensor, int samplingPeriodUs, int maxReportLatencyUs) {
+		return registerListener(listener, sensor, samplingPeriodUs, maxReportLatencyUs, null);
+	}
+
+	public boolean registerListener(final SensorEventListener listener, final Sensor sensor, int samplingPeriodUs, int maxReportLatencyUs, Handler handler) {
+		if (listener == null || sensor == null) {
+			return false;
+		}
+		if (sensor.getType() == Sensor.TYPE_SIGNIFICANT_MOTION) {
+			throw new IllegalArgumentException("Trigger Sensors should use the requestTriggerSensor.");
+		}
+		if (getDefaultSensor(sensor.getType()) == null) {
+			return false;
+		}
+		for (Registration r : sRegistrations) {
+			if (r.listener == listener && r.sensor.getType() == sensor.getType())
+				return true; // already registered for this sensor
+		}
+		final Handler h = handler != null ? handler : new Handler(android.os.Looper.myLooper() != null ? android.os.Looper.myLooper() : android.os.Looper.getMainLooper());
+		switch (sensor.getType()) {
+			case Sensor.TYPE_ORIENTATION: {
+				final Registration[] holder = new Registration[1];
+				LocationListener ll = new LocationListener() {
+					@Override
+					public void onLocationChanged(Location location) {
+						if (holder[0] != null)
+							holder[0].deliver(new SensorEvent(new float[] { location.getBearing(), 0f, 0f }, sensor));
+					}
+				};
+				holder[0] = new Registration(listener, sensor, h, ll);
+				sRegistrations.add(holder[0]);
+				long minTime = samplingPeriodUs > 3 ? samplingPeriodUs / 1000 : 0;
+				new LocationManager().requestLocationUpdates(LocationManager.GPS_PROVIDER, minTime, 0, ll, android.os.Looper.getMainLooper());
+				return true;
+			}
+			case Sensor.TYPE_ACCELEROMETER: {
+				final Registration r = new Registration(listener, sensor, h, null);
+				sRegistrations.add(r);
+				register_accelerometer_listener_native(new SensorEventListener() {
+					@Override
+					public void onSensorChanged(SensorEvent event) {
+						r.deliver(event);
+					}
+
+					@Override
+					public void onAccuracyChanged(Sensor s, int accuracy) {
+						if (r.active)
+							listener.onAccuracyChanged(s, accuracy);
+					}
+				}, sensor, samplingPeriodUs);
+				return true;
+			}
+			default:
+				return false;
+		}
+	}
+
+	public void unregisterListener(SensorEventListener listener) {
+		unregisterListener(listener, null);
+	}
+
+	public void unregisterListener(SensorEventListener listener, Sensor sensor) {
+		if (listener == null)
+			return;
+		for (Registration r : sRegistrations) {
+			if (r.listener == listener && (sensor == null || r.sensor.getType() == sensor.getType())) {
+				r.active = false;
+				if (r.locationListener != null)
+					new LocationManager().removeUpdates(r.locationListener);
+				sRegistrations.remove(r);
+			}
+		}
+	}
+
+	/** Flushes the FIFO of the sensors registered for this listener; events are delivered as they arrive here, so there is nothing buffered. */
+	public boolean flush(SensorEventListener listener) {
+		if (listener == null)
+			return false;
+		for (Registration r : sRegistrations) {
+			if (r.listener == listener)
+				return true;
+		}
+		return false;
+	}
+
+	public boolean requestTriggerSensor(TriggerEventListener listener, Sensor sensor) {
+		return false;
+	}
+
+	public boolean cancelTriggerSensor(TriggerEventListener listener, Sensor sensor) {
+		return false;
+	}
+
+	public void registerDynamicSensorCallback(DynamicSensorCallback callback) {}
+	public void registerDynamicSensorCallback(DynamicSensorCallback callback, Handler handler) {}
+	public void unregisterDynamicSensorCallback(DynamicSensorCallback callback) {}
+
+	/** Callback for dynamic sensor connections (none here). */
+	public static abstract class DynamicSensorCallback {
+		public void onDynamicSensorConnected(Sensor sensor) {}
+		public void onDynamicSensorDisconnected(Sensor sensor) {}
+	}
+
+	native void register_accelerometer_listener_native(SensorEventListener listener, Sensor sensor, int sampling_period);

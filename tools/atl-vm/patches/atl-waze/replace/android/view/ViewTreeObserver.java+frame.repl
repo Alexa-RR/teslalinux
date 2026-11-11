@@ -1,0 +1,11 @@
+@@@
+	ViewTreeObserver(Window window) {
+		if (window != null)
+			this.window = window.native_window;
+	}
+===
+	ViewTreeObserver(Window window) {
+		if (window != null)
+			this.window = window.native_window;
+		tlWindow = window;
+	}

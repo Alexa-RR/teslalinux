@@ -1,0 +1,5 @@
+@@@
+		this.mLinkUri = b.mLinkUri;
+===
+		this.mLinkUri = b.mLinkUri;
+		this.mInputContentInfo = b.mInputContentInfo;

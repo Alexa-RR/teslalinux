@@ -1,0 +1,37 @@
+@@@
+	public void readFromParcel(Parcel in) throws ReflectiveOperationException {
+		in.readMap(mMap, getClassLoader());
+	}
+===
+	/** AOSP: reads a bundle written by writeToParcel (length, magic, map) into this one. */
+	public void readFromParcel(Parcel parcel) {
+		readFromParcelInner(parcel, parcel.readInt());
+		mAllowFds = true;
+		mFdsKnown = false;
+	}
+@@@
+	public int describeContents() {
+		int mask = 0;
+		/*       if (hasFileDescriptors()) {
+			   mask |= Parcelable.CONTENTS_FILE_DESCRIPTOR;
+		       }*/
+		return mask;
+	}
+===
+	public int describeContents() {
+		int mask = 0;
+		if (hasFileDescriptors()) {
+			mask |= Parcelable.CONTENTS_FILE_DESCRIPTOR;
+		}
+		return mask;
+	}
+@@@
+	     return mHasFds;*/
+		return false;
+	}
+===
+	     return mHasFds;*/
+		// AOSP walks the values (Parcel.hasFileDescriptors) and caches the answer until a put; the
+		// put methods here do not track it, so the walk is done on each call
+		return mapHasFileDescriptors();
+	}

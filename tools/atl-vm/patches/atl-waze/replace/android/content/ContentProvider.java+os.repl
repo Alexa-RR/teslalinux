@@ -1,0 +1,20 @@
+@@@
+	public Context getContext() {
+		return ATLLoadedApp.getPrimaryApplication().getApplication();
+	}
+===
+	/** AOSP: the context given to attachInfo (the app's; before that, null on Android). */
+	public Context getContext() {
+		return tlContext != null ? tlContext : ATLLoadedApp.getPrimaryApplication().getApplication();
+	}
+@@@
+	public void attachInfo(Context context, ProviderInfo provider) {}
+===
+	/**
+	 * AOSP: attaches the context and the manifest's permissions, export flag and authorities.
+	 * AOSP calls onCreate() at the end of this; ATL's ATLProvider calls attachInfo and then
+	 * onCreate() itself (the same order), so onCreate is not called a second time here.
+	 */
+	public void attachInfo(Context context, ProviderInfo provider) {
+		tlAttachInfo(context, provider);
+	}

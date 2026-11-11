@@ -1,0 +1,18 @@
+[Unit]
+Description=teslalinux: Android audio (PipeWire sink monitor) -> FLAC fMP4 WebSocket (8080)
+After=teslalinux-pipewire-pulse.service waydroid-session.service teslalinux-atl.service
+Wants=teslalinux-pipewire-pulse.service
+
+[Service]
+User=tesla
+Environment=XDG_RUNTIME_DIR=/run/tesla
+Environment=PULSE_SERVER=unix:/run/tesla/pulse/native
+Environment=TESLALINUX_AUDIO_WS_BIND=127.0.0.1
+Environment=TESLALINUX_AUDIO_WS_PORT=8080
+Environment=TESLALINUX_AUDIO_SOURCE=android.monitor
+ExecStart=/usr/bin/python3 /usr/local/lib/teslalinux/audio.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

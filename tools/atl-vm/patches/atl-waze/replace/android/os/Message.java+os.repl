@@ -1,0 +1,71 @@
+@@@
+public final class Message {
+===
+public final class Message implements Parcelable {
+@@@
+	public int describeContents() {
+		return 0;
+	}
+===
+	public int describeContents() {
+		return 0;
+	}
+
+	/** AOSP: the uid that sent the message through a Messenger, or UID_NONE. */
+	public int sendingUid = UID_NONE;
+	/** AOSP (hidden): the uid the work is attributed to, or UID_NONE. */
+	public int workSourceUid = UID_NONE;
+	/** AOSP (hidden): an unset uid */
+	public static final int UID_NONE = -1;
+
+	/** AOSP: the message for another process (a callback cannot travel, obj only when Parcelable). */
+	public void writeToParcel(Parcel dest, int flags) {
+		if (callback != null) {
+			throw new RuntimeException("Can't marshal callbacks across processes.");
+		}
+		dest.writeInt(what);
+		dest.writeInt(arg1);
+		dest.writeInt(arg2);
+		if (obj != null) {
+			try {
+				Parcelable p = (Parcelable) obj;
+				dest.writeInt(1);
+				dest.writeParcelable(p, flags);
+			} catch (ClassCastException e) {
+				throw new RuntimeException("Can't marshal non-Parcelable objects across processes.");
+			}
+		} else {
+			dest.writeInt(0);
+		}
+		dest.writeLong(when);
+		dest.writeBundle(data);
+		Messenger.writeMessengerOrNullToParcel(replyTo, dest);
+		dest.writeInt(sendingUid);
+		dest.writeInt(workSourceUid);
+	}
+
+	private void readFromParcel(Parcel source) {
+		what = source.readInt();
+		arg1 = source.readInt();
+		arg2 = source.readInt();
+		if (source.readInt() != 0) {
+			obj = source.readParcelable(getClass().getClassLoader(), Parcelable.class);
+		}
+		when = source.readLong();
+		data = source.readBundle();
+		replyTo = Messenger.readMessengerOrNullFromParcel(source);
+		sendingUid = source.readInt();
+		workSourceUid = source.readInt();
+	}
+
+	public static final Parcelable.Creator<Message> CREATOR = new Parcelable.Creator<Message>() {
+		public Message createFromParcel(Parcel source) {
+			Message msg = Message.obtain();
+			msg.readFromParcel(source);
+			return msg;
+		}
+
+		public Message[] newArray(int size) {
+			return new Message[size];
+		}
+	};

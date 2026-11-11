@@ -1,0 +1,833 @@
+@@@
+	public void invalidateDrawable(Drawable drawable) {
+		nativeInvalidate(widget);
+	}
+
+	public void scheduleDrawable(Drawable drawable, Runnable runnable, long time) {
+		postDelayed(runnable, time - SystemClock.uptimeMillis());
+	}
+
+	public void unscheduleDrawable(Drawable drawable, Runnable runnable) {
+		/* TODO */
+	}
+
+	public void unscheduleDrawable(Drawable drawable) {}
+===
+	/**
+	 * AOSP: a drawable of this view changed: its dirty bounds are invalidated (the parent chain
+	 * learns it, so a parent that records its children, such as Compose's AndroidViewHolder, records
+	 * again) and the outline may follow the drawable. The GTK widget is redrawn in any case, since
+	 * ATL views that draw a drawable natively do not all list it in verifyDrawable.
+	 */
+	public void invalidateDrawable(Drawable drawable) {
+		nativeInvalidate(widget);
+		if (verifyDrawable(drawable)) {
+			final android.graphics.Rect dirty = drawable.getDirtyBounds();
+			final int sx = getScrollX(), sy = getScrollY();
+			invalidate(dirty.left + sx, dirty.top + sy, dirty.right + sx, dirty.bottom + sy);
+			tlRebuildOutline();
+		}
+	}
+
+	/**
+	 * AOSP: the drawable's frame runs at the given uptime; the drawable is the token, so that
+	 * unscheduleDrawable(who) removes every pending frame of it (AOSP posts to the Choreographer's
+	 * animation queue with the drawable as token; here the view's main-thread handler).
+	 */
+	public void scheduleDrawable(Drawable drawable, Runnable runnable, long time) {
+		if (verifyDrawable(drawable) && runnable != null)
+			tlMainHandler().postAtTime(runnable, drawable, time);
+	}
+
+	public void unscheduleDrawable(Drawable drawable, Runnable runnable) {
+		if (verifyDrawable(drawable) && runnable != null)
+			tlMainHandler().removeCallbacks(runnable, drawable);
+	}
+
+	public void unscheduleDrawable(Drawable drawable) {
+		if (drawable != null)
+			tlMainHandler().removeCallbacksAndMessages(drawable);
+	}
+@@@
+	public void setPadding(int left, int top, int right, int bottom) {
+		paddingLeft = left;
+===
+	public void setPadding(int left, int top, int right, int bottom) {
+		tlPaddingRelative = false; // AOSP: absolute padding replaces the relative (start/end) one
+		if (tlOutlineProvider == ViewOutlineProvider.PADDED_BOUNDS && (paddingLeft != left || paddingTop != top || paddingRight != right || paddingBottom != bottom))
+			tlPostRebuildOutline();
+		paddingLeft = left;
+@@@
+	public final boolean getLocalVisibleRect(Rect r) { return false; }
+===
+	/** AOSP: the visible part of the view in its own coordinates; false when nothing of it is visible. */
+	public final boolean getLocalVisibleRect(Rect r) {
+		final android.graphics.Point offset = new android.graphics.Point();
+		if (getGlobalVisibleRect(r, offset)) {
+			r.offset(-offset.x, -offset.y);
+			return true;
+		}
+		return false;
+	}
+@@@
+	public boolean performHapticFeedback(int feedbackConstant, int flags) {
+		// arbitrary; TODO: better mimic what AOSP does
+		Vibrator vibrator = (Vibrator)getContext().getSystemService("vibrator");
+		vibrator.vibrate(10);
+		return true; // FIXME why is it not void
+	}
+===
+	/**
+	 * AOSP: haptic feedback for this view. Nothing is performed (false) for NO_HAPTICS, a view that is
+	 * not in a window, or haptics disabled on the view (unless FLAG_IGNORE_VIEW_SETTING); the window
+	 * manager then vibrates the device's vibrator, and reports false when the device has none.
+	 */
+	public boolean performHapticFeedback(int feedbackConstant, int flags) {
+		final int NO_HAPTICS = -1; // HapticFeedbackConstants.NO_HAPTICS
+		final int FLAG_IGNORE_VIEW_SETTING = 0x0001; // HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+		if (feedbackConstant == NO_HAPTICS || !isAttachedToWindow())
+			return false;
+		if ((flags & FLAG_IGNORE_VIEW_SETTING) == 0 && !isHapticFeedbackEnabled())
+			return false;
+		Vibrator vibrator = (Vibrator)getContext().getSystemService("vibrator");
+		if (vibrator == null || !vibrator.hasVibrator())
+			return false;
+		vibrator.vibrate(tlHapticDuration(feedbackConstant));
+		return true;
+	}
+@@@
+	public void postInvalidate() {
+		new Handler(Looper.getMainLooper()).post(new Runnable() {
+			@Override
+			public void run() {
+				invalidate();
+			}
+		});
+	}
+
+	public void postInvalidate(final int left, final int top, final int right, final int bottom) {
+		new Handler(Looper.getMainLooper()).post(new Runnable() {
+			@Override
+			public void run() {
+				invalidate(left, top, right, bottom);
+			}
+		});
+	}
+===
+	/** AOSP: invalidate() from any thread, on the next event loop pass */
+	public void postInvalidate() {
+		postInvalidateDelayed(0);
+	}
+
+	/** AOSP: invalidate(l, t, r, b) from any thread, on the next event loop pass */
+	public void postInvalidate(final int left, final int top, final int right, final int bottom) {
+		postInvalidateDelayed(0, left, top, right, bottom);
+	}
+
+	/** AOSP: invalidate() after delayMilliseconds (from any thread) */
+	public void postInvalidateDelayed(long delayMilliseconds) {
+		tlMainHandler().postDelayed(new Runnable() {
+			@Override
+			public void run() {
+				invalidate();
+			}
+		}, delayMilliseconds);
+	}
+
+	/** AOSP: invalidate(l, t, r, b) after delayMilliseconds (from any thread) */
+	public void postInvalidateDelayed(long delayMilliseconds, final int left, final int top, final int right, final int bottom) {
+		tlMainHandler().postDelayed(new Runnable() {
+			@Override
+			public void run() {
+				invalidate(left, top, right, bottom);
+			}
+		}, delayMilliseconds);
+	}
+@@@
+	public void layout(int l, int t, int r, int b) {
+		this.left = l;
+===
+	public void layout(int l, int t, int r, int b) {
+		tlLayoutDepth++;
+		try {
+			tlLayoutImpl(l, t, r, b);
+		} finally {
+			tlLayoutDepth--;
+		}
+		tlLaidOut = true;
+		tlFrameMaybeChanged();
+		tlAnimAfterLayout();
+	}
+
+	private void tlLayoutImpl(int l, int t, int r, int b) {
+		this.left = l;
+@@@
+	private void layoutInternal(int width, int height) {
+		// if the layout is triggered from a native widget, we might not have measured yet
+===
+	private void layoutInternal(int width, int height) {
+		tlLayoutDepth++;
+		try {
+			tlLayoutInternalImpl(width, height);
+		} finally {
+			tlLayoutDepth--;
+		}
+		tlLaidOut = true;
+		tlFrameMaybeChanged();
+		tlAnimAfterLayout();
+	}
+
+	private void tlLayoutInternalImpl(int width, int height) {
+		// if the layout is triggered from a native widget, we might not have measured yet
+@@@
+	public void setBackgroundDrawable(Drawable backgroundDrawable) {
+		this.background = backgroundDrawable;
+===
+	public void setBackgroundDrawable(Drawable backgroundDrawable) {
+		if (this.background != backgroundDrawable)
+			tlPostRebuildOutline();
+		this.background = backgroundDrawable;
+@@@
+	public void setWillNotDraw(boolean value) {}
+===
+	/** AOSP: WILL_NOT_DRAW, the view promises it draws nothing itself (drawing skips onDraw) */
+	public void setWillNotDraw(boolean value) {
+		tlWillNotDraw = value;
+	}
+@@@
+	public void setSaveFromParentEnabled(boolean enabled) {}
+===
+	/** AOSP: whether the parent's dispatchSaveInstanceState/dispatchRestoreInstanceState reach this view */
+	public void setSaveFromParentEnabled(boolean enabled) {
+		tlSaveFromParentEnabled = enabled;
+	}
+@@@
+	public boolean hasFocusable() { return false; }
+===
+	/**
+	 * AOSP: whether this view (a ViewGroup: or a descendant) can take focus: visible, enabled and
+	 * focusable (auto focusability included, as for apps targeting O and later).
+	 */
+	public boolean hasFocusable() {
+		if (getVisibility() != VISIBLE || !isEnabled())
+			return false;
+		return isFocusable();
+	}
+@@@
+	protected boolean awakenScrollBars() { return false; }
+===
+	/**
+	 * AOSP: shows the scroll bars for a while; false when no scroll bar is drawn (the view has none
+	 * enabled), which tells callers to invalidate themselves. Scroll bars are not drawn on this
+	 * platform yet (TODO-real), so the scroll bars never awaken and callers redraw the view.
+	 */
+	protected boolean awakenScrollBars() {
+		return false;
+	}
+@@@
+	public void saveHierarchyState(SparseArray<Parcelable> array) {}
+===
+	/** AOSP: stores the frozen state of this view (and, for a ViewGroup, its children) in container */
+	public void saveHierarchyState(SparseArray<Parcelable> array) {
+		dispatchSaveInstanceState(array);
+	}
+
+	/** AOSP: a view with an id and saving enabled stores onSaveInstanceState() under its id */
+	protected void dispatchSaveInstanceState(SparseArray<Parcelable> container) {
+		if (getId() != NO_ID && tlSaveEnabled) {
+			Parcelable state = onSaveInstanceState();
+			if (state != null) {
+				container.put(getId(), state);
+			}
+		}
+	}
+
+	/** AOSP: the view with an id gets back the state stored under it */
+	protected void dispatchRestoreInstanceState(SparseArray<Parcelable> container) {
+		if (getId() != NO_ID) {
+			Parcelable state = container.get(getId());
+			if (state != null) {
+				onRestoreInstanceState(state);
+			}
+		}
+	}
+@@@
+	public void playSoundEffect(int soundConstant) {}
+===
+	/**
+	 * AOSP: plays a sound effect for this view when it is in a window and its sound effects are
+	 * enabled; the window passes it to AudioManager.playSoundEffect, which plays it when the system's
+	 * sound effects are on.
+	 */
+	public void playSoundEffect(int soundConstant) {
+		if (!isAttachedToWindow() || !isSoundEffectsEnabled())
+			return;
+		android.media.AudioManager am = (android.media.AudioManager)getContext().getSystemService(Context.AUDIO_SERVICE);
+		if (am != null)
+			am.playSoundEffect(soundConstant);
+	}
+@@@
+	public void jumpDrawablesToCurrentState() {}
+===
+	/** AOSP: the background (and foreground) skip their state-change animations */
+	public void jumpDrawablesToCurrentState() {
+		final Drawable bg = getBackground();
+		if (bg != null)
+			bg.jumpToCurrentState();
+		final Drawable fg = getForeground();
+		if (fg != null)
+			fg.jumpToCurrentState();
+	}
+@@@
+	public boolean willNotDraw() { return false; }
+===
+	public boolean willNotDraw() { return tlWillNotDraw; }
+@@@
+	public boolean isLaidOut() { return true; }
+===
+	/** AOSP: the view went through at least one layout since it was last attached to a window */
+	public boolean isLaidOut() { return tlLaidOut; }
+@@@
+	public void setPaddingRelative(int start, int top, int end, int bottom) {}
+===
+	/** AOSP: start/end padding; the layout direction is always LTR here, so start is left */
+	public void setPaddingRelative(int start, int top, int end, int bottom) {
+		setPadding(start, top, end, bottom);
+		tlPaddingRelative = true;
+	}
+@@@
+	public void setClipToOutline(boolean clipToOutline) {}
+
+	public boolean hasTransientState() { return false; }
+===
+	/** AOSP: the view's drawing (background included) is clipped to its outline */
+	public void setClipToOutline(boolean clipToOutline) {
+		if (tlClipToOutline == clipToOutline)
+			return;
+		tlClipToOutline = clipToOutline;
+		tlRebuildOutline();
+		invalidate();
+	}
+
+	/** AOSP: transient state (an animation, a selection being edited) is counted; true while held */
+	public boolean hasTransientState() { return tlTransientStateCount > 0; }
+@@@
+	public ViewOutlineProvider getOutlineProvider() { return new ViewOutlineProvider(); }
+	public void setOutlineProvider(ViewOutlineProvider provider) {}
+===
+	/** AOSP: ViewOutlineProvider.BACKGROUND unless set */
+	public ViewOutlineProvider getOutlineProvider() { return tlOutlineProvider; }
+	public void setOutlineProvider(ViewOutlineProvider provider) {
+		tlOutlineProvider = provider;
+		invalidateOutline();
+	}
+@@@
+	public boolean isPaddingRelative() { return false; }
+===
+	/** AOSP: the padding was set as start/end (setPaddingRelative, paddingStart/End attributes) */
+	public boolean isPaddingRelative() { return tlPaddingRelative; }
+@@@
+	public void invalidateOutline() {}
+===
+	/** AOSP: the outline provider is asked again (size, padding or drawable changed) */
+	public void invalidateOutline() {
+		tlRebuildOutline();
+		invalidate();
+	}
+@@@
+	public boolean hasOnClickListeners() { return false; }
+===
+	/** AOSP: an OnClickListener is attached */
+	public boolean hasOnClickListeners() { return on_click_listener != null; }
+@@@
+	public void setHapticFeedbackEnabled(boolean hapticFeedbackEnabled) {}
+===
+	/** AOSP: haptic feedback for events such as long presses (on by default) */
+	public void setHapticFeedbackEnabled(boolean hapticFeedbackEnabled) {
+		tlHapticFeedbackEnabled = hapticFeedbackEnabled;
+	}
+@@@
+	public void setHorizontalFadingEdgeEnabled(boolean horizontalFadingEdgeEnabled) {}
+===
+	/** AOSP: the horizontal edges fade when the view is scrolled (state; drawing is TODO-real) */
+	public void setHorizontalFadingEdgeEnabled(boolean horizontalFadingEdgeEnabled) {
+		tlHorizontalFadingEdge = horizontalFadingEdgeEnabled;
+		if (horizontalFadingEdgeEnabled && tlFadingEdgeLength < 0)
+			tlFadingEdgeLength = ViewConfiguration.get(getContext()).getScaledFadingEdgeLength();
+	}
+@@@
+	public void setClipBounds(Rect clipBounds) {}
+===
+	/** AOSP: the view (background included) draws only inside clipBounds; null removes the clip */
+	public void setClipBounds(Rect clipBounds) {
+		if (clipBounds == tlClipBounds || (clipBounds != null && clipBounds.equals(tlClipBounds)))
+			return;
+		if (clipBounds != null) {
+			if (tlClipBounds == null)
+				tlClipBounds = new Rect(clipBounds);
+			else
+				tlClipBounds.set(clipBounds);
+		} else {
+			tlClipBounds = null;
+		}
+		tlNativeClipBounds();
+		invalidate();
+	}
+@@@
+	public boolean getClipToOutline() { return false; }
+===
+	public boolean getClipToOutline() { return tlClipToOutline; }
+@@@
+	public boolean requestRectangleOnScreen(Rect rectangle, boolean immediate) { return false; }
+
+	public boolean requestRectangleOnScreen(Rect rectangle) { return false; }
+===
+	/**
+	 * AOSP: asks the ancestors to scroll so that rectangle (in this view's coordinates) is visible;
+	 * each parent gets it in its child's coordinates. True when one of them scrolled.
+	 */
+	public boolean requestRectangleOnScreen(Rect rectangle, boolean immediate) {
+		View child = this;
+		ViewParent parent = getParent();
+		android.graphics.RectF position = new android.graphics.RectF(rectangle);
+		boolean scrolled = false;
+		while (parent != null) {
+			rectangle.set((int)position.left, (int)position.top, (int)position.right, (int)position.bottom);
+			// ATL's ViewParent interface lacks requestChildRectangleOnScreen; its groups have it, and the
+			// window root (AOSP ViewRootImpl: scrolls only for the soft input) has nothing to scroll
+			if (parent instanceof ViewGroup)
+				scrolled |= ((ViewGroup)parent).requestChildRectangleOnScreen(child, rectangle, immediate);
+			if (!(parent instanceof View))
+				break;
+			// move it from child's content coordinate space to parent's content coordinate space
+			position.offset(child.getLeft() - child.getScrollX(), child.getTop() - child.getScrollY());
+			child = (View)parent;
+			parent = child.getParent();
+		}
+		return scrolled;
+	}
+
+	public boolean requestRectangleOnScreen(Rect rectangle) {
+		return requestRectangleOnScreen(rectangle, false);
+	}
+@@@
+	public IBinder getApplicationWindowToken() { return null; }
+===
+	/**
+	 * AOSP: the token of the application window this view is attached to (a panel's or dialog's
+	 * parent window token), null when detached. All views of the app window share the window token.
+	 */
+	public IBinder getApplicationWindowToken() {
+		return isAttachedToWindow() ? getWindowToken() : null;
+	}
+@@@
+	public int getVerticalFadingEdgeLength() { return 0; }
+===
+	/** AOSP: the fading edge length when vertical fading edges are enabled, else 0 */
+	public int getVerticalFadingEdgeLength() {
+		return tlVerticalFadingEdge ? Math.max(tlFadingEdgeLength, 0) : 0;
+	}
+@@@
+	public void setHasTransientState(boolean hasTransientState) {}
+===
+	/** AOSP: a nested count: every true must be matched by a false */
+	public void setHasTransientState(boolean hasTransientState) {
+		final int oldCount = tlTransientStateCount;
+		tlTransientStateCount = hasTransientState ? tlTransientStateCount + 1 : tlTransientStateCount - 1;
+		if (tlTransientStateCount < 0) {
+			tlTransientStateCount = 0;
+			android.util.Log.e("View", "hasTransientState decremented below 0: unmatched pair of setHasTransientState calls");
+		}
+		// AOSP also tells the parent (ViewParent.childHasTransientStateChanged), which ATL's groups lack
+	}
+@@@
+	public void setScrollX(int value) {
+		this.scrollX = value;
+	}
+	public void setScrollY(int value) {
+		this.scrollY = value;
+	}
+===
+	/** AOSP: scrollTo(value, scrollY) */
+	public void setScrollX(int value) {
+		scrollTo(value, scrollY);
+	}
+	/** AOSP: scrollTo(scrollX, value) */
+	public void setScrollY(int value) {
+		scrollTo(scrollX, value);
+	}
+@@@
+	public void getFocusedRect(Rect r) {}
+===
+	/** AOSP: the focused area of the view, its drawing rect (scrolled bounds) by default */
+	public void getFocusedRect(Rect r) {
+		getDrawingRect(r);
+	}
+@@@
+	public void setVerticalFadingEdgeEnabled(boolean verticalFadingEdgeEnabled) {}
+===
+	/** AOSP: the vertical edges fade when the view is scrolled (state; drawing is TODO-real) */
+	public void setVerticalFadingEdgeEnabled(boolean verticalFadingEdgeEnabled) {
+		tlVerticalFadingEdge = verticalFadingEdgeEnabled;
+		if (verticalFadingEdgeEnabled && tlFadingEdgeLength < 0)
+			tlFadingEdgeLength = ViewConfiguration.get(getContext()).getScaledFadingEdgeLength();
+	}
+@@@
+	public void setFadingEdgeLength(int length) {}
+===
+	/** AOSP: the fading edge length in pixels */
+	public void setFadingEdgeLength(int length) {
+		tlFadingEdgeLength = length;
+	}
+@@@
+	public boolean isOpaque() { return false; }
+===
+	/**
+	 * AOSP: the view fills its bounds with opaque content: an opaque background, full alpha (no
+	 * scroll bars are drawn over the padding here).
+	 */
+	public boolean isOpaque() {
+		final Drawable bg = getBackground();
+		return bg != null && bg.getOpacity() == android.graphics.PixelFormat.OPAQUE && getAlpha() >= 1.0f;
+	}
+@@@
+	public android.graphics.Rect getClipBounds() { return null; }
+	public boolean getClipBounds(android.graphics.Rect outRect) { return false; }
+===
+	/** AOSP: a copy of the clip bounds, null when there are none */
+	public android.graphics.Rect getClipBounds() { return tlClipBounds != null ? new Rect(tlClipBounds) : null; }
+	/** AOSP: the clip bounds into outRect; false when there are none */
+	public boolean getClipBounds(android.graphics.Rect outRect) {
+		if (tlClipBounds != null) {
+			outRect.set(tlClipBounds);
+			return true;
+		}
+		return false;
+	}
+@@@
+	public void dispatchStartTemporaryDetach() {}
+	public void dispatchFinishTemporaryDetach() {}
+	public void dispatchConfigurationChanged(android.content.res.Configuration newConfig) {}
+	public void drawableHotspotChanged(float x, float y) {}
+===
+	/** AOSP: the view is about to be detached temporarily (a list recycling it); a ViewGroup forwards it */
+	public void dispatchStartTemporaryDetach() {
+		tlTemporarilyDetached = true;
+		onStartTemporaryDetach();
+	}
+	/** AOSP: the temporary detach is over */
+	public void dispatchFinishTemporaryDetach() {
+		tlTemporarilyDetached = false;
+		onFinishTemporaryDetach();
+	}
+	/** AOSP: the configuration reaches onConfigurationChanged (a ViewGroup forwards it to its children) */
+	public void dispatchConfigurationChanged(android.content.res.Configuration newConfig) {
+		onConfigurationChanged(newConfig);
+	}
+	/** AOSP: the hotspot moved (a touch): the background and foreground ripples follow it */
+	public void drawableHotspotChanged(float x, float y) {
+		final Drawable bg = getBackground();
+		if (bg != null)
+			bg.setHotspot(x, y);
+		final Drawable fg = getForeground();
+		if (fg != null)
+			fg.setHotspot(x, y);
+		dispatchDrawableHotspotChanged(x, y);
+	}
+@@@
+	public void setLayerType(int layerType, Paint paint) {}
+===
+	/**
+	 * AOSP: the view renders into an offscreen layer of the given type, composited with the layer
+	 * paint's alpha, mode and colour filter.
+	 */
+	public void setLayerType(int layerType, Paint paint) {
+		if (layerType < LAYER_TYPE_NONE || layerType > LAYER_TYPE_HARDWARE) {
+			throw new IllegalArgumentException("Layer type can only be one of: LAYER_TYPE_NONE, LAYER_TYPE_SOFTWARE or LAYER_TYPE_HARDWARE");
+		}
+		if (layerType == tlLayerType) {
+			setLayerPaint(paint);
+			return;
+		}
+		tlLayerType = layerType;
+		mLayerPaint = layerType == LAYER_TYPE_NONE ? null : paint;
+		invalidate();
+	}
+@@@
+			setDuplicateParentStateEnabled(a.getBoolean(com.android.internal.R.styleable.View_duplicateParentState, false));
+===
+			setDuplicateParentStateEnabled(a.getBoolean(com.android.internal.R.styleable.View_duplicateParentState, false));
+		tlVcoreReadAttrs(a);
+@@@
+	public void setSaveEnabled(boolean enabled) {}
+===
+	/** AOSP: whether dispatchSaveInstanceState stores this view's state (on by default) */
+	public void setSaveEnabled(boolean enabled) {
+		tlSaveEnabled = enabled;
+	}
+@@@
+	public boolean isInLayout() {
+		return false; // FIXME
+	}
+===
+	/** AOSP: a layout pass of the window is running (here: a layout() or layoutInternal() is on the stack) */
+	public boolean isInLayout() {
+		return tlLayoutDepth > 0;
+	}
+@@@
+	public void setScrollContainer(boolean isScrollContainer) {}
+===
+	/** AOSP: a scroll container may be resized for the soft input window */
+	public void setScrollContainer(boolean isScrollContainer) {
+		tlScrollContainer = isScrollContainer;
+	}
+@@@
+	public void setHorizontalScrollBarEnabled(boolean enabled) {}
+
+	public void setVerticalScrollBarEnabled(boolean enabled) {}
+===
+	/** AOSP: the horizontal scroll bar is drawn when the view scrolls (state; drawing is TODO-real) */
+	public void setHorizontalScrollBarEnabled(boolean enabled) {
+		tlHorizontalScrollBar = enabled;
+	}
+
+	/** AOSP: the vertical scroll bar is drawn when the view scrolls (state; drawing is TODO-real) */
+	public void setVerticalScrollBarEnabled(boolean enabled) {
+		tlVerticalScrollBar = enabled;
+	}
+@@@
+	public void setScrollBarStyle(int style) {}
+===
+	/** AOSP: where the scroll bars sit (inside/outside the padding, overlay/inset) */
+	public void setScrollBarStyle(int style) {
+		tlScrollBarStyle = style & SCROLLBARS_STYLE_MASK;
+	}
+@@@
+	protected void onDetachedFromWindow() {
+===
+	protected void onDetachedFromWindow() {
+		tlLaidOut = false; // AOSP dispatchDetachedFromWindow clears PFLAG3_IS_LAID_OUT
+@@@
+	public void setNextFocusLeftId(int id) {}
+
+	public void setNextFocusRightId(int id) {}
+
+	public void setNextFocusDownId(int id) {}
+
+	public void setNextFocusUpId(int id) {}
+===
+	/** AOSP: the view focused by FOCUS_LEFT from this one (attribute nextFocusLeft) */
+	public void setNextFocusLeftId(int id) { tlNextFocusLeftId = id; }
+
+	/** AOSP: the view focused by FOCUS_RIGHT from this one (attribute nextFocusRight) */
+	public void setNextFocusRightId(int id) { tlNextFocusRightId = id; }
+
+	/** AOSP: the view focused by FOCUS_DOWN from this one (attribute nextFocusDown) */
+	public void setNextFocusDownId(int id) { tlNextFocusDownId = id; }
+
+	/** AOSP: the view focused by FOCUS_UP from this one (attribute nextFocusUp) */
+	public void setNextFocusUpId(int id) { tlNextFocusUpId = id; }
+@@@
+	public final boolean isKeyboardNavigationCluster() { return false; }
+
+	public void setKeyboardNavigationCluster(boolean isCluster) {}
+===
+	/** AOSP: the view is the root of a keyboard navigation cluster (attribute keyboardNavigationCluster) */
+	public final boolean isKeyboardNavigationCluster() { return tlKeyboardNavigationCluster; }
+
+	public void setKeyboardNavigationCluster(boolean isCluster) {
+		tlKeyboardNavigationCluster = isCluster;
+	}
+@@@
+	public void addTouchables(java.util.ArrayList<View> views) {}
+===
+	/** AOSP: an enabled clickable, long-clickable or context-clickable view is a touchable */
+	public void addTouchables(java.util.ArrayList<View> views) {
+		if ((isClickable() || isLongClickable() || isContextClickable()) && isEnabled()) {
+			views.add(this);
+		}
+	}
+
+	/** AOSP: the touchable views of this view (and, for a ViewGroup, its descendants) */
+	public ArrayList<View> getTouchables() {
+		ArrayList<View> result = new ArrayList<View>();
+		addTouchables(result);
+		return result;
+	}
+@@@
+	public ArrayList<View> getFocusables(int direction) { return new ArrayList<View>(); }
+===
+	/** AOSP: the focusable views of this view (and, for a ViewGroup, its descendants) for a direction */
+	public ArrayList<View> getFocusables(int direction) {
+		ArrayList<View> result = new ArrayList<View>(24);
+		addFocusables(result, direction);
+		return result;
+	}
+@@@
+	public void addKeyboardNavigationClusters(java.util.Collection<View> views, int direction) {}
+===
+	/** AOSP: a cluster root with something focusable adds itself */
+	public void addKeyboardNavigationClusters(java.util.Collection<View> views, int direction) {
+		if (!isKeyboardNavigationCluster())
+			return;
+		if (!hasFocusable())
+			return;
+		views.add(this);
+	}
+@@@
+	public View keyboardNavigationClusterSearch(View currentCluster, int direction) { return null; }
+===
+	/**
+	 * AOSP: the next keyboard navigation cluster after currentCluster; AOSP walks up to the root
+	 * namespace (the window's decor), which asks the FocusFinder over the whole window.
+	 */
+	public View keyboardNavigationClusterSearch(View currentCluster, int direction) {
+		if (isKeyboardNavigationCluster())
+			currentCluster = this;
+		return FocusFinder.getInstance().findNextKeyboardNavigationCluster(getRootView(), currentCluster, direction);
+	}
+@@@
+	public boolean isFocusedByDefault() { return false; }
+	public void setFocusedByDefault(boolean isFocusedByDefault) {}
+===
+	/** AOSP: this view takes focus when its window (or a group's restoreDefaultFocus) picks a default */
+	public boolean isFocusedByDefault() { return tlFocusedByDefault; }
+	public void setFocusedByDefault(boolean isFocusedByDefault) {
+		tlFocusedByDefault = isFocusedByDefault;
+	}
+@@@
+	public void setOnCreateContextMenuListener(View.OnCreateContextMenuListener l) {}
+===
+	/** AOSP: the listener fills the context menu shown on a long press, which makes the view long-clickable */
+	public void setOnCreateContextMenuListener(View.OnCreateContextMenuListener l) {
+		if (!isLongClickable())
+			setLongClickable(true);
+		tlOnCreateContextMenuListener = l;
+	}
+@@@
+	public final void cancelPendingInputEvents() {}
+===
+	/** AOSP: drops the click and long press this view has pending from earlier input */
+	public final void cancelPendingInputEvents() {
+		dispatchCancelPendingInputEvents();
+	}
+
+	void dispatchCancelPendingInputEvents() {
+		onCancelPendingInputEvents();
+	}
+
+	/** AOSP: removes the pending tap/long-press checks (and a pending click) */
+	public void onCancelPendingInputEvents() {
+		removeTapCallback();
+		removeLongPressCallback();
+	}
+@@@
+	public void setAccessibilityLiveRegion(int mode) {}
+===
+	/** AOSP: how accessibility services hear about changes of this view (stored; no service here) */
+	public void setAccessibilityLiveRegion(int mode) {
+		tlAccessibilityLiveRegion = mode;
+	}
+@@@
+	public void setScrollIndicators(int indicators, int mask) {}
+===
+	/** AOSP: the scroll indicators in mask are set to indicators (drawing is TODO-real, like scroll bars) */
+	public void setScrollIndicators(int indicators, int mask) {
+		mask &= SCROLL_INDICATORS_ALL;
+		indicators &= mask;
+		tlScrollIndicators = (tlScrollIndicators & ~mask) | indicators;
+	}
+@@@
+	public String getTransitionName() { return null; }
+===
+	/** AOSP: the name that identifies the view in a shared element transition */
+	public String getTransitionName() { return tlTransitionName; }
+@@@
+	public void setTransitionName(String transitionName) {}
+===
+	public void setTransitionName(String transitionName) {
+		tlTransitionName = transitionName;
+	}
+@@@
+	public void setDefaultFocusHighlightEnabled(boolean enabled) {}
+===
+	/** AOSP: whether a focused view without a focused state drawable gets the default highlight */
+	public void setDefaultFocusHighlightEnabled(boolean enabled) {
+		tlDefaultFocusHighlightEnabled = enabled;
+	}
+
+	public boolean getDefaultFocusHighlightEnabled() {
+		return tlDefaultFocusHighlightEnabled;
+	}
+@@@
+	public void setAccessibilityPaneTitle(CharSequence paneTitle) {}
+
+	public void setAccessibilityHeading(boolean heading) {}
+===
+	/** AOSP: the view is an accessibility pane with this title (stored; no accessibility service here) */
+	public void setAccessibilityPaneTitle(CharSequence paneTitle) {
+		tlAccessibilityPaneTitle = paneTitle;
+	}
+
+	/** AOSP: the view is a heading for accessibility (stored; no accessibility service here) */
+	public void setAccessibilityHeading(boolean heading) {
+		tlAccessibilityHeading = heading;
+	}
+@@@
+	public int getAccessibilityLiveRegion() { return 0; }
+===
+	public int getAccessibilityLiveRegion() { return tlAccessibilityLiveRegion; }
+@@@
+	public void setLabelFor(int id) {}
+===
+	/** AOSP: the id of the view this one labels for accessibility */
+	public void setLabelFor(int id) {
+		tlLabelFor = id;
+	}
+@@@
+	public CharSequence getAccessibilityPaneTitle() { return null; }
+	public CharSequence getStateDescription() { return null; }
+	public void setStateDescription(CharSequence stateDescription) {}
+===
+	public CharSequence getAccessibilityPaneTitle() { return tlAccessibilityPaneTitle; }
+	/** AOSP: the state text accessibility announces (a switch's "on"); stored, no service here */
+	public CharSequence getStateDescription() { return tlStateDescription; }
+	public void setStateDescription(CharSequence stateDescription) {
+		tlStateDescription = stateDescription;
+	}
+@@@
+	public boolean isAccessibilityHeading() { return false; }
+===
+	public boolean isAccessibilityHeading() { return tlAccessibilityHeading; }
+@@@
+	public java.util.List<android.graphics.Rect> getSystemGestureExclusionRects() { return new java.util.ArrayList<>(); }
+	public void setSystemGestureExclusionRects(java.util.List<android.graphics.Rect> rects) {}
+	public java.util.List<android.graphics.Rect> getPreferKeepClearRects() { return new java.util.ArrayList<>(); }
+	public void setPreferKeepClearRects(java.util.List<android.graphics.Rect> rects) {}
+	public int getScrollIndicators() { return 0; }
+	public void setScrollIndicators(int indicators) {}
+	public int getLabelFor() { return -1; }
+===
+	/**
+	 * AOSP: areas where the app takes the system's back/edge gestures for itself; kept as AOSP keeps
+	 * them (the window has no system gestures on this platform, so nothing is excluded from any).
+	 */
+	public java.util.List<android.graphics.Rect> getSystemGestureExclusionRects() {
+		return tlGestureExclusionRects != null ? new java.util.ArrayList<>(tlGestureExclusionRects) : java.util.Collections.<android.graphics.Rect>emptyList();
+	}
+	public void setSystemGestureExclusionRects(java.util.List<android.graphics.Rect> rects) {
+		tlGestureExclusionRects = rects == null || rects.isEmpty() ? null : new java.util.ArrayList<>(rects);
+	}
+	/** AOSP: areas floating windows should keep clear of (kept; no floating system windows here) */
+	public java.util.List<android.graphics.Rect> getPreferKeepClearRects() {
+		return tlKeepClearRects != null ? new java.util.ArrayList<>(tlKeepClearRects) : java.util.Collections.<android.graphics.Rect>emptyList();
+	}
+	public void setPreferKeepClearRects(java.util.List<android.graphics.Rect> rects) {
+		tlKeepClearRects = rects == null || rects.isEmpty() ? null : new java.util.ArrayList<>(rects);
+	}
+	public int getScrollIndicators() { return tlScrollIndicators; }
+	/** AOSP: the scroll indicators shown (SCROLL_INDICATOR_* bits) */
+	public void setScrollIndicators(int indicators) {
+		setScrollIndicators(indicators, SCROLL_INDICATORS_ALL);
+	}
+	public int getLabelFor() { return tlLabelFor; }

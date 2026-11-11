@@ -1,0 +1,158 @@
+@@@
+	public Path(Path path) {
+		this.path = native_ref_path(path.getGskPath());
+	}
+===
+	public Path(Path path) {
+		this.path = native_ref_path(path.getGskPath());
+		this.fillType = path.fillType; // AOSP copies the fill type with the geometry
+	}
+@@@
+	public void arcTo(float left, float top, float right, float bottom, float startAngle, float sweepAngle, boolean forceMoveTo) {
+		native_arc_to(getBuilder(), left, top, right, bottom, startAngle, sweepAngle, forceMoveTo);
+	}
+===
+	public void arcTo(float left, float top, float right, float bottom, float startAngle, float sweepAngle, boolean forceMoveTo) {
+		// Skia joins the arc to the current contour with a line, except on an empty path (no verbs
+		// since construction or reset), where the arc starts the path with a move: the native
+		// builder's current point is then (0,0), and the joining line drew a stroke from the view's
+		// corner to the arc (Waze's speedometer ring got a stray diagonal)
+		if (builder == 0 && path == 0)
+			forceMoveTo = true;
+		// the native arc is an SVG arc between its end points, which is empty for a full turn (equal
+		// end points); Skia draws the whole oval for |sweep| >= 360, so a full turn is two half arcs
+		if (Math.abs(sweepAngle) >= 360f) {
+			float half = sweepAngle > 0 ? 180f : -180f;
+			native_arc_to(getBuilder(), left, top, right, bottom, startAngle, half, forceMoveTo);
+			native_arc_to(getBuilder(), left, top, right, bottom, startAngle + half, half, false);
+			return;
+		}
+		native_arc_to(getBuilder(), left, top, right, bottom, startAngle, sweepAngle, forceMoveTo);
+	}
+@@@
+	public void addArc(float left, float top, float right, float bottom, float startAngle, float sweepAngle) {
+		native_add_arc(getBuilder(), left, top, right, bottom, startAngle, sweepAngle);
+	}
+===
+	public void addArc(float left, float top, float right, float bottom, float startAngle, float sweepAngle) {
+		if (Math.abs(sweepAngle) >= 360f) {
+			// Skia: a full turn adds the oval, starting at the start angle
+			arcTo(left, top, right, bottom, startAngle, sweepAngle, true);
+			return;
+		}
+		native_add_arc(getBuilder(), left, top, right, bottom, startAngle, sweepAngle);
+	}
+@@@
+	public void addRect(float left, float top, float right, float bottom, Path.Direction dir) {
+		native_add_rect(getBuilder(), left, top, right, bottom);
+	}
+===
+	public void addRect(float left, float top, float right, float bottom, Path.Direction dir) {
+		if (dir == Direction.CCW) {
+			Path cw = new Path();
+			cw.addRect(left, top, right, bottom, Direction.CW);
+			native_add_reverse_path(getBuilder(), cw.getGskPath());
+			return;
+		}
+		native_add_rect(getBuilder(), left, top, right, bottom);
+	}
+@@@
+	public void addRoundRect(float left, float top, float right, float bottom,
+	                         float[] radii, Direction direction) {
+		native_add_round_rect(getBuilder(), left, top, right, bottom, radii);
+	}
+===
+	public void addRoundRect(float left, float top, float right, float bottom,
+	                         float[] radii, Direction direction) {
+		if (radii.length < 8) {
+			throw new ArrayIndexOutOfBoundsException("radii[] needs 8 values");
+		}
+		// Skia (SkRRect::setRectRadii): radii that do not fit are scaled down together
+		float w = Math.abs(right - left), h = Math.abs(bottom - top);
+		float[] r = new float[8];
+		for (int i = 0; i < 8; i++)
+			r[i] = Math.max(0f, radii[i]);
+		double scale = 1.0;
+		scale = tlRadiiScale(scale, r[0], r[2], w);
+		scale = tlRadiiScale(scale, r[1], r[7], h);
+		scale = tlRadiiScale(scale, r[3], r[5], h);
+		scale = tlRadiiScale(scale, r[4], r[6], w);
+		if (scale < 1.0)
+			for (int i = 0; i < 8; i++)
+				r[i] = (float) (r[i] * scale);
+		if (direction == Direction.CCW) {
+			Path cw = new Path();
+			cw.addRoundRect(left, top, right, bottom, r, Direction.CW);
+			native_add_reverse_path(getBuilder(), cw.getGskPath());
+			return;
+		}
+		native_add_round_rect(getBuilder(), left, top, right, bottom, r);
+	}
+
+	private static double tlRadiiScale(double scale, float a, float b, float limit) {
+		if (a + b > limit && a + b > 0)
+			return Math.min(scale, limit / (double) (a + b));
+		return scale;
+	}
+@@@
+	public void transform(Matrix matrix, Path out_path) {
+		if (out_path == null)
+			out_path = this;
+
+		out_path.transform(matrix);
+	}
+===
+	/** AOSP: the transformed path goes into dst (this path is unchanged), or into this path if dst is null. */
+	public void transform(Matrix matrix, Path out_path) {
+		if (out_path == null || out_path == this) {
+			transform(matrix);
+			return;
+		}
+		out_path.set(this);
+		out_path.transform(matrix);
+	}
+@@@
+	public void incReserve(int additionalPoints) {}
+
+	public boolean isConvex() {
+		Log.w("Path", "STUB: isConvex");
+		return false;
+	}
+
+	public void set(Path src) {
+		reset();
+		addPath(src);
+	}
+===
+	/** AOSP: a hint to preallocate point storage. GskPathBuilder grows its storage itself, so there is
+	 * nothing to reserve; the hint has no observable effect on Android either. */
+	public void incReserve(int additionalPoints) {}
+
+	/** AOSP/Skia convexity: one contour whose edges all turn the same way and that winds only once. */
+	public boolean isConvex() {
+		return tlIsConvex(tlOps());
+	}
+
+	/** AOSP: replaces this path's contents (geometry and fill type) with src's. */
+	public void set(Path src) {
+		if (src == this)
+			return;
+		reset();
+		addPath(src);
+		fillType = src.fillType;
+	}
+@@@
+	public void setLastPoint(float x, float y) {
+		Log.w("Path", "STUB: setLastPoint");
+	}
+===
+	/** AOSP: moves the last point of the path (the end of the last segment, or the last moveTo) to (x, y);
+	 * on an empty path it is a moveTo. */
+	public void setLastPoint(float x, float y) {
+		float[] ops = tlOps();
+		if (ops.length == 0) {
+			moveTo(x, y);
+			return;
+		}
+		tlRebuild(ops, ops.length / OP_SIZE - 1, x, y);
+	}

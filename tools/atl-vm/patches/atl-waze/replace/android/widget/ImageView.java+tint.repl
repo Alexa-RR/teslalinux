@@ -1,0 +1,213 @@
+@@@
+		if (a.hasValue(com.android.internal.R.styleable.ImageView_tint))
+			colorFilter = new PorterDuffColorFilter(a.getColor(com.android.internal.R.styleable.ImageView_tint, 0),
+			                                        PorterDuff.Mode.values()[a.getInt(com.android.internal.R.styleable.ImageView_tintMode, PorterDuff.Mode.SRC_IN.nativeInt)]);
+		drawable = a.getDrawable(com.android.internal.R.styleable.ImageView_src);
+		if (drawable != null) {
+			drawable.setCallback(this);
+			if (colorFilter != null)
+				drawable.setColorFilter(colorFilter);
+			native_setDrawable(widget, drawable.paintable);
+		}
+===
+		// AOSP ImageView(Context, AttributeSet, ...): a tint colour state list and its mode (the
+		// attribute's enum values, not PorterDuff.Mode ordinals), the drawable alpha, then the source
+		if (a.hasValue(com.android.internal.R.styleable.ImageView_tint)) {
+			tlDrawableTintList = a.getColorStateList(com.android.internal.R.styleable.ImageView_tint);
+			tlHasDrawableTint = true;
+			// AOSP: a tint without a mode blends SRC_ATOP
+			tlDrawableTintMode = PorterDuff.Mode.SRC_ATOP;
+			tlHasDrawableTintMode = true;
+		}
+		if (a.hasValue(com.android.internal.R.styleable.ImageView_tintMode)) {
+			tlDrawableTintMode = Drawable.parseTintMode(a.getInt(com.android.internal.R.styleable.ImageView_tintMode, -1), tlDrawableTintMode);
+			tlHasDrawableTintMode = true;
+		}
+		final Drawable src = a.getDrawable(com.android.internal.R.styleable.ImageView_src);
+		if (src != null)
+			setImageDrawable(src);
+@@@
+	public void setImageResource(final int resid) {
+		if (this.getResources().getString(resid).endsWith(".xml")) {
+			setImageDrawable(getContext().getDrawable(resid));
+			return;
+		}
+		bitmap = BitmapFactory.decodeResource(this.getResources(), resid);
+		native_setDrawable(widget, bitmap != null ? bitmap.getTexture() : 0);
+	}
+===
+	/** AOSP: the resource becomes the image drawable (a BitmapDrawable for bitmaps), so tint, colour
+	 * filter, state and getDrawable() apply to it like to any other drawable. */
+	public void setImageResource(final int resid) {
+		if (resid == 0) {
+			setImageDrawable(null);
+			return;
+		}
+		if (this.getResources().getString(resid).endsWith(".xml")) {
+			setImageDrawable(getContext().getDrawable(resid));
+			return;
+		}
+		final Bitmap b = BitmapFactory.decodeResource(this.getResources(), resid);
+		setImageDrawable(b != null ? new android.graphics.drawable.BitmapDrawable(getResources(), b) : null);
+	}
+@@@
+	public void setImageDrawable(Drawable drawable) {
+		if (drawable != null && colorFilter != null) {
+			drawable = drawable.mutate();
+			drawable.setColorFilter(colorFilter);
+		}
+		if (this.drawable != null) {
+			this.drawable.setCallback(null);
+		}
+		this.drawable = drawable;
+		if (drawable != null) {
+			drawable.setCallback(this);
+		}
+		native_setDrawable(widget, drawable != null ? drawable.paintable : 0);
+	}
+===
+	/** AOSP updateDrawable(): the new drawable takes the view's state, tint, colour filter and alpha.
+	 * As in AOSP setImageDrawable, a different intrinsic size asks for a new layout and the view is
+	 * invalidated: a parent that records its children's drawing (Compose's AndroidViewHolder, which
+	 * hosts Waze's compass) only re-records on that invalidation, so the new image showed only after
+	 * some unrelated redraw (the compass needle stayed blank). */
+	public void setImageDrawable(Drawable drawable) {
+		final int oldWidth = this.drawable != null ? this.drawable.getIntrinsicWidth() : -1;
+		final int oldHeight = this.drawable != null ? this.drawable.getIntrinsicHeight() : -1;
+		if (this.drawable != null && this.drawable != drawable)
+			this.drawable.setCallback(null);
+		this.drawable = drawable;
+		if (drawable != null) {
+			drawable.setCallback(this);
+			if (drawable.isStateful())
+				drawable.setState(getDrawableState());
+			tlApplyImageTint();
+			tlApplyColorMod();
+			if (this.drawable != drawable)
+				this.drawable.setCallback(this);
+		}
+		mTlAnimActive = false; /* AOSP configureBounds replaces an animateTransform matrix */
+		native_setDrawable(widget, this.drawable != null ? this.drawable.paintable : 0);
+		final int newWidth = this.drawable != null ? this.drawable.getIntrinsicWidth() : -1;
+		final int newHeight = this.drawable != null ? this.drawable.getIntrinsicHeight() : -1;
+		if (oldWidth != newWidth || oldHeight != newHeight)
+			requestLayout();
+		invalidate();
+	}
+@@@
+	public void setImageBitmap(Bitmap bitmap) {
+		native_setDrawable(widget, bitmap != null ? bitmap.getTexture() : 0);
+	}
+===
+	/** AOSP: the bitmap is shown through a BitmapDrawable (getDrawable(), tint and filters apply). */
+	public void setImageBitmap(Bitmap bitmap) {
+		setImageDrawable(bitmap != null ? new android.graphics.drawable.BitmapDrawable(getResources(), bitmap) : null);
+	}
+@@@
+	public final void setColorFilter(int color, PorterDuff.Mode mode) {}
+===
+	public final void setColorFilter(int color, PorterDuff.Mode mode) {
+		setColorFilter(new PorterDuffColorFilter(color, mode));
+	}
+@@@
+	public void setImageTintList(ColorStateList tint) {
+		if (tint == null)
+			colorFilter = null;
+		else
+			colorFilter = new PorterDuffColorFilter(tint.getDefaultColor(), PorterDuff.Mode.SRC_IN);
+		setImageDrawable(drawable);
+	}
+===
+	/** AOSP: the image's tint list, resolved against the drawable state (pressed, selected, ...). */
+	public void setImageTintList(ColorStateList tint) {
+		tlDrawableTintList = tint;
+		tlHasDrawableTint = true;
+		tlRefreshImage();
+	}
+@@@
+	public void setImageAlpha(int alpha) {}
+===
+	public void setImageAlpha(int alpha) {
+		alpha &= 0xFF;
+		if (tlImageAlpha != alpha) {
+			tlImageAlpha = alpha;
+			tlColorMod = true;
+			tlRefreshImage();
+		}
+	}
+@@@
+	public void setImageState(int[] state, boolean merge) {}
+===
+	public void setImageState(int[] state, boolean merge) {
+		tlImageState = state;
+		tlMergeImageState = merge;
+		if (drawable != null)
+			refreshDrawableState();
+	}
+@@@
+	public ColorStateList getImageTintList() {
+		return null;
+	}
+
+	public PorterDuff.Mode getImageTintMode() {
+		return null;
+	}
+
+	public void setImageTintMode(PorterDuff.Mode tintMode) {}
+===
+	public ColorStateList getImageTintList() {
+		return tlDrawableTintList;
+	}
+
+	public PorterDuff.Mode getImageTintMode() {
+		return tlDrawableTintMode;
+	}
+
+	public void setImageTintMode(PorterDuff.Mode tintMode) {
+		tlDrawableTintMode = tintMode;
+		tlHasDrawableTintMode = true;
+		tlRefreshImage();
+	}
+@@@
+	public void setColorFilter(int color) {}
+
+	public void setColorFilter(ColorFilter cf) {}
+===
+	/** AOSP: SRC_ATOP, the colour over the image's opaque pixels */
+	public void setColorFilter(int color) {
+		setColorFilter(color, PorterDuff.Mode.SRC_ATOP);
+	}
+
+	public void setColorFilter(ColorFilter cf) {
+		if (tlColorFilter != cf) {
+			tlColorFilter = cf;
+			tlHasColorFilter = true;
+			tlColorMod = true;
+			tlRefreshImage();
+		}
+	}
+@@@
+	private ColorFilter colorFilter = null;
+===
+	/* colour filter and tint: tlColorFilter / tlDrawableTintList (ImageView.java+tint.frag) */
+@@@
+	public void setScaleType(ScaleType scaleType) {
+		this.scaleType = scaleType;
+		native_setScaleType(widget, scaleType.nativeInt);
+	}
+===
+	/** AOSP: a new scale type changes how the image is laid out and drawn (requestLayout + invalidate) */
+	public void setScaleType(ScaleType scaleType) {
+		if (scaleType == null)
+			throw new NullPointerException();
+		final boolean changed = this.scaleType != scaleType;
+		this.scaleType = scaleType;
+		if (changed)
+			mTlAnimActive = false;
+		/* always told to the widget: its own default is not necessarily the field's initial value */
+		native_setScaleType(widget, scaleType.nativeInt);
+		if (changed) {
+			requestLayout();
+			invalidate();
+		}
+	}

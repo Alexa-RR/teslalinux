@@ -1,0 +1,11 @@
+@@@
+	public static final int myUid() {
+		// HACK: provide wrong Uid, as some applications like Whatsapp don't accept files with their own Uid for security reasons
+		return -1;
+		// return Libcore.os.getuid();
+	}
+===
+	/** AOSP: the uid this process runs as (the framework's UidRange and NetworkRequest reject a negative one). */
+	public static final int myUid() {
+		return Libcore.os.getuid();
+	}

@@ -1,0 +1,35 @@
+@@@
+	public static /*native*/ boolean isLoggable(String tag, int level) { return true; } // should be fiiiine?
+===
+	public static boolean isLoggable(String tag, int level) {
+		// android_util_Log_isLoggable -> __android_log_is_loggable(level, tag, ANDROID_LOG_INFO)
+		if (tag == null)
+			return false;
+		int minimum = tagLevel(android.os.SystemProperties.get("persist.log.tag." + tag));
+		if (minimum < 0)
+			minimum = tagLevel(android.os.SystemProperties.get("log.tag." + tag));
+		if (minimum < 0)
+			minimum = tagLevel(android.os.SystemProperties.get("persist.log.tag"));
+		if (minimum < 0)
+			minimum = tagLevel(android.os.SystemProperties.get("log.tag"));
+		if (minimum < 0)
+			minimum = INFO;
+		return level >= minimum;
+	}
+
+	/** liblog: the priority a log.tag property value names by its first letter, -1 when unset/unknown */
+	private static int tagLevel(String value) {
+		if (value == null || value.isEmpty())
+			return -1;
+		switch (Character.toUpperCase(value.charAt(0))) {
+			case 'V': return VERBOSE;
+			case 'D': return DEBUG;
+			case 'I': return INFO;
+			case 'W': return WARN;
+			case 'E': return ERROR;
+			case 'F': // ANDROID_LOG_FATAL
+			case 'A': return ASSERT;
+			case 'S': return ASSERT + 1; // ANDROID_LOG_SILENT: nothing is loggable
+			default: return -1;
+		}
+	}

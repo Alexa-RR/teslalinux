@@ -1,0 +1,243 @@
+@@@
+	public float getRotation() { return 0.f; }
+===
+	public float getRotation() { return tlRotation; }
+@@@
+	public void clearAnimation() {}
+===
+	/** AOSP: detaches the animation (its end listener fires if it was running) and drops its transformation */
+	public void clearAnimation() {
+		final Animation a = tlAnimation;
+		tlAnimation = null;
+		if (a != null)
+			a.detach();
+		if (tlAnimApplied || tlAnimAlpha != 1f) {
+			tlAnimApplied = false;
+			tlAnimAlpha = 1f;
+			tlAnimTransformation.clear();
+			tlTransformChanged();
+			tlApplyAnimAlpha();
+		}
+	}
+@@@
+	public Animation getAnimation() { return null; }
+===
+	public Animation getAnimation() { return tlAnimation; }
+@@@
+	public void setCameraDistance(float distance) {}
+===
+	/** AOSP: the camera's distance in pixels (positive; the sign is ignored), for rotationX/Y */
+	public void setCameraDistance(float distance) {
+		tlCameraDistance = Math.abs(distance);
+		if (tlRotationX != 0f || tlRotationY != 0f)
+			tlTransformChanged();
+	}
+@@@
+	public void setAnimation(Animation animation) {}
+===
+	/** AOSP: attaches the animation and resets it (it initializes again against this view's size at its
+	 * first frame); it runs from its start time (START_ON_FIRST_FRAME: the next frame). An app may
+	 * start the same Animation object again and again (Waze's progress ring). */
+	public void setAnimation(Animation animation) {
+		if (tlAnimation != null && tlAnimation != animation)
+			clearAnimation();
+		tlAnimation = animation;
+		tlAnimStartReported = false;
+		tlAnimWaitingForLayout = false;
+		if (animation != null) {
+			animation.reset();
+			tlScheduleAnimationFrame();
+		}
+	}
+@@@
+	public void resetPivot() {}
+===
+	public void resetPivot() {
+		if (tlPivotSet) {
+			tlPivotSet = false;
+			tlTransformChanged();
+		}
+	}
+@@@
+	public boolean isPivotSet() { return false; }
+===
+	public boolean isPivotSet() { return tlPivotSet; }
+@@@
+	public Matrix getMatrix() {
+		return Matrix.IDENTITY_MATRIX;
+===
+	public Matrix getMatrix() {
+		tlCheckPivotForSize();
+		final Matrix m = new Matrix();
+		tlPropertyMatrix(m);
+		return m;
+@@@
+	public void startAnimation(Animation animation) {
+		if (animation == null)
+			return;
+		onAnimationStart();
+		animation.start();
+		onAnimationEnd();
+	}
+===
+	/** AOSP: starts the animation on the next frame; the view samples it every frame until it ends */
+	public void startAnimation(Animation animation) {
+		if (animation == null)
+			return;
+		animation.setStartTime(Animation.START_ON_FIRST_FRAME);
+		setAnimation(animation);
+		invalidate();
+	}
+@@@
+	public void setRotation(float rotation) {}
+	public void setRotationX(float deg) {}
+	public void setRotationY(float deg) {}
+
+	public float getRotationX() { return 0.f; }
+	public float getRotationY() { return 0.f; }
+
+	public void setScaleX(float scaleX) {}
+	public void setScaleY(float scaleY) {}
+
+	public float getScaleX() { return 1.f; }
+	public float getScaleY() { return 1.f; }
+
+	public void setPivotX(float pivot_x) {}
+	public void setPivotY(float pivot_y) {}
+
+	public float getPivotX() { return 0.f; }
+	public float getPivotY() { return 0.f; }
+===
+	public void setRotation(float rotation) {
+		if (tlRotation != rotation) {
+			tlRotation = rotation;
+			tlTransformChanged();
+		}
+	}
+
+	public void setRotationX(float deg) {
+		if (tlRotationX != deg) {
+			tlRotationX = deg;
+			tlTransformChanged();
+		}
+	}
+
+	public void setRotationY(float deg) {
+		if (tlRotationY != deg) {
+			tlRotationY = deg;
+			tlTransformChanged();
+		}
+	}
+
+	public float getRotationX() { return tlRotationX; }
+	public float getRotationY() { return tlRotationY; }
+
+	public void setScaleX(float scaleX) {
+		if (tlScaleX != scaleX) {
+			tlScaleX = scaleX;
+			tlTransformChanged();
+		}
+	}
+
+	public void setScaleY(float scaleY) {
+		if (tlScaleY != scaleY) {
+			tlScaleY = scaleY;
+			tlTransformChanged();
+		}
+	}
+
+	public float getScaleX() { return tlScaleX; }
+	public float getScaleY() { return tlScaleY; }
+
+	public void setPivotX(float pivot_x) {
+		if (!tlPivotSet || tlPivotX != pivot_x) {
+			tlPivotSet = true;
+			tlPivotX = pivot_x;
+			tlTransformChanged();
+		}
+	}
+
+	public void setPivotY(float pivot_y) {
+		if (!tlPivotSet || tlPivotY != pivot_y) {
+			tlPivotSet = true;
+			tlPivotY = pivot_y;
+			tlTransformChanged();
+		}
+	}
+
+	/** AOSP: the centre of the view unless a pivot was set */
+	public float getPivotX() { return tlPivotSet ? tlPivotX : getWidth() / 2f; }
+	public float getPivotY() { return tlPivotSet ? tlPivotY : getHeight() / 2f; }
+@@@
+	public void setTranslationX(float translationX) {
+		this.translationX = translationX;
+		if (parent instanceof View)
+			((View)parent).native_queueAllocate(((View)parent).widget);
+	}
+
+	public void setTranslationY(float translationY) {
+		this.translationY = translationY;
+		if (parent instanceof View)
+			((View)parent).native_queueAllocate(((View)parent).widget);
+	}
+===
+	public void setTranslationX(float translationX) {
+		this.translationX = translationX;
+		if (tlLayerMatrix != null) {
+			tlTransformChanged(); // the published matrix carries the translation
+			return;
+		}
+		if (parent instanceof View)
+			((View)parent).native_queueAllocate(((View)parent).widget);
+	}
+
+	public void setTranslationY(float translationY) {
+		this.translationY = translationY;
+		if (tlLayerMatrix != null) {
+			tlTransformChanged();
+			return;
+		}
+		if (parent instanceof View)
+			((View)parent).native_queueAllocate(((View)parent).widget);
+	}
+@@@
+	public void setAlpha(float alpha) {
+		native_setVisibility(widget, visibility, alpha, atl_enabled);
+		this.alpha = alpha;
+	}
+===
+	public void setAlpha(float alpha) {
+		final boolean changed = this.alpha != alpha;
+		this.alpha = alpha;
+		// a running view animation's alpha (and the transition alpha) multiply it, as in AOSP
+		native_setVisibility(widget, visibility, alpha * getTransitionAlpha() * tlAnimAlpha, atl_enabled);
+		/* AOSP invalidateViewProperty: the parent learns of the change, so a parent that records its
+		 * children (Compose's AndroidViewHolder) records the new alpha (tl_property_invalidate) */
+		if (changed)
+			invalidate();
+	}
+@@@
+		this.bottom = b;
+		native_layout(widget, l, t, r, b);
+===
+		this.bottom = b;
+		// a default (centred) pivot follows the size: recompose before the allocation reads the matrix
+		if (!tlPivotSet && tlLayerMatrix != null && (r - l != tlLayerW || b - t != tlLayerH))
+			tlComputeLayerMatrix();
+		native_layout(widget, l, t, r, b);
+@@@
+		if (isAttachedToWindow()) // AOSP setFlags: the aggregated visibility follows while in a window
+			dispatchVisibilityAggregated(visibility == VISIBLE);
+	}
+===
+		if (isAttachedToWindow()) // AOSP setFlags: the aggregated visibility follows while in a window
+			dispatchVisibilityAggregated(visibility == VISIBLE);
+		/* AOSP setFlags: a visibility change invalidates the parent, and a view that becomes visible
+		 * invalidates itself (it skipped its invalidations while hidden). A parent that records its
+		 * children (Compose's AndroidViewHolder: Waze's compass needle) otherwise kept drawing the
+		 * recording made while the view was hidden (tl_property_invalidate). */
+		if (parent instanceof View)
+			((View) parent).invalidate();
+		if (visibility == VISIBLE)
+			invalidate();
+	}

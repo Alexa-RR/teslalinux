@@ -1,0 +1,10 @@
+@@@
+			if (clipToOutline && outline != null && outline.mMode == Outline.MODE_ROUND_RECT && outline.getRect(bounds) && !bounds.isEmpty()) {
+===
+			if (clipToOutline && outline != null && outline.mMode == Outline.MODE_PATH && outline.mPath != null
+			    && android.os.Build.VERSION.SDK_INT >= 33 && !outline.mPath.isInverseFillType()) {
+				/* AOSP 13 HWUI clips to any outline path (Outline.canClip from API 33); inverse fills
+				 * are never valid outlines */
+				android.graphics.Path.FillType ft = outline.mPath.getFillType();
+				clipped = nativePathClipKeep(render_node, outline.mPath.getGskPath(), ft == android.graphics.Path.FillType.EVEN_ODD);
+			} else if (clipToOutline && outline != null && outline.mMode == Outline.MODE_ROUND_RECT && outline.getRect(bounds) && !bounds.isEmpty()) {

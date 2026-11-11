@@ -1,0 +1,20 @@
+[Unit]
+Description=teslalinux: keep Waze current from Google Play (check, download on an unmetered uplink, verify, install when the car is not connected)
+Documentation=file:///usr/local/share/doc/teslalinux/APP-UPDATES.md
+# never on the boot path; the hourly timer, the NetworkManager hook and the settings page start it
+After=network.target teslalinux-netconfig.service teslalinux-appupdate-boot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/teslalinux-appupdate run
+# download (up to APPUPDATE_DOWNLOAD_DEADLINE, 90 min) + install + health check (15 min)
+TimeoutStartSec=3h
+EnvironmentFile=-/etc/teslalinux/appupdate.env
+# a background job: the app and the display stream keep priority
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=append:/var/log/teslalinux/appupdate.log
+StandardError=append:/var/log/teslalinux/appupdate.log
+LogsDirectory=teslalinux
+PrivateTmp=yes
+ProtectHome=yes

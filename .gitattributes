@@ -1,0 +1,11 @@
+# Everything here is deployed to Linux: keep LF regardless of the Windows checkout.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.wasm binary
+*.apk binary
+tools/atl-vm/*.sh text eol=lf
+tools/atl-vm/seed/* text eol=lf

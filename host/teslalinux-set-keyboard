@@ -1,0 +1,26 @@
+#!/bin/sh
+# teslalinux: choose which keyboard types into the app, from the settings page. Called by
+# services/api/api.py (POST /api/keyboard) through one sudoers rule, like teslalinux-set-locale.
+#   teslalinux-set-keyboard builtin   the app's own on-screen keyboard, drawn in the app (the default)
+#   teslalinux-set-keyboard device    the keyboard of the device showing the page (the car's, a phone's):
+#                                     tacomp tells the page when a text field wants input (text-input-v3)
+#                                     and the page sends what is typed back; the app's own keyboard is off
+# Writes /etc/teslalinux/keyboard.env (TESLALINUX_KEYBOARD, read by teslalinux-atl.service and the
+# launcher, which turns the app's keyboard off for "device") and restarts only the app, only when the
+# choice changed: the input method is chosen when the app starts.
+set -eu
+[ $# -eq 1 ] || { echo "usage: teslalinux-set-keyboard builtin|device" >&2; exit 2; }
+case "$1" in
+	builtin|device) MODE=$1 ;;
+	*) echo "teslalinux-set-keyboard: unknown keyboard '$1' (builtin or device)" >&2; exit 2 ;;
+esac
+F=/etc/teslalinux/keyboard.env
+NEW=$(printf '# teslalinux keyboard (teslalinux-set-keyboard, from the settings page)\nTESLALINUX_KEYBOARD=%s\n' "$MODE")
+[ -r "$F" ] && [ "$(cat "$F")" = "$NEW" ] && exit 0
+printf '%s\n' "$NEW" >"$F.tmp" && chmod 0644 "$F.tmp" && mv -f "$F.tmp" "$F"
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+	systemctl is-active -q teslalinux-atl.service && systemctl restart teslalinux-atl.service
+elif command -v rc-service >/dev/null 2>&1; then
+	rc-service teslalinux-atl status >/dev/null 2>&1 && rc-service teslalinux-atl restart
+fi
+exit 0

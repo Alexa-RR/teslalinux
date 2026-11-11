@@ -1,0 +1,36 @@
+#!/bin/sh
+# teslalinux (Pi OS/systemd): apply a new display state from the frontend. Called by
+# services/api/api.py through one sudoers rule, the counterpart of upstream's
+# configure_virtual_display() (tesla-android-configuration-manager.cpp:184-268).
+#   teslalinux-apply-display WIDTH HEIGHT DENSITY FPS ENCODER QUALITY
+# Restarts only when something changed: the frontend posts its display state on every page load.
+set -eu
+[ $# -eq 6 ] || { echo "usage: teslalinux-apply-display W H DENSITY FPS ENCODER QUALITY" >&2; exit 2; }
+int() { case "$1" in ''|*[!0-9]*) echo "teslalinux-apply-display: $2 '$1' is not a number" >&2; exit 2 ;; esac
+	[ "$1" -ge "$3" ] && [ "$1" -le "$4" ] || { echo "teslalinux-apply-display: $2 $1 outside $3..$4" >&2; exit 2; }; }
+int "$1" width 320 1920; int "$2" height 320 1920; int "$3" density 72 640; int "$4" fps 1 60; int "$6" quality 1 100
+case "$5" in m2m-jpeg|m2m-h264) ;; *) echo "teslalinux-apply-display: encoder '$5' unknown" >&2; exit 2 ;; esac
+F=/etc/teslalinux/display.env
+NEW=$(printf '# teslalinux display (teslalinux-render / teslalinux-apply-display from the frontend'"'"'s display state)\nTACOMP_SIZE=%sx%s@%s\nTACOMP_ENCODER=%s\nTACOMP_QUALITY=%s\nATL_DENSITY_DPI=%s\n' "$1" "$2" "$4" "$5" "$6" "$3")
+[ -r "$F" ] && [ "$(cat "$F")" = "$NEW" ] && exit 0
+OLD_DENSITY=$(sed -n 's/^ATL_DENSITY_DPI=//p' "$F" 2>/dev/null || true)
+printf '%s\n' "$NEW" >"$F.tmp" && chmod 0644 "$F.tmp" && mv -f "$F.tmp" "$F"
+# Waydroid variant: the container reads its size and density from these props at start
+P=/var/lib/waydroid/waydroid_base.prop
+if [ -f "$P" ]; then
+	sed -i -e "s/^persist.waydroid.width=.*/persist.waydroid.width=$1/" \
+	       -e "s/^persist.waydroid.height=.*/persist.waydroid.height=$2/" \
+	       -e "s/^ro.sf.lcd_density=.*/ro.sf.lcd_density=$3/" "$P"
+fi
+# ATL: tacomp applies a new size, encoder or quality in place (SIGHUP re-reads this file); the app's
+# window gets the new size and ATL turns it into a configuration change, as upstream resizes its
+# virtual display under a running app. Only a new density restarts the app (ATL takes it at start).
+if systemctl is-enabled -q teslalinux-atl.service 2>/dev/null && systemctl is-active -q tacomp.service; then
+	systemctl kill -s HUP tacomp.service
+	[ "$OLD_DENSITY" != "$3" ] && systemctl restart teslalinux-atl.service
+	exit 0
+fi
+# the Waydroid container takes its size at start: stop the stream, resize, start again (upstream's order)
+systemctl restart tacomp.service
+systemctl is-enabled -q waydroid-session.service 2>/dev/null && systemctl restart waydroid-session.service
+exit 0

@@ -1,0 +1,18 @@
+[Unit]
+Description=teslalinux: health check of the app's first launch after an update (rollback when it fails)
+Documentation=file:///usr/local/share/doc/teslalinux/APP-UPDATES.md
+After=teslalinux-atl.service teslalinux-appupdate-boot.service
+# only while a health check is pending (written by teslalinux-appupdate when it installs)
+ConditionPathExists=/var/lib/teslalinux/appupdate/health.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/teslalinux-appupdate health
+EnvironmentFile=-/etc/teslalinux/appupdate.env
+TimeoutStartSec=30min
+StandardOutput=append:/var/log/teslalinux/appupdate.log
+StandardError=append:/var/log/teslalinux/appupdate.log
+LogsDirectory=teslalinux
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+# teslalinux: the config API the frontend polls (/api, 8081)
+description="teslalinux config API"
+command=/usr/bin/python3
+command_args="/usr/local/lib/teslalinux/api.py"
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/teslalinux-api.pid
+output_log=/var/log/teslalinux/api.log
+error_log=/var/log/teslalinux/api.log
+supervisor=supervise-daemon
+respawn_delay=1
+respawn_max=0
+
+depend() {
+	need localmount
+	after net
+}
+
+start_pre() {
+	checkpath -d -m 0755 -o tesla:tesla /var/log/teslalinux
+	checkpath -d -m 0750 -o tesla:tesla /var/lib/teslalinux/state
+	export TESLALINUX_ENV=/etc/teslalinux/env TESLALINUX_STATE=/var/lib/teslalinux/state/props.json
+	export PYTHONPATH=/usr/local/lib/teslalinux
+}

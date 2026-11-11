@@ -1,0 +1,690 @@
+@@@
+	protected void onStart() {
+		Slog.i(TAG, "- onStart - yay!");
+		window.set_widget_as_root(window.native_window, window.getDecorView().widget);
+		window.setTitle(title);
+===
+	protected void onStart() {
+		Slog.i(TAG, "- onStart - yay!");
+		/* tl_activity_transition: the pending transition animates this page change (AOSP app transition) */
+		int[] tlTransition = tlTakePageTransition();
+		if (tlTransition != null)
+			nativeSetPageTransition(window.native_window, tlTransition[0], tlTransition[1]);
+		window.set_widget_as_root(window.native_window, window.getDecorView().widget);
+		if (tlTransition != null)
+			nativeSetPageTransition(window.native_window, 0, 0);
+		window.setTitle(title);
+		mTitleReady = true;
+@@@
+		/* AOSP: the activity's window is removed with it (tl_window_attach: its decor page leaves the stack) */
+		if (window != null && window.native_window != 0 && window.getDecorView() != null)
+			window.tlRemoveRoot(window.native_window, window.getDecorView().widget);
+		return;
+===
+		/* AOSP: the activity's window is removed with it (tl_window_attach: its decor page leaves the stack);
+		 * while the closing transition still draws it, the page is removed once that has run */
+		if (window != null && window.native_window != 0 && window.getDecorView() != null)
+			tlRemoveDecorPage(window, window.native_window, window.getDecorView().widget);
+		return;
+@@@
+	public void onWindowFocusChanged(boolean hasFocus) {
+		Slog.i(TAG, "- onWindowFocusChanged - yay! (hasFocus: " + hasFocus + ")");
+
+		return;
+	}
+
+	protected void onSaveInstanceState(Bundle outState) {
+	}
+===
+	public void onWindowFocusChanged(boolean hasFocus) {
+		Slog.i(TAG, "- onWindowFocusChanged - yay! (hasFocus: " + hasFocus + ")");
+
+		return;
+	}
+
+	/**
+	 * AOSP: the window's view hierarchy state (PhoneWindow.saveHierarchyState: the views' saved
+	 * states and the focused view's id) and the autofill id; ActivityLifecycleCallbacks get
+	 * onActivitySaveInstanceState from performSaveInstanceState.
+	 */
+	protected void onSaveInstanceState(Bundle outState) {
+		outState.putBundle(WINDOW_HIERARCHY_TAG, tlSaveHierarchyState());
+		outState.putInt(LAST_AUTOFILL_ID, mLastAutofillId);
+	}
+@@@
+	public void setResult(int resultCode, Intent data) {
+		if (resultActivity != null) {
+			resultActivity.onActivityResult(resultRequestCode, resultCode, data);
+		}
+	}
+===
+	/** AOSP: the result is kept and delivered to the caller when this activity finishes. */
+	public void setResult(int resultCode, Intent data) {
+		synchronized (this) {
+			mResultCode = resultCode;
+			mResultData = data;
+		}
+	}
+@@@
+	public boolean showDialog(int id, Bundle args) {
+		return false;
+	}
+===
+	/** AOSP managed dialogs: created once by onCreateDialog(id, args), prepared before every show. */
+	public final boolean showDialog(int id, Bundle args) {
+		Dialog dialog = dialogs.get(id);
+		if (dialog == null) {
+			dialog = onCreateDialog(id, args);
+			if (dialog == null)
+				return false;
+			dialog.setOwnerActivity(this);
+			dialog.dispatchOnCreate(null);
+			dialogs.put(id, dialog);
+		}
+		onPrepareDialog(id, dialog, args);
+		dialog.show();
+		return true;
+	}
+
+	protected Dialog onCreateDialog(int id, Bundle args) {
+		return onCreateDialog(id);
+	}
+
+	protected void onPrepareDialog(int id, Dialog dialog, Bundle args) {
+		onPrepareDialog(id, dialog);
+	}
+
+	public final void dismissDialog(int id) {
+		Dialog dialog = dialogs.get(id);
+		if (dialog == null)
+			throw new IllegalArgumentException("no dialog with id " + id + " was ever shown via Activity#showDialog");
+		dialog.dismiss();
+	}
+@@@
+	public final void showDialog(int id) {
+		Slog.i(TAG, "Activity.showDialog(" + id + ") called");
+		Dialog dialog = dialogs.get(id);
+		if (dialog == null)
+			dialogs.put(id, dialog = onCreateDialog(id));
+		if (dialog == null) {
+			Slog.w(TAG, "Dialog " + id + " was not created");
+			return;
+		}
+		onPrepareDialog(id, dialog);
+		dialog.show();
+	}
+===
+	public final void showDialog(int id) {
+		showDialog(id, null);
+	}
+@@@
+	public void finish() {
+		finishing = true;
+===
+	public void finish() {
+		if (finishing)
+			return; /* AOSP: finishing an activity that is already finishing does nothing */
+		finishing = true;
+		tlOnFinish();
+@@@
+	public Object getLastNonConfigurationInstance() {
+		return null;
+	}
+===
+	/** AOSP: the object onRetainNonConfigurationInstance() returned in the instance this one replaces (recreate()). */
+	public Object getLastNonConfigurationInstance() {
+		return tlLastNonConfigurationInstance;
+	}
+@@@
+	public boolean isChangingConfigurations() { return false; }
+===
+	/** AOSP: true while this activity is destroyed to be recreated (recreate()). */
+	public boolean isChangingConfigurations() { return mChangingConfigurations; }
+@@@
+	public void setTitle(CharSequence title) {
+		this.title = title;
+	}
+
+	public void setTitle(int titleId) {
+		this.title = getText(titleId);
+	}
+===
+	public void setTitle(CharSequence title) {
+		this.title = title;
+		onTitleChanged(title, mTitleColor);
+	}
+
+	public void setTitle(int titleId) {
+		setTitle(getText(titleId));
+	}
+@@@
+	public Intent getParentActivityIntent() {
+		return null;
+	}
+===
+	/** AOSP: an explicit intent for the manifest's android:parentActivityName, or null. */
+	public Intent getParentActivityIntent() {
+		final android.content.pm.ActivityInfo info = tlActivityInfo();
+		final String parentName = info != null ? info.parentActivityName : null;
+		if (android.text.TextUtils.isEmpty(parentName)) {
+			return null;
+		}
+		// If the parent itself has no parent, generate a main activity intent.
+		final ComponentName target = new ComponentName(this, parentName);
+		final android.content.pm.ActivityInfo parentInfo = tlActivityInfo(parentName);
+		final String parentActivity = parentInfo != null ? parentInfo.parentActivityName : null;
+		final Intent parentIntent = parentActivity == null
+		    ? Intent.makeMainActivity(target)
+		    : new Intent().setComponent(target);
+		return parentIntent;
+	}
+@@@
+	public void recreate() {
+		finishing = true;
+		try {
+			/* TODO: check if this is a toplevel activity */
+			Activity activity = internalCreateActivity(this.getClass().getName(), getWindow().native_window, intent);
+			new Handler().post(new Runnable() {
+				@Override
+				public void run() {
+					nativeFinish(0);
+					nativeStartActivity(activity);
+				}
+			});
+		} catch (ReflectiveOperationException e) {
+			Slog.i(TAG, "exception in Activity.recreate, this is kinda sus");
+			e.printStackTrace();
+		}
+	}
+===
+	/**
+	 * AOSP relaunch: the instance state is saved, onRetainNonConfigurationInstance() is kept, this
+	 * instance is destroyed with isChangingConfigurations() true, and a new instance of the same
+	 * activity is created from the saved state in its place.
+	 */
+	public void recreate() {
+		if (finishing)
+			return;
+		finishing = true;
+		try {
+			final Activity activity = internalCreateActivity(this.getClass().getName(), getWindow().native_window, intent);
+			activity.resultActivity = resultActivity;
+			activity.resultRequestCode = resultRequestCode;
+			new Handler(Looper.getMainLooper()).post(new Runnable() {
+				@Override
+				public void run() {
+					mChangingConfigurations = true;
+					Bundle state = new Bundle();
+					performSaveInstanceState(state);
+					activity.tlPendingSavedState = state;
+					activity.tlLastNonConfigurationInstance = onRetainNonConfigurationInstance();
+					nativeFinish(0);
+					nativeStartActivity(activity);
+				}
+			});
+		} catch (ReflectiveOperationException e) {
+			finishing = false;
+			Slog.w(TAG, "Activity.recreate: " + e);
+			e.printStackTrace();
+		}
+	}
+@@@
+	public boolean hasWindowFocus() {
+		return true; // FIXME?
+	}
+===
+	/** AOSP: the decor view's window focus, while the window is visible. */
+	public boolean hasWindowFocus() {
+		View d = window != null ? window.peekDecorView() : null;
+		if (d != null && d.getWindowVisibility() == View.VISIBLE) {
+			return d.hasWindowFocus();
+		}
+		return false;
+	}
+@@@
+	public void overridePendingTransition(int enterAnim, int exitAnim) {}
+===
+	/** AOSP: the given animations play for the activity switch that follows (startActivity or finish). */
+	public void overridePendingTransition(int enterAnim, int exitAnim) {
+		overridePendingTransition(enterAnim, exitAnim, 0);
+	}
+
+	public void overridePendingTransition(int enterAnim, int exitAnim, int backgroundColor) {
+		tlSetPendingTransition(this, enterAnim, exitAnim);
+	}
+@@@
+	public void setTaskDescription(ActivityManager.TaskDescription description) {}
+===
+	/** AOSP: the task's label, icon and colour for recents; kept for ActivityManager.AppTask.getTaskInfo (no recents UI here). */
+	public void setTaskDescription(ActivityManager.TaskDescription description) {
+		synchronized (tlLiveActivities) {
+			tlTaskDescription = description != null ? new ActivityManager.TaskDescription(description) : null;
+		}
+	}
+@@@
+	public void reportFullyDrawn() {}
+	public void setVisible(boolean visible) {}
+	public Uri getReferrer() { return null; }
+===
+	/** AOSP: ActivityMetricsLogger logs the time from the launch to the first call ("Fully drawn"). */
+	public void reportFullyDrawn() {
+		if (tlFullyDrawnReported)
+			return;
+		tlFullyDrawnReported = true;
+		long ms = android.os.SystemClock.uptimeMillis() - tlCreateUptime;
+		android.util.Log.i("ActivityTaskManager", "Fully drawn " + getPackageName() + "/" + getLocalClassName() + ": +" + ms + "ms");
+	}
+
+	/** AOSP: shows or hides the activity's window (the decor) without changing its lifecycle. */
+	public void setVisible(boolean visible) {
+		if (mVisibleFromClient != visible) {
+			mVisibleFromClient = visible;
+			View decor = window != null ? window.peekDecorView() : null;
+			if (decor != null)
+				decor.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+		}
+	}
+
+	/**
+	 * AOSP: Intent.EXTRA_REFERRER / EXTRA_REFERRER_NAME, else the package that launched the activity.
+	 * Activities after the first are launched by this app itself; the first one is launched by the
+	 * runtime, which (like a launcher that sets no referrer) gives none.
+	 */
+	public Uri getReferrer() {
+		Intent i = getIntent();
+		if (i != null) {
+			try {
+				Object referrer = i.getParcelableExtra(Intent.EXTRA_REFERRER);
+				if (referrer instanceof Uri)
+					return (Uri) referrer;
+				String referrerName = i.getStringExtra(Intent.EXTRA_REFERRER_NAME);
+				if (referrerName != null)
+					return Uri.parse(referrerName);
+			} catch (RuntimeException e) {
+				android.util.Log.w(TAG, "Cannot read referrer from intent; intent extras={" + i.getExtras() + "}", e);
+			}
+		}
+		if (tlLaunchedByApp)
+			return new Uri.Builder().scheme("android-app").authority(getPackageName()).build();
+		return null;
+	}
+@@@
+	public View onCreateView(View parent, String name, Context context, AttributeSet attrs) {
+		return null;
+	}
+
+	public boolean onSearchRequested() {
+		return false;
+	}
+
+	public View getCurrentFocus() {
+		return null;
+	}
+===
+	/** AOSP: <fragment> tags belong to the (framework) fragment controller, every other tag to onCreateView(name, context, attrs). */
+	public View onCreateView(View parent, String name, Context context, AttributeSet attrs) {
+		if (!"fragment".equals(name)) {
+			return onCreateView(name, context, attrs);
+		}
+		return null;
+	}
+
+	public View onCreateView(String name, Context context, AttributeSet attrs) {
+		return null;
+	}
+
+	/**
+	 * AOSP: starts the search UI of SearchManager unless the device is a TV. This platform has no
+	 * search dialog (no SearchManager UI service), so no search can start: false, as AOSP returns
+	 * when it does not start one.
+	 */
+	public boolean onSearchRequested() {
+		return false;
+	}
+
+	/** AOSP: the view of this activity's window that has the focus. */
+	public View getCurrentFocus() {
+		View decor = window != null ? window.peekDecorView() : null;
+		return decor != null ? decor.findFocus() : null;
+	}
+@@@
+	public void finishActivity(int requestCode) {
+		/* TODO: track started activities so we can finish the right one here */
+		Slog.w(TAG, "finishActivity: stub");
+	}
+===
+	/** AOSP: finishes the activities this one started with startActivityForResult(..., requestCode). */
+	public void finishActivity(int requestCode) {
+		for (Activity a : tlActivities()) {
+			if (a.resultActivity == this && a.resultRequestCode == requestCode)
+				a.finish();
+		}
+	}
+@@@
+	boolean moveTaskToBack(boolean nonroot) {
+		return true;
+	}
+
+	void setFinishOnTouchOutside(boolean finish) {
+	}
+
+	public void closeOptionsMenu() {
+	}
+===
+	/**
+	 * AOSP: moves the task behind the other tasks (the activities stop; the home screen shows).
+	 * This runtime is the only task on its display, with nothing to show in its place, so the task
+	 * cannot be moved: false, as AOSP returns when the move is refused (nonRoot false and this is
+	 * not the root activity also returns false there).
+	 */
+	public boolean moveTaskToBack(boolean nonRoot) {
+		return false;
+	}
+
+	public void setFinishOnTouchOutside(boolean finish) {
+		mFinishOnTouchOutside = finish;
+	}
+
+	/**
+	 * AOSP: closes the options panel of the window. ATL's Window has no options panel
+	 * (FEATURE_OPTIONS_PANEL is not available), so no panel is ever open.
+	 */
+	public void closeOptionsMenu() {
+		/* AOSP closes the action bar's overflow menu or the window's options panel: ATL has neither
+		 * (getActionBar() is null, the Window has no panels), so there is nothing open to close */
+	}
+
+	/** AOSP: opens the action bar's overflow menu, else the window's options panel; ATL has neither (see closeOptionsMenu). */
+	public void openOptionsMenu() {
+		/* nothing can open: no action bar, no options panel */
+	}
+@@@
+	public void requestPermissions(String[] permissions, int requestCode) {
+		Slog.w(TAG, "requestPermissions(" + Arrays.toString(permissions) + "): not handled");
+	}
+
+	public boolean shouldShowRequestPermissionRationale(String permission) {
+		return true;
+	}
+===
+	/**
+	 * AOSP: the permission controller asks the user, then onRequestPermissionsResult gets the
+	 * grants. ATL's PackageManager decides every permission without a prompt, so the result is
+	 * delivered right away (posted, as AOSP delivers it after the request returns) with the
+	 * current grant state of each permission.
+	 */
+	public final void requestPermissions(final String[] permissions, final int requestCode) {
+		if (requestCode < 0) {
+			throw new IllegalArgumentException("requestCode should be >= 0");
+		}
+		if (permissions == null) {
+			throw new IllegalArgumentException("permissions cannot be null");
+		}
+		final int[] results = new int[permissions.length];
+		for (int i = 0; i < permissions.length; i++)
+			results[i] = checkSelfPermission(permissions[i]);
+		new Handler(Looper.getMainLooper()).post(new Runnable() {
+			@Override
+			public void run() {
+				if (!isDestroyed())
+					onRequestPermissionsResult(requestCode, permissions, results);
+			}
+		});
+	}
+
+	public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+	}
+
+	/**
+	 * AOSP: true only after the user denied the permission in the prompt without "don't ask
+	 * again". There is no permission prompt on this platform, so the user never denied one: false.
+	 */
+	public boolean shouldShowRequestPermissionRationale(String permission) {
+		return false;
+	}
+@@@
+	public final void setVolumeControlStream(int streamType) {}
+===
+	/** AOSP: the audio stream the hardware volume keys adjust while this activity is in front. */
+	public final void setVolumeControlStream(int streamType) {
+		mVolumeControlStream = streamType;
+	}
+
+	public final int getVolumeControlStream() {
+		return mVolumeControlStream;
+	}
+@@@
+	public final boolean requestWindowFeature(int featureId) {
+		return false; // whatever feature it is, it's probably not supported
+	}
+===
+	/** AOSP: asks the window for the feature; ATL's Window grants none of the decor features. */
+	public final boolean requestWindowFeature(int featureId) {
+		return getWindow().requestFeature(featureId);
+	}
+@@@
+	public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return android.window.OnBackInvokedDispatcher.STUB; }
+===
+	/** AOSP: the dispatcher of this activity's window (TlBackDispatcher: when its callbacks take BACK). */
+	public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() {
+		if (mBackDispatcher == null)
+			mBackDispatcher = new TlBackDispatcher(this);
+		return mBackDispatcher;
+	}
+@@@
+	public boolean isLaunchedFromBubble() { return false; }
+	public void onUserInteraction() {}
+	public boolean navigateUpTo(Intent upIntent) { return false; }
+	public boolean shouldUpRecreateTask(Intent targetIntent) { return false; }
+	public void setEnterSharedElementCallback(SharedElementCallback callback) {}
+	public void setExitSharedElementCallback(SharedElementCallback callback) {}
+	public boolean dispatchKeyShortcutEvent(android.view.KeyEvent event) { return false; }
+	public void startIntentSenderForResult(android.content.IntentSender intent, int requestCode, Intent fillInIntent, int flagsMask, int flagsValues, int extraFlags) {}
+	public void startIntentSenderForResult(android.content.IntentSender intent, int requestCode, Intent fillInIntent, int flagsMask, int flagsValues, int extraFlags, android.os.Bundle options) {}
+	public void onTrimMemory(int level) {}
+===
+	/** AOSP: whether the activity was launched in a bubble; this platform has no bubbles (no SystemUI), so never. */
+	public boolean isLaunchedFromBubble() { return false; }
+	/** AOSP: a hook for the app; the base implementation does nothing. */
+	public void onUserInteraction() {}
+
+	/**
+	 * AOSP: navigates up to the activity upIntent names. When an instance of it is in the task, the
+	 * activities above it finish and it gets the intent (onNewIntent); true. Otherwise this activity
+	 * just finishes; false.
+	 */
+	public boolean navigateUpTo(Intent upIntent) {
+		ComponentName target = upIntent != null ? upIntent.getComponent() : null;
+		Class<? extends Activity> cls = null;
+		if (target != null) {
+			try {
+				cls = getClassLoader().loadClass(target.getClassName()).asSubclass(Activity.class);
+			} catch (ClassNotFoundException | ClassCastException e) {
+				cls = null;
+			}
+		}
+		boolean found = false;
+		if (cls != null) {
+			for (Activity a : tlActivities()) {
+				if (a != this && a.getClass() == cls && !a.isFinishing()) {
+					found = true;
+					break;
+				}
+			}
+		}
+		if (!found) {
+			finish();
+			return false;
+		}
+		Intent resultData;
+		int resultCode;
+		synchronized (this) {
+			resultCode = mResultCode;
+			resultData = mResultData;
+		}
+		if (resultActivity != null && resultData != null)
+			resultActivity.tlQueueActivityResult(resultRequestCode, resultCode, resultData);
+		final Class<? extends Activity> cls_ = cls;
+		final Intent upIntent_ = new Intent(upIntent);
+		finishing = true;
+		new Handler(Looper.getMainLooper()).post(new Runnable() {
+			@Override
+			public void run() {
+				nativeResumeActivity(cls_, upIntent_);
+			}
+		});
+		return true;
+	}
+
+	/**
+	 * AOSP: whether up navigation must build a new task, i.e. the target's task affinity differs
+	 * from this task's. This runtime runs the app in its one task with the app's affinity, which
+	 * the app's own activities share unless they declare another one.
+	 */
+	public boolean shouldUpRecreateTask(Intent targetIntent) {
+		ComponentName target = targetIntent != null ? targetIntent.getComponent() : null;
+		if (target == null)
+			return false;
+		android.content.pm.ActivityInfo info = tlActivityInfo(target.getClassName());
+		android.content.pm.ActivityInfo mine = tlActivityInfo();
+		String targetAffinity = info != null ? info.taskAffinity : null;
+		String myAffinity = mine != null ? mine.taskAffinity : null;
+		if (targetAffinity == null || myAffinity == null)
+			return false;
+		return !targetAffinity.equals(myAffinity);
+	}
+
+	/** AOSP: kept for the (shared element) activity transitions; ATL has no transition coordinator to call them. */
+	public void setEnterSharedElementCallback(SharedElementCallback callback) { mEnterSharedElementCallback = callback; }
+	public void setExitSharedElementCallback(SharedElementCallback callback) { mExitSharedElementCallback = callback; }
+
+	/** AOSP: the window's views first, then this activity's onKeyShortcut. */
+	public boolean dispatchKeyShortcutEvent(android.view.KeyEvent event) {
+		onUserInteraction();
+		if (getWindow().superDispatchKeyShortcutEvent(event)) {
+			return true;
+		}
+		return onKeyShortcut(event.getKeyCode(), event);
+	}
+
+	public void startIntentSenderForResult(android.content.IntentSender intent, int requestCode, Intent fillInIntent, int flagsMask, int flagsValues, int extraFlags) throws android.content.IntentSender.SendIntentException {
+		startIntentSenderForResult(intent, requestCode, fillInIntent, flagsMask, flagsValues, extraFlags, null);
+	}
+
+	/**
+	 * AOSP: like startActivityForResult for the intent behind an IntentSender (a PendingIntent's).
+	 * An activity PendingIntent is started for a result; any other kind is sent and gives none.
+	 */
+	public void startIntentSenderForResult(android.content.IntentSender intent, int requestCode, Intent fillInIntent, int flagsMask, int flagsValues, int extraFlags, android.os.Bundle options) throws android.content.IntentSender.SendIntentException {
+		PendingIntent pi = intent instanceof PendingIntent.TlIntentSender ? ((PendingIntent.TlIntentSender) intent).mPendingIntent : null;
+		if (intent == null)
+			throw new NullPointerException("intent");
+		if (pi == null) {
+			Slog.w(TAG, "startIntentSenderForResult: not a PendingIntent's sender: " + intent);
+			throw intent.new SendIntentException();
+		}
+		Intent target = pi.tlFillIn(fillInIntent, flagsMask, flagsValues);
+		if (target == null) /* canceled */
+			throw intent.new SendIntentException();
+		if (pi.type == 0) {
+			startActivityForResult(target, requestCode, options);
+		} else {
+			try {
+				pi.send(this, 0, fillInIntent);
+			} catch (Exception e) {
+				throw intent.new SendIntentException();
+			}
+		}
+	}
+
+	/** AOSP: passes the level to the fragments (ATL's framework fragments have no memory hook). */
+	public void onTrimMemory(int level) {}
+@@@
+	public final void performCreate(android.os.Bundle savedInstanceState) { dispatchActivityPreCreated(savedInstanceState); onCreate(savedInstanceState); dispatchActivityPostCreated(savedInstanceState); }
+===
+	public final void performCreate(android.os.Bundle savedInstanceState) {
+		if (savedInstanceState == null)
+			savedInstanceState = tlPendingSavedState; /* recreate(): the replaced instance's state */
+		tlOnCreate();
+		dispatchActivityPreCreated(savedInstanceState); onCreate(savedInstanceState); dispatchActivityPostCreated(savedInstanceState);
+	}
+@@@
+	public final void performStart() { if (mStopped) { mStopped = false; onRestart(); } dispatchActivityPreStarted(); onStart(); dispatchActivityPostStarted(); }
+===
+	public final void performStart() {
+		if (mStopped) { mStopped = false; tlRequeryManagedCursors(); onRestart(); }
+		dispatchActivityPreStarted(); onStart(); tlAfterStart(); dispatchActivityPostStarted();
+	}
+@@@
+	public final void performResume() { dispatchActivityPreResumed(); onResume(); dispatchActivityPostResumed(); }
+===
+	public final void performResume() {
+		tlDispatchPendingResults(); /* AOSP: results of finished activities arrive right before onResume */
+		dispatchActivityPreResumed(); onResume(); dispatchActivityPostResumed();
+		if (tlResumeUptime == 0)
+			tlResumeUptime = android.os.SystemClock.uptimeMillis();
+	}
+@@@
+	public final void performStop() { dispatchActivityPreStopped(); onStop(); mStopped = true; dispatchActivityPostStopped(); }
+===
+	public final void performStop() {
+		dispatchActivityPreStopped(); onStop(); mStopped = true; tlAfterStop(); dispatchActivityPostStopped();
+	}
+@@@
+	public final void performDestroy() { dispatchActivityPreDestroyed(); onDestroy(); dispatchActivityPostDestroyed(); }
+===
+	public final void performDestroy() {
+		dispatchActivityPreDestroyed(); onDestroy(); dispatchActivityPostDestroyed();
+		tlAfterDestroy();
+	}
+@@@
+	public android.content.ComponentName getCallingActivity() {
+		return null;
+	}
+===
+	public android.content.ComponentName getCallingActivity() {
+		return resultActivity != null && resultRequestCode >= 0 ? resultActivity.getComponentName() : null;
+	}
+@@@
+	public String getCallingPackage() {
+		return null; // [from api reference] Note: if the calling activity is not expecting a result (that is it did not use the startActivityForResult(Intent, int) form that includes a request code), then the calling package will be null.
+	}
+===
+	/** AOSP: the package of the activity that started this one for a result, else null. */
+	public String getCallingPackage() {
+		return resultActivity != null && resultRequestCode >= 0 ? resultActivity.getPackageName() : null;
+	}
+@@@
+			if (keyCode == KeyEvent.KEYCODE_BACK && event.isTracking() && !event.isCanceled()) {
+				onBackPressed();
+				return true;
+			}
+===
+			if (keyCode == KeyEvent.KEYCODE_BACK && event.isTracking() && !event.isCanceled()) {
+				/* AOSP: with OnBackInvokedCallback enabled, the window's top callback gets BACK */
+				android.window.OnBackInvokedCallback tlBack = mBackDispatcher != null ? mBackDispatcher.getTopCallback() : null;
+				if (tlBack != null)
+					tlBack.onBackInvoked();
+				else
+					onBackPressed();
+				return true;
+			}
+@@@
+	public void startActivityForResult(Intent intent, int requestCode, Bundle options) {
+		Slog.i(TAG, "startActivityForResult(" + intent + ", " + requestCode + "," + options + ") called");
+		if (intent.getComponent() != null) {
+			try {
+				final Activity activity = internalCreateActivity(intent.getComponent().getClassName(), getWindow().native_window, intent);
+				activity.resultRequestCode = requestCode;
+				activity.resultActivity = this;
+===
+	public void startActivityForResult(Intent intent, int requestCode, Bundle options) {
+		Slog.i(TAG, "startActivityForResult(" + intent + ", " + requestCode + "," + options + ") called");
+		tlApplyLaunchOptions(this, options);
+		if (intent.getComponent() != null) {
+			try {
+				final Activity activity = internalCreateActivity(intent.getComponent().getClassName(), getWindow().native_window, intent);
+				activity.resultRequestCode = requestCode;
+				activity.resultActivity = this;
+				activity.tlLaunchedByApp = true;
+				activity.tlLaunchOptions = ActivityOptions.fromBundle(options);

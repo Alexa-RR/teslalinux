@@ -1,0 +1,46 @@
+@@@
+	public void drawPath(Path path, Paint paint) {
+		if (path != null)
+			native_drawPath(snapshot, path.getGskPath(), paint != null ? paint.paint : default_paint.paint);
+	}
+===
+	public void drawPath(Path path, Paint paint) {
+		if (path == null)
+			return;
+		if (paint != null && paint.getPathEffect() != null
+		    && !(paint.getPathEffect() instanceof DashPathEffect && paint.getStyle() == Paint.Style.STROKE)) {
+			// Skia: the effect rewrites the geometry, which is then filled/stroked; a dashed stroke
+			// is dashed by the GSK stroke itself (Paint.setPathEffect)
+			Path effected = paint.getPathEffect().tlApply(path);
+			Paint plain = new Paint(paint);
+			plain.setPathEffect(null);
+			drawPath(effected, plain);
+			return;
+		}
+		if (paint != null && tlNeeds(paint, false)) {
+			final Path fp = path;
+			RectF pb = new RectF();
+			path.computeBounds(pb, true);
+			if (path.isInverseFillType()) {
+				Rect cb = new Rect();
+				getClipBounds(cb);
+				pb.set(cb);
+			}
+			tlDraw(new TlOp(pb.left, pb.top, pb.right, pb.bottom) {
+				void draw(Paint p) { drawPath(fp, p); }
+			}, paint, false);
+			return;
+		}
+		// AOSP/Skia: the fill honours the path's fill type (native-gskcanvas-filltype.sh); the inverse
+		// types fill the current clip bounds minus the path
+		final Path.FillType ft = path.getFillType();
+		final long p = paint != null ? paint.paint : default_paint.paint;
+		if (ft == null || ft == Path.FillType.WINDING) {
+			native_drawPath(snapshot, path.getGskPath(), p);
+			return;
+		}
+		Rect bounds = new Rect();
+		if (ft == Path.FillType.INVERSE_WINDING || ft == Path.FillType.INVERSE_EVEN_ODD)
+			getClipBounds(bounds);
+		native_drawPathFillType(snapshot, path.getGskPath(), p, ft.ordinal(), bounds.left, bounds.top, bounds.right, bounds.bottom);
+	}

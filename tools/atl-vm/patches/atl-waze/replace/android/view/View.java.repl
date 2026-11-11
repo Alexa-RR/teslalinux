@@ -1,0 +1,882 @@
+@@@
+	public void setNestedScrollingEnabled(boolean enabled) {}
+===
+	public void setNestedScrollingEnabled(boolean enabled) {
+		if (enabled) {
+			mNestedScrollingEnabled = true;
+		} else {
+			stopNestedScroll();
+			mNestedScrollingEnabled = false;
+		}
+	}
+@@@
+	public void stopNestedScroll() {}
+===
+	public void stopNestedScroll() {
+		if (mNestedScrollingParent != null) {
+			mNestedScrollingParent.onStopNestedScroll(this);
+			mNestedScrollingParent = null;
+		}
+	}
+@@@
+	public boolean dispatchKeyEvent(KeyEvent event) {
+		if (event.getAction() == KeyEvent.ACTION_DOWN)
+			return onKeyDown(event.getKeyCode(), event);
+		else
+			return false;
+	}
+===
+	public boolean dispatchKeyEvent(KeyEvent event) {
+		if (mOnKeyListener != null && mOnKeyListener.onKey(this, event.getKeyCode(), event))
+			return true;
+		switch (event.getAction()) {
+			case KeyEvent.ACTION_DOWN:
+				return onKeyDown(event.getKeyCode(), event);
+			case KeyEvent.ACTION_UP:
+				return onKeyUp(event.getKeyCode(), event);
+			case KeyEvent.ACTION_MULTIPLE:
+				return onKeyMultiple(event.getKeyCode(), event.getRepeatCount(), event);
+		}
+		return false;
+	}
+@@@
+	public void setOnKeyListener(OnKeyListener l) {}
+===
+	public void setOnKeyListener(OnKeyListener l) {
+		mOnKeyListener = l;
+	}
+@@@
+	public void setPointerIcon(PointerIcon pointerIcon) {}
+===
+	public void setPointerIcon(PointerIcon pointerIcon) {
+		mPointerIcon = pointerIcon;
+	}
+@@@
+	public void setTranslationZ(float translationZ) {}
+===
+	public void setTranslationZ(float translationZ) {
+		mTranslationZ = translationZ;
+	}
+@@@
+	public void setOnFocusChangeListener(View.OnFocusChangeListener l) {}
+===
+	public void setOnFocusChangeListener(View.OnFocusChangeListener l) {
+		mOnFocusChangeListener = l;
+	}
+@@@
+	public float getZ() {
+		return elevation;
+	}
+===
+	public float getZ() {
+		return getElevation() + getTranslationZ();
+	}
+@@@
+	public PointerIcon getPointerIcon() { return null; }
+===
+	public PointerIcon getPointerIcon() {
+		return mPointerIcon;
+	}
+@@@
+	public float getTransitionAlpha() {
+		return 1.0f;
+	}
+===
+	public float getTransitionAlpha() {
+		return mTransitionAlpha;
+	}
+@@@
+	public float getTranslationZ() { return 0.f; }
+===
+	public float getTranslationZ() {
+		return mTranslationZ;
+	}
+@@@
+	public AutofillId getAutofillId() { return new AutofillId(); }
+===
+	public AutofillId getAutofillId() {
+		if (mAutofillId == null) {
+			// AOSP: created on demand; the value only has to be unique within the process
+			mAutofillId = new AutofillId(getAutofillViewId());
+		}
+		return mAutofillId;
+	}
+@@@
+	public void transformMatrixToGlobal(Matrix matrix) {}
+===
+	public void transformMatrixToGlobal(Matrix matrix) {
+		final ViewParent p = getParent();
+		if (p instanceof View) {
+			final View vp = (View) p;
+			vp.transformMatrixToGlobal(matrix);
+			matrix.preTranslate(-vp.getScrollX(), -vp.getScrollY());
+		}
+		matrix.preTranslate(getLeft(), getTop());
+		matrix.preConcat(getMatrix());
+	}
+@@@
+	public interface OnFocusChangeListener {
+		// TODO
+	}
+===
+	public interface OnFocusChangeListener {
+		/** Called when the focus state of a view has changed. */
+		void onFocusChange(View v, boolean hasFocus);
+	}
+@@@
+	public static class BaseSavedState extends AbsSavedState {
+	}
+===
+	/** Base class for derived classes that want to save and restore their own state in {@link #onSaveInstanceState()}. (AOSP) */
+	public static class BaseSavedState extends AbsSavedState {
+		public BaseSavedState(android.os.Parcel source) {
+			this(source, null);
+		}
+
+		public BaseSavedState(android.os.Parcel source, ClassLoader loader) {
+			super(source, loader);
+		}
+
+		public BaseSavedState(android.os.Parcelable superState) {
+			super(superState);
+		}
+
+		public static final android.os.Parcelable.Creator<BaseSavedState> CREATOR = new android.os.Parcelable.ClassLoaderCreator<BaseSavedState>() {
+			@Override
+			public BaseSavedState createFromParcel(android.os.Parcel in) {
+				return new BaseSavedState(in);
+			}
+
+			@Override
+			public BaseSavedState createFromParcel(android.os.Parcel in, ClassLoader loader) {
+				return new BaseSavedState(in, loader);
+			}
+
+			@Override
+			public BaseSavedState[] newArray(int size) {
+				return new BaseSavedState[size];
+			}
+		};
+	}
+@@@
+	public WindowInsetsController getWindowInsetsController() {
+		return native_get_window(widget).getInsetsController();
+	}
+===
+	public WindowInsetsController getWindowInsetsController() {
+		/* teslalinux: the decor view has no native window yet when AndroidX's EdgeToEdge asks during onCreate */
+		Window tlw = native_get_window(widget);
+		return tlw != null ? tlw.getInsetsController() : new InsetsController();
+	}
+@@@
+	public interface OnApplyWindowInsetsListener {
+		// TODO
+	}
+===
+	public interface OnApplyWindowInsetsListener {
+		/** When set on a View, called instead of the view's own onApplyWindowInsets. */
+		WindowInsets onApplyWindowInsets(View v, WindowInsets insets);
+	}
+@@@
+	protected void onAttachedToWindow() {
+		if (onAttachStateChangeListener != null) {
+===
+	protected void onAttachedToWindow() {
+		if (System.getenv("ATL_DEBUG_ATTACH") != null)
+			android.util.Log.i("View", "onAttachedToWindow " + getClass().getName() + " " + getWidth() + "x" + getHeight());
+		if (onAttachStateChangeListener != null) {
+@@@
+	public boolean isShowingLayoutBounds() {
+		return true;
+	}
+===
+	/** AOSP: the "Show layout bounds" developer option (debug.layout). ATL_SHOW_LAYOUT_BOUNDS=1 turns it on here. */
+	public boolean isShowingLayoutBounds() {
+		return System.getenv("ATL_SHOW_LAYOUT_BOUNDS") != null;
+	}
+@@@
+	public void invalidate(Rect dirty) {
+		nativeInvalidate(widget);
+	}
+	public void invalidate(int l, int t, int r, int b) {
+		nativeInvalidate(widget);
+	}
+	public void invalidate() {
+		nativeInvalidate(widget);
+	}
+===
+	private static final boolean ATL_DEBUG_SURFACE = System.getenv("ATL_DEBUG_SURFACE") != null;
+	public void invalidate(Rect dirty) {
+		if (dirty == null) {
+			invalidate();
+			return;
+		}
+		invalidateInternal(dirty.left, dirty.top, dirty.right, dirty.bottom);
+	}
+	public void invalidate(int l, int t, int r, int b) {
+		invalidateInternal(l, t, r, b);
+	}
+	public void invalidate() {
+		invalidateInternal(0, 0, getWidth(), getHeight());
+	}
+	/**
+	 * AOSP View.invalidateInternal: the view's own drawing is redone (the GTK widget is queued for a
+	 * redraw) and the parent chain is told through ViewParent.invalidateChild, which is how a parent
+	 * that records its children into a display list (Compose's AndroidViewHolder, hardware layers)
+	 * learns that the recording is stale. Invisible views skip the parent notification, as AOSP does.
+	 */
+	private static int sInvalidateTrace;
+	private void invalidateInternal(int l, int t, int r, int b) {
+		nativeInvalidate(widget);
+		if (ATL_DEBUG_SURFACE && this instanceof SurfaceView && (sInvalidateTrace++ % 100) == 0)
+			android.util.Log.i("View", "[surface] invalidate #" + sInvalidateTrace + " " + getClass().getName() + " visibility=" + getVisibility() + " parent=" + (parent == null ? "null" : parent.getClass().getName()));
+		if (getVisibility() != VISIBLE)
+			return;
+		final ViewParent p = parent;
+		if (p != null && l < r && t < b) {
+			p.invalidateChild(this, new Rect(l, t, r, b));
+		}
+	}
+@@@
+	public void draw(Canvas canvas) {
+		if (canvas instanceof GskCanvas)
+			native_drawBackground(widget, ((GskCanvas)canvas).snapshot);
+===
+	private static final String ATL_DEBUG_DRAW = System.getenv("ATL_DEBUG_DRAW");
+	private static final boolean ATL_DEBUG_TOUCH_JAVA = System.getenv("ATL_DEBUG_TOUCH") != null;
+	public void draw(Canvas canvas) {
+		if (ATL_DEBUG_DRAW != null && getClass().getName().contains(ATL_DEBUG_DRAW))
+			android.util.Log.i("View", "[draw] " + getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(this)) + " " + getWidth() + "x" + getHeight() + " canvas=" + canvas.getClass().getSimpleName() + " parent=" + (parent == null ? "null" : parent.getClass().getSimpleName()));
+		if (canvas instanceof GskCanvas)
+			native_drawBackground(widget, ((GskCanvas)canvas).snapshot);
+@@@
+	public boolean onTouchEvent(MotionEvent event) {
+		return false;
+	}
+===
+	/**
+	 * AOSP View.onTouchEvent: the touch-to-click state machine. A clickable view takes the gesture on
+	 * DOWN (pressed state, long-press timer, delayed press inside scrolling containers), performs the
+	 * click on UP while still pressed, and drops the gesture on CANCEL or when the pointer leaves the
+	 * view by more than the touch slop. Pointer events that come straight from GTK perform the click
+	 * through the native click gesture ATL attaches to the widget, so this only performs it for
+	 * events that Java code dispatched to the view (Compose interop, a parent group).
+	 */
+	public boolean onTouchEvent(MotionEvent event) {
+		final float x = event.getX();
+		final float y = event.getY();
+		final int action = event.getActionMasked();
+		final boolean clickable = isClickable() || isLongClickable() || isContextClickable();
+		if (ATL_DEBUG_TOUCH_JAVA)
+			android.util.Log.i("View", "[touch] onTouchEvent " + getClass().getName() + " action=" + action + " clickable=" + clickable + " enabled=" + isEnabled() + " pressed=" + pressed + " prepressed=" + mPrePressed + " synthetic=" + tlDispatchingSynthetic + " listener=" + (on_click_listener != null));
+		if (!isEnabled()) {
+			if (action == MotionEvent.ACTION_UP && pressed)
+				setPressed(false);
+			// a disabled view that is clickable still consumes the touch events, it just does not respond
+			return clickable;
+		}
+		if (mTouchDelegate != null && mTouchDelegate.onTouchEvent(event))
+			return true;
+		if (clickable) {
+			switch (action) {
+				case MotionEvent.ACTION_UP:
+					mHasPerformedLongPress = false;
+					boolean prepressed = mPrePressed;
+					if (pressed || prepressed) {
+						if (prepressed) {
+							// released before the delayed pressed state was shown: show it now
+							setPressed(true, x, y);
+						}
+						if (!mHasPerformedLongPress && !mIgnoreNextUpEvent) {
+							removeLongPressCallback();
+							performClickInternal(); // AOSP: the click comes from the UP, never from a GTK gesture
+						}
+						if (mUnsetPressedState == null)
+							mUnsetPressedState = new Runnable() {
+								@Override
+								public void run() {
+									setPressed(false);
+								}
+							};
+						if (prepressed) {
+							postDelayed(mUnsetPressedState, ViewConfiguration.getPressedStateDuration());
+						} else if (!post(mUnsetPressedState)) {
+							mUnsetPressedState.run();
+						}
+						removeTapCallback();
+					}
+					mIgnoreNextUpEvent = false;
+					break;
+				case MotionEvent.ACTION_DOWN:
+					mHasPerformedLongPress = false;
+					if (isInScrollingContainer()) {
+						mPrePressed = true;
+						if (mPendingCheckForTap == null)
+							mPendingCheckForTap = new Runnable() {
+								@Override
+								public void run() {
+									mPrePressed = false;
+									setPressed(true, tlTapX, tlTapY);
+									checkForLongClick(ViewConfiguration.getLongPressTimeout() - ViewConfiguration.getTapTimeout(), tlTapX, tlTapY);
+								}
+							};
+						tlTapX = x;
+						tlTapY = y;
+						postDelayed(mPendingCheckForTap, ViewConfiguration.getTapTimeout());
+					} else {
+						setPressed(true, x, y);
+						checkForLongClick(ViewConfiguration.getLongPressTimeout(), x, y);
+					}
+					break;
+				case MotionEvent.ACTION_CANCEL:
+					setPressed(false);
+					removeTapCallback();
+					removeLongPressCallback();
+					mPrePressed = false;
+					mHasPerformedLongPress = false;
+					mIgnoreNextUpEvent = false;
+					break;
+				case MotionEvent.ACTION_MOVE:
+					if (!pointInView(x, y, ViewConfiguration.get(getContext()).getScaledTouchSlop())) {
+						removeTapCallback();
+						removeLongPressCallback();
+						if (pressed)
+							setPressed(false);
+						mPrePressed = false;
+					}
+					break;
+			}
+			return true;
+		}
+		return false;
+	}
+@@@
+	public void setClickable(boolean clickable) {}
+===
+	public void setClickable(boolean clickable) {
+		mClickable = clickable;
+	}
+@@@
+	public boolean isClickable() { return true; }
+	public boolean isLongClickable() { return true; }
+===
+	public boolean isClickable() { return mClickable; }
+	public boolean isLongClickable() { return mLongClickable; }
+@@@
+	public void setLongClickable(boolean longClickable) {}
+===
+	public void setLongClickable(boolean longClickable) {
+		mLongClickable = longClickable;
+	}
+@@@
+	public boolean isPressed() { return false; }
+===
+	public boolean isPressed() { return pressed; }
+@@@
+	public void setTouchDelegate(TouchDelegate touchDelegate) {}
+===
+	public void setTouchDelegate(TouchDelegate touchDelegate) {
+		mTouchDelegate = touchDelegate;
+	}
+	public TouchDelegate getTouchDelegate() {
+		return mTouchDelegate;
+	}
+@@@
+	public void setOnClickListener(OnClickListener l) {
+		nativeSetOnClickListener(widget);
+		on_click_listener = l;
+	}
+===
+	public void setOnClickListener(OnClickListener l) {
+		if (!isClickable())
+			setClickable(true);
+		nativeSetOnClickListener(widget);
+		on_click_listener = l;
+	}
+@@@
+	public void setOnLongClickListener(OnLongClickListener listener) {
+		nativeSetOnLongClickListener(widget);
+		on_long_click_listener = listener;
+	}
+===
+	public void setOnLongClickListener(OnLongClickListener listener) {
+		if (!isLongClickable())
+			setLongClickable(true);
+		nativeSetOnLongClickListener(widget);
+		on_long_click_listener = listener;
+	}
+@@@
+	public void setPressed(boolean pressed) {
+		Slog.w(TAG, "calling setPressed on " + this + " with value: " + pressed);
+		if (this.pressed != pressed) {
+===
+	public void setPressed(boolean pressed) {
+		if (this.pressed != pressed) {
+@@@
+	public boolean onTouchEventInternal(MotionEvent event, boolean handle_gestures) {
+		boolean handled = false;
+		if (on_touch_listener != null)
+			handled = on_touch_listener.onTouch(this, event);
+
+		if (!handled)
+			handled = onTouchEvent(event);
+===
+	public boolean onTouchEventInternal(MotionEvent event, boolean handle_gestures) {
+		boolean handled = false;
+		if (on_touch_listener != null)
+			handled = on_touch_listener.onTouch(this, event);
+
+		tlDispatchingSynthetic = handle_gestures;
+		if (!handled)
+			handled = onTouchEvent(event);
+@@@
+	public boolean removeCallbacks(Runnable action) { return false; }
+===
+	/** AOSP: removes a pending post/postDelayed of this view (one shared main-thread handler). */
+	public boolean removeCallbacks(Runnable action) {
+		if (action != null)
+			tlMainHandler().removeCallbacks(action);
+		return true;
+	}
+@@@
+	public boolean postDelayed(Runnable action, long delayMillis) {
+		new Handler(Looper.getMainLooper()).postDelayed(action, delayMillis);
+		return true;
+	}
+
+	public boolean post(Runnable action) {
+		new Handler(Looper.getMainLooper()).post(action);
+		return true;
+	}
+===
+	public boolean postDelayed(Runnable action, long delayMillis) {
+		return tlMainHandler().postDelayed(action, delayMillis);
+	}
+
+	public boolean post(Runnable action) {
+		return tlMainHandler().post(action);
+	}
+@@@
+	public boolean dispatchTouchEvent(MotionEvent event) { return false; }
+===
+	/**
+	 * AOSP View.dispatchTouchEvent: the touch listener first, then onTouchEvent. Reached for events that
+	 * Java code dispatches to a view (a group whose children declined, Compose interop); the native
+	 * side records whether the event is synthetic so the click is performed here rather than by the
+	 * GTK click gesture.
+	 */
+	public boolean dispatchTouchEvent(MotionEvent event) {
+		return onTouchEventInternal(event, tlNativeDispatchSynthetic);
+	}
+@@@
+	public boolean isHardwareAccelerated() {
+		return false;
+	}
+===
+	/** AOSP: true for a view attached to a hardware-accelerated window; every ATL window renders through GSK. */
+	public boolean isHardwareAccelerated() {
+		return isAttachedToWindow();
+	}
+@@@
+	public void setClickable(boolean clickable) {
+		mClickable = clickable;
+	}
+===
+	/** AOSP: a clickable view consumes touches (it handles them in onTouchEvent), so attach the touch path. */
+	public void setClickable(boolean clickable) {
+		mClickable = clickable;
+		if (clickable && widget != 0)
+			nativeSetOnTouchListener(widget);
+	}
+@@@
+	public void setLongClickable(boolean longClickable) {
+		mLongClickable = longClickable;
+	}
+===
+	public void setLongClickable(boolean longClickable) {
+		mLongClickable = longClickable;
+		if (longClickable && widget != 0)
+			nativeSetOnTouchListener(widget);
+	}
+@@@
+	public final int getMeasuredState() {
+		return 0;
+	}
+===
+	/** AOSP: the measured state bits of both dimensions (MEASURED_STATE_TOO_SMALL etc). */
+	public final int getMeasuredState() {
+		return (measuredWidth & MEASURED_STATE_MASK)
+				| ((measuredHeight >> MEASURED_HEIGHT_STATE_SHIFT) & (MEASURED_STATE_MASK >> MEASURED_HEIGHT_STATE_SHIFT));
+	}
+@@@
+	public void requestLayout() {
+		native_requestLayout(widget);
+		View view = this;
+		while (!view.layoutRequested) {
+			view.layoutRequested = true;
+			if (view.parent instanceof View)
+				view = (View)view.parent;
+			else
+				break;
+		}
+	};
+===
+	/**
+	 * AOSP: marks this view for a new measure/layout pass and asks the parent to do the same, through
+	 * the parent's own requestLayout() (overridden by RecyclerView, Compose's AndroidViewsHandler and
+	 * others) unless the parent already has a layout pending.
+	 */
+	public void requestLayout() {
+		native_requestLayout(widget);
+		layoutRequested = true;
+		if (TL_DEBUG_LAYOUT && parent != null && parent.getClass().getSimpleName().equals("AndroidViewsHandler"))
+			android.util.Log.i("View", "[layout] requestLayout reaches the compose views handler", new Throwable());
+		if (parent instanceof View && !((View) parent).isLayoutRequested())
+			((View) parent).requestLayout();
+	}
+
+	private static final boolean TL_DEBUG_LAYOUT = System.getenv("ATL_DEBUG_LAYOUT") != null;
+@@@
+	public boolean performAccessibilityAction(int action, Bundle arguments) { return false; }
+===
+	/** AOSP: the action goes to performAccessibilityActionInternal (an accessibility delegate would see it first). */
+	public boolean performAccessibilityAction(int action, Bundle arguments) {
+		return performAccessibilityActionInternal(action, arguments);
+	}
+@@@
+	public boolean isShown() { return true; }
+===
+	/**
+	 * AOSP: visible, with every ancestor visible, and attached to a window. ATL's content view has
+	 * no parent view, so reaching a parentless view means attached-to-window decides.
+	 */
+	public boolean isShown() {
+		View current = this;
+		do {
+			if (current.getVisibility() != VISIBLE)
+				return false;
+			ViewParent parent = current.getParent();
+			if (parent == null)
+				return current.isAttachedToWindow();
+			if (!(parent instanceof View))
+				return true;
+			current = (View) parent;
+		} while (current != null);
+		return false;
+	}
+@@@
+		this.visibility = visibility;
+		native_setVisibility(widget, visibility, alpha, atl_enabled);
+		dispatchVisibilityChanged(this, visibility);
+	}
+===
+		this.visibility = visibility;
+		native_setVisibility(widget, visibility, alpha, atl_enabled);
+		dispatchVisibilityChanged(this, visibility);
+		if (isAttachedToWindow()) // AOSP setFlags: the aggregated visibility follows while in a window
+			dispatchVisibilityAggregated(visibility == VISIBLE);
+	}
+@@@
+		if (floating_observer != null) {
+			getViewTreeObserver().merge(floating_observer);
+			floating_observer = null;
+		}
+	}
+===
+		if (floating_observer != null) {
+			getViewTreeObserver().merge(floating_observer);
+			floating_observer = null;
+		}
+		/* AOSP dispatchAttachedToWindow: a shown view learns it is visible once it is in a window */
+		if (isShown())
+			onVisibilityAggregated(true);
+	}
+@@@
+	protected void onDetachedFromWindow() {
+		if (onAttachStateChangeListener != null) {
+			onAttachStateChangeListener.onViewDetachedFromWindow(this);
+		}
+===
+	protected void onDetachedFromWindow() {
+		/* AOSP dispatchDetachedFromWindow: a visible view becomes invisible when it leaves the window */
+		if (tlIsAggregatedVisible())
+			onVisibilityAggregated(false);
+		if (onAttachStateChangeListener != null) {
+			onAttachStateChangeListener.onViewDetachedFromWindow(this);
+		}
+@@@
+		a.recycle();
+		onCreateDrawableState(0);
+	}
+===
+		/* AOSP View(Context, AttributeSet, int, int): the remaining view flags, from the attributes and the default style */
+		if (a.getBoolean(com.android.internal.R.styleable.View_clickable, false))
+			setClickable(true);
+		if (a.getBoolean(com.android.internal.R.styleable.View_longClickable, false))
+			setLongClickable(true);
+		if (a.getBoolean(com.android.internal.R.styleable.View_contextClickable, false))
+			setContextClickable(true);
+		if (a.hasValue(com.android.internal.R.styleable.View_contentDescription))
+			setContentDescription(a.getString(com.android.internal.R.styleable.View_contentDescription));
+		if (a.hasValue(com.android.internal.R.styleable.View_alpha))
+			setAlpha(a.getFloat(com.android.internal.R.styleable.View_alpha, 1.0f));
+		if (a.hasValue(com.android.internal.R.styleable.View_importantForAccessibility))
+			setImportantForAccessibility(a.getInt(com.android.internal.R.styleable.View_importantForAccessibility, IMPORTANT_FOR_ACCESSIBILITY_AUTO));
+		if (a.getBoolean(com.android.internal.R.styleable.View_focusableInTouchMode, false))
+			setFocusableInTouchMode(true);
+		if (a.hasValue(com.android.internal.R.styleable.View_duplicateParentState))
+			setDuplicateParentStateEnabled(a.getBoolean(com.android.internal.R.styleable.View_duplicateParentState, false));
+		a.recycle();
+		onCreateDrawableState(0);
+	}
+@@@
+	public void setContentDescription(CharSequence contentDescription) {}
+===
+	/** AOSP: the accessibility description of the view. */
+	public void setContentDescription(CharSequence contentDescription) {
+		tlContentDescription = contentDescription;
+	}
+	private CharSequence tlContentDescription;
+@@@
+	public void setFocusableInTouchMode(boolean focusableInTouchMode) {}
+===
+	/**
+	 * AOSP: focusable in touch mode implies focusable; giving it up while in touch mode drops the
+	 * focus (setFlags: a view that cannot keep focus in touch mode).
+	 */
+	public void setFocusableInTouchMode(boolean focusableInTouchMode) {
+		tlFocusableInTouchMode = focusableInTouchMode;
+		if (focusableInTouchMode)
+			setFocusable(FOCUSABLE);
+		else if (tlFocused && isInTouchMode())
+			clearFocus();
+	}
+	boolean tlFocusableInTouchMode;
+@@@
+	public void setDuplicateParentStateEnabled(boolean enabled) {}
+===
+	/** AOSP: the view takes its drawable state from its parent (see getDrawableState). */
+	public void setDuplicateParentStateEnabled(boolean enabled) {
+		tlDuplicateParentState = enabled;
+	}
+	private boolean tlDuplicateParentState;
+@@@
+	public boolean isDuplicateParentStateEnabled() { return false; }
+===
+	public boolean isDuplicateParentStateEnabled() {
+		return tlDuplicateParentState;
+	}
+@@@
+	public boolean hasWindowFocus() { return true; }
+===
+	/** AOSP: whether this view's window currently has focus (recorded on the window's root view). */
+	public boolean hasWindowFocus() {
+		View v = this;
+		while (v.getParent() instanceof View)
+			v = (View) v.getParent();
+		return v.tlWindowFocus;
+	}
+@@@
+	public boolean requestFocus(int direction, Rect previouslyFocusedRect) {
+		if (atl_enabled && atl_focusable && visibility == VISIBLE) {
+			nativeRequestFocus(widget, direction);
+			return true;
+		}
+		return false;
+	}
+===
+	/**
+	 * AOSP requestFocus/requestFocusNoSearch (tl_focus_model): the view takes focus when it can
+	 * (visible, focusable, enabled, focusable in touch mode while in touch mode, no ancestor blocking
+	 * its descendants); the focus is view state of its window, and GTK's focus follows it when the
+	 * window is the focused one.
+	 */
+	public boolean requestFocus(int direction, Rect previouslyFocusedRect) {
+		boolean ok = tlRequestFocusNoSearch(direction, previouslyFocusedRect);
+		if (TL_DEBUG_FOCUS)
+			android.util.Log.i("View", "[focus] requestFocus " + getClass().getName() + " ok=" + ok + " enabled=" + atl_enabled + " focusable=" + isFocusable()
+			                   + " inTouchMode=" + isFocusableInTouchMode() + " vis=" + visibility + " attached=" + isAttachedToWindow() + " windowFocus=" + hasWindowFocus(), TL_DEBUG_FOCUS_STACK ? new Throwable() : null);
+		return ok;
+	}
+	private static final boolean TL_DEBUG_FOCUS = System.getenv("ATL_DEBUG_FOCUS") != null;
+	private static final boolean TL_DEBUG_FOCUS_STACK = "stack".equals(System.getenv("ATL_DEBUG_FOCUS"));
+@@@
+	public boolean hasFocus() { return false; }
+===
+	/** AOSP: whether this view is the focused view of its window (ViewGroup: or contains it). */
+	public boolean hasFocus() { return tlFocused; }
+@@@
+	public void clearFocus() {}
+===
+	/** AOSP: gives up focus; outside touch mode the root view then picks a new focused view (tl_touch_mode). */
+	public void clearFocus() {
+		final boolean refocus = tlAlwaysAssignFocus() || !isInTouchMode();
+		tlClearFocusInternal(true, refocus);
+	}
+@@@
+	public View findFocus() { return this; }
+===
+	/** AOSP: this view when it is focused (ViewGroup: the focused view in its subtree), else null. */
+	public View findFocus() { return tlFocused ? this : null; }
+@@@
+	public boolean isInTouchMode() { return false; }
+===
+	/** AOSP: the display's touch mode (tl_touch_mode). */
+	public boolean isInTouchMode() { return tlTouchModeState(); }
+@@@
+	public View findViewById(int id) {
+		if (this.id == id)
+			return this;
+		else
+			return null;
+	}
+===
+	/** AOSP: NO_ID never matches; otherwise this view when the id is its own. */
+	public View findViewById(int id) {
+		if (id == NO_ID)
+			return null;
+		return this.id == id ? this : null;
+	}
+@@@
+	public interface OnLayoutChangeListener {
+		// TODO
+	}
+===
+	/** AOSP: called when the layout bounds of a view change because of layout processing. */
+	public interface OnLayoutChangeListener {
+		void onLayoutChange(View v, int left, int top, int right, int bottom, int oldLeft, int oldTop, int oldRight, int oldBottom);
+	}
+@@@
+	public void addOnLayoutChangeListener(OnLayoutChangeListener listener) {}
+	public void removeOnLayoutChangeListener(OnLayoutChangeListener listener) {}
+===
+	/** AOSP: the listener hears about every layout of this view (tl_layout_change). */
+	public void addOnLayoutChangeListener(OnLayoutChangeListener listener) {
+		if (tlLayoutChangeListeners == null)
+			tlLayoutChangeListeners = new java.util.ArrayList<OnLayoutChangeListener>();
+		if (!tlLayoutChangeListeners.contains(listener))
+			tlLayoutChangeListeners.add(listener);
+	}
+	public void removeOnLayoutChangeListener(OnLayoutChangeListener listener) {
+		if (tlLayoutChangeListeners != null)
+			tlLayoutChangeListeners.remove(listener);
+	}
+@@@
+		onLayout(changed, 0, 0, width, height);
+		oldWidth = width;
+		oldHeight = height;
+	}
+===
+		onLayout(changed, 0, 0, width, height);
+		oldWidth = width;
+		oldHeight = height;
+		tlDispatchLayoutChange();
+	}
+@@@
+	public void setLayoutDirection(int layoutDirection) {}
+===
+	/**
+	 * AOSP: stores the raw layout direction (INHERIT by default). teslalinux: resolving it against
+	 * the parent and the locale (RTL mirroring) is not done yet (TODO-real.md); getLayoutDirection
+	 * still resolves to LTR.
+	 */
+	public void setLayoutDirection(int layoutDirection) {
+		tlRawLayoutDirection = layoutDirection;
+	}
+@@@
+	public WindowInsets getRootWindowInsets() { return null; }
+===
+	/**
+	 * AOSP: the insets the window's root view got; null only while the view is not attached. This
+	 * platform has no status or navigation bars and no cutout, so they are empty. teslalinux: the
+	 * on-screen keyboard (native-osk.sh) is not reported as an IME inset yet (TODO-real.md).
+	 */
+	public WindowInsets getRootWindowInsets() { return isAttachedToWindow() ? new WindowInsets() : null; }
+@@@
+	private static final int NOT_FOCUSABLE = 0x00000000;
+===
+	public static final int NOT_FOCUSABLE = 0x00000000;
+@@@
+	private static final int FOCUSABLE = 0x00000001;
+===
+	public static final int FOCUSABLE = 0x00000001;
+	/** AOSP (API 26): the view decides itself; focusable when clickable (tl_focus_model) */
+	public static final int FOCUSABLE_AUTO = 0x00000010;
+@@@
+	private boolean atl_focusable = true;
+===
+	/** AOSP: NOT_FOCUSABLE, FOCUSABLE or FOCUSABLE_AUTO (the default when nothing sets it) (tl_focus_model) */
+	private int tlFocusableMode = FOCUSABLE_AUTO;
+@@@
+			atl_focusable = a.getBoolean(com.android.internal.R.styleable.View_focusable, true);
+===
+			/* AOSP getFocusableAttribute: android:focusable is a boolean or "auto" */
+			if (a.hasValue(com.android.internal.R.styleable.View_focusable)) {
+				android.util.TypedValue fv = new android.util.TypedValue();
+				a.getValue(com.android.internal.R.styleable.View_focusable, fv);
+				if (fv.type == android.util.TypedValue.TYPE_INT_BOOLEAN)
+					tlFocusableMode = fv.data == 0 ? NOT_FOCUSABLE : FOCUSABLE;
+				else
+					tlFocusableMode = fv.data;
+			}
+@@@
+	public void setFocusable(boolean focusable) {
+		atl_focusable = focusable;
+	}
+	public void setFocusable(int focusable) {}
+===
+	/** AOSP: whether this view can take focus. */
+	public void setFocusable(boolean focusable) {
+		setFocusable(focusable ? FOCUSABLE : NOT_FOCUSABLE);
+	}
+	/** AOSP: NOT_FOCUSABLE, FOCUSABLE or FOCUSABLE_AUTO; a view that is no longer focusable loses focus. */
+	public void setFocusable(int focusable) {
+		if ((focusable & (FOCUSABLE_AUTO | FOCUSABLE)) == 0)
+			tlFocusableInTouchMode = false;
+		tlFocusableMode = focusable & (FOCUSABLE_AUTO | FOCUSABLE);
+		if (!isFocusable() && tlFocused)
+			clearFocus();
+	}
+	/** AOSP: the focusable setting as set (FOCUSABLE_AUTO when the view decides). */
+	public int getFocusable() {
+		return (tlFocusableMode & FOCUSABLE_AUTO) != 0 ? FOCUSABLE_AUTO : (isFocusable() ? FOCUSABLE : NOT_FOCUSABLE);
+	}
+@@@
+	public final boolean isFocusable() { return atl_focusable; }
+===
+	/** AOSP: FOCUSABLE, or FOCUSABLE_AUTO on a clickable view. */
+	public final boolean isFocusable() {
+		if ((tlFocusableMode & FOCUSABLE_AUTO) != 0)
+			return isClickable();
+		return (tlFocusableMode & FOCUSABLE) != 0;
+	}
+@@@
+	public boolean isFocused() {
+		return nativeIsFocused(widget);
+	}
+===
+	/** AOSP: whether this view is the focused view of its window. */
+	public boolean isFocused() {
+		return tlFocused;
+	}
+@@@
+	public final boolean requestFocusFromTouch() {
+		// TODO: if (isInTouchMode()) leave touch mode
+		return requestFocus(View.FOCUS_DOWN);
+	}
+===
+	/** AOSP: leaves touch mode first, so a view that is focusable only outside touch mode can take focus. */
+	public final boolean requestFocusFromTouch() {
+		if (isInTouchMode())
+			tlEnsureTouchMode(false);
+		return requestFocus(View.FOCUS_DOWN);
+	}
+@@@
+		this.visibility = visibility;
+		native_setVisibility(widget, visibility, alpha, atl_enabled);
+===
+		/* AOSP setFlags: a view that stops being visible gives up focus */
+		if (visibility != VISIBLE && hasFocus())
+			clearFocus();
+		this.visibility = visibility;
+		native_setVisibility(widget, visibility, alpha, atl_enabled);

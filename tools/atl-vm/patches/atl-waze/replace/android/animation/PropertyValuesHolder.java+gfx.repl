@@ -1,0 +1,16 @@
+@@@
+	public void setupStartValue(Object target) {
+	}
+
+	public void setupEndValue(Object target) {
+	}
+===
+	/** AOSP: the first value becomes the target's current value of the property (LayoutTransition, setupStartValues). */
+	public void setupStartValue(Object target) {
+		tlSetupValue(target, true);
+	}
+
+	/** AOSP: the last value becomes the target's current value of the property. */
+	public void setupEndValue(Object target) {
+		tlSetupValue(target, false);
+	}

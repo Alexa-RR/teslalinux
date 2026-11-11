@@ -1,0 +1,288 @@
+# Car stack readiness
+
+Everything between the Tesla browser and the app: hotspot, hijack DNS, NAT, nginx, the launcher page
+(`web/`), the WebSocket daemons (`services/`), the certificate, and the host plumbing that starts them.
+State as of 2026-11-09.
+
+**Targets.** The **primary target is stock Raspberry Pi OS Lite 64-bit** (Debian trixie, systemd,
+NetworkManager) with everything installed natively by one installer (`host/phase1-pios/provision.sh`
+today; the one-liner wrapper is a later step, see "Future"). The **Alpine image**
+(`tools/image/build-alpine-pi.sh`, OpenRC, `host/alpine/`) is the secondary target and the test VM's
+platform. Both render their host configuration from the same templates with the same renderer
+(`host/teslalinux-render`), so a fix lands in both.
+
+## 1. How to check it
+
+| What | Command | Result now |
+|---|---|---|
+| Web stack on the Mac (nginx + api + gps + audio, the car's rendered site) | `host/local/web-local.sh start`, then `host/local/web-local.sh check` | 63/63 checks pass |
+| Config API against upstream's contract (in-process) | `python3 services/api/test/test_api.py` | 7/7 pass |
+| Certificate acceptance on the Pi (throwaway CA; every accept/reject case) | `sh host/tls/test/run.sh` (also `TLS_TEST_SH=dash dash host/tls/test/run.sh`) | 36/36 pass under sh and dash |
+| Whole chain with Waze in the test VM | `ATL_VM_FWD_CAR=1 tools/atl-vm/vm-mac.sh start` (fresh start), then `tools/atl-vm/carstack.sh up`, `carstack.sh check` | written, **not run yet** (shared VM) |
+| Syntax | `sh -n`/`bash -n` on every script, `python3 -m py_compile`, workflow YAML parsed | clean |
+
+Open the local stack in Chrome (accept the self-signed certificate once):
+```
+open -na "Google Chrome" --args --user-data-dir=/tmp/teslalinux-chrome \
+  --host-resolver-rules="MAP car.alexahub.dev:443 127.0.0.1:8443, MAP *.car.alexahub.dev:443 127.0.0.1:8443" \
+  https://car.alexahub.dev/
+```
+For the VM stack use port 9443 instead of 8443 (`carstack.sh` header). Alternative to the resolver
+rules: `/etc/hosts` with `127.0.0.1 car.alexahub.dev fullscreen.car.alexahub.dev` and
+`https://car.alexahub.dev:8443/`.
+
+## 2. Upstream parity (Tesla Android's web setup, translated to nginx / dnsmasq / nftables)
+
+Upstream sources: `upstream/android-vendor-tesla-android/services/lighttpd/lighttpd.conf` (L),
+`.../www-redirect/index.html`, the netd patch series
+`upstream/android-raspberry-pi/patches-aosp/system/netd/000{1..5}*.patch` (N1..N5), the configuration
+manager `upstream/android-external-tesla-android-configuration-manager/tesla-android-configuration-manager.cpp`
+(C), build properties `upstream/android-vendor-tesla-android/vendor.mk` (V). Ours: the templates in
+`host/phase1-pios/etc/`, rendered by `host/teslalinux-render`. "Checked" = asserted by `host/local/check.py`.
+
+| # | Upstream | Ours | Status |
+|---|---|---|---|
+| 1 | TLS on 443, session cache (L:53-59) | `teslalinux-tls.inc`: TLS 1.2/1.3, own `shared:teslalinux` cache zone | done, checked (TLS 1.3) |
+| 2 | Cipher list `AES128-SHA` (L:57) | ChaCha20-Poly1305 first, ECDHE-AES-GCM, AES128-SHA kept for RSA placeholders: our key is ECDSA, which AES128-SHA cannot use, and the Pi 4 has no AES instructions | deliberate deviation, checked (server prefers ChaCha20) |
+| 3 | Separate certificate for `fullscreen.` (L:65-68) | one certificate with SANs `car`, `www.car`, `fullscreen.car`, `www.fullscreen.car` | done, checked (SAN set) |
+| 4 | Host block: teslaandroid.com hosts + 192.168/10/172.16-31 IP literals (L:71) | app server: `DEVICE_HOST`, `*.DEVICE_HOST`, the same private-range regex | done, checked (6 hosts, 172.15.x excluded) |
+| 5 | COEP `credentialless` + COOP `same-origin` on every response of those hosts (L:72-75) | server-level `add_header ... always`, repeated in `teslalinux-nocache.inc` where locations add headers | done, checked (`/`, `/api`) |
+| 6 | Non-/api: `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`, `Pragma: no-cache`, `Expires: 0`, ETags off (L:77-86) | `teslalinux-nocache.inc`, `etag off` | done, checked (also on 403) |
+| 7 | WebSocket upgrades: touchscreen 9999, gps 9998, audio 8080, display 9091 (L:88-114) | `teslalinux-app.inc` + `teslalinux-ws.inc` (Upgrade/Connection, 1 h timeouts, no buffering, nodelay) | done; gps and audio checked (101); display/touch need tacomp (VM: `carstack.sh check`) |
+| 8 | `/stream` -> 9090 (L:116-118) | **omitted**: nothing in `web/js` (nor upstream's frontend or its `beta/` copy) requests `/stream`, and no upstream daemon listens on 9090 any more (the old MJPEG-over-HTTP endpoint, replaced by `/sockets/display`); a proxy to a closed port would only produce 502s. `/stream` is a plain 404 | documented, checked (404) |
+| 9 | `/api` -> 8081 with 1 s expiry, URL regex `^/api(/.*)?$` (L:120-123) | `location = /api`, `location /api/`, `expires 1s` (Expires + `Cache-Control: max-age=1`) | done, checked |
+| 10 | mimetype map incl. `.wasm application/wasm`, `.mjs` (L:31-51) | `teslalinux-mime.inc`, same map, `charset=utf-8` on the text types | done, checked (7 types) |
+| 11 | `url.access-deny` `~ .inc .md .yml .ini` (L:28) | regex location, 403 | done, checked |
+| 12 | `server.error-handler-404 = /404.html` (L:14; upstream ships no such file) | `error_page 404 /404.html` + `web/404.html` | done, checked |
+| 13 | Base server for every other host: www-default, no extra headers (L:13-19) | `default_server` on 80 and 443 with `teslalinux-static.inc` | done, checked (www.teslamotors.com/.tesla.com/.tesla.cn, no /api proxy) |
+| 14 | HTTP on 80 serves the same app as 443 (no redirect; the host blocks apply to both ports) | app server also on 80 | done, checked; plain http has no secure-context APIs, the car uses https |
+| 15 | connman hosts: `X-ConnMan-Status: online`, `X-Cache: Hit from cloudfront` (L:131-144) | own server block, `teslalinux-static.inc` + both headers | done, checked; `web/online/{status.html,connectivity_check.txt}` copied byte-for-byte from upstream's www-default |
+| 16 | youtu.be: www-redirect page, 3 s `setTimeout` then `https://fullscreen.device...`, manual button (L:126-129, www-redirect/index.html) | `host/phase1-pios/etc/www-redirect/index.html`: upstream's markup, target `https://fullscreen.DEVICE_HOST` | done, checked (youtu.be, www.youtu.be) |
+| 17 | Frontend behaviour on the fullscreen host | none: upstream's frontend has no host-specific code (it hardcodes `device.teslaandroid.com` endpoints; ours derive them from `location.host`, so `fullscreen.` talks to itself). The difference is the browser: Tesla shows the page full-screen when reached through the youtu.be launcher | verified by reading `web/js`, upstream `frontend/js`, `main.dart.js` |
+| 18 | dnsmasq: device names -> hijack IP (N1:46-50, N3 removed app.teslaandroid.com) | `address=` for `DEVICE_HOST`, `www.`, `fullscreen.`, `www.fullscreen.` -> `HIJACK_IP` (192.0.2.1) | done (rendered; dnsmasq run needs hardware) |
+| 19 | youtu.be + www.youtu.be -> 216.58.215.78 (N2:20-21) | same two lines | done |
+| 20 | DNAT hijack IP tcp+udp -> Pi, SNAT Pi -> hijack IP (N1:95-98) | nftables `meta l4proto { tcp, udp } dnat`, matching `snat`, same order | done (rendered; needs hardware) |
+| 21 | youtu.be :6969 -> Pi :80, tcp+udp, plus its SNAT (N2:39-42) | same; upstream's SNAT order makes the youtu.be SNAT unreachable, ours keeps the order and says so | done |
+| 22 | Offline mode (`offline-mode.is_enabled == 1`): connman.vn.tesla.services, www.teslamotors.com, www.tesla.com, connman.vn.cloud.tesla.cn, www.tesla.cn (N1:59-65, N4 removed both hermes-prd hosts, N5 added www.tesla.com) | `OFFLINE_HOSTS` in the renderer, to the hijack IP. hermes-prd is not spoofed because upstream's final state does not (N4: "not required anymore") | done |
+| 23 | Telemetry block (`telemetry.is_enabled == 0`): 7 hosts (N1:68-75) | `TELEMETRY_HOSTS`, same list | done |
+| 24 | Firmware-download block (`tesla-firmware-downloads == 0`): va.teslamotors.com (N1:78-79) | `FIRMWARE_HOSTS` | done |
+| 25 | Defaults: offline 1, telemetry 1, firmware downloads 1, band 2 / ch 44 / width 3, GPS 0, browser audio 0 (V:68-89) | `tlprops.UPSTREAM_DEFAULTS`; env switches `OFFLINE_MODE`, `OFFLINE_MODE_TELEMETRY`, `OFFLINE_MODE_FIRMWARE_DOWNLOADS` | done, API-tested |
+| 26 | Settings through the config manager: `POST /api/offlineModeState`, `offlineModeTelemetryState`, `offlineModeTeslaFirmwareDownloads`, `softApBand/Channel/ChannelWidth/State` as text/plain property values (C:493-590), applied when the hotspot next starts (the frontend says "during the next system startup") | `api.py` stores them under upstream's property names; `teslalinux-netconfig` re-renders hostapd/dnsmasq at boot when they changed | done, API-tested; boot re-render needs hardware |
+| 27 | `softap.is_enabled` is stored but not honoured (C:328-332 has the check commented out) | same: stored, the hotspot always starts (turning it off would lock the car out of the page that turns it on) | parity |
+| 28 | Config API: configuration (C:394), displayState GET/POST (C:591, C:617), deviceInfo (C:358), health (C:386), openUpdater (C:349), preflight 204 (C:160), CORS headers (C:673) | `services/api/api.py`, same shapes and status codes. openUpdater answers 501: there is no system-update screen on this platform | done, API-tested; deviceInfo hardware fields (temperature, serial, modem, CarPlay) need hardware |
+
+## 3. Gaps found and fixed
+
+| Gap | Fix | Commit |
+|---|---|---|
+| `/api/configuration` returned our own nested shape; the frontend reads flat `persist.tesla-android.*` keys, so GPS and audio showed as on and every setting was wrong | `api.py` rewritten to the configuration-manager contract; settings in `tlprops.py` | eab450e |
+| The frontend's setting POSTs are `text/plain` (`"1"`, `"44"`); `api.py` answered 404 to all of them, so every toggle failed | text routes store the raw value, reply `OK` | eab450e |
+| `api.py` wrote `/etc/teslalinux/state.json` as the unprivileged `tesla` user: every POST died | state in `/var/lib/teslalinux/state` owned by tesla; root work through one sudoers command | eab450e, 49cadd0 |
+| GPS feed: Python writes unknown speed/heading as `nan`, ATL's `Double.parseDouble` only accepts `NaN`: the browser sends `"null"` when standing still, so the feed dropped on every such fix | `NaN`, range checks, no crash on a bad timestamp, loopback binds | eab450e |
+| gps/audio logged tracebacks whenever the car dropped off the Wi-Fi (no close frame) | handled as the normal case | 49cadd0 |
+| audio: a client could get a fragment before the init segment; one slow client stalled all | init queued before joining; per-client queues capped at ~1 s; ffmpeg only while someone listens | eab450e |
+| tacomp's WebSockets listened on every interface (any hotspot client could inject touches without TLS) | `TACOMP_BIND`, the services set 127.0.0.1 | eab450e |
+| H.264: a client joining mid-GOP waited for the next IDR, forever on a static screen; the frame request ran on the libwebsockets thread (wlroots is not thread-safe) | IDR forced per new client, the held last buffer re-encoded; requests moved to the main thread | eab450e (**not compiled yet**) |
+| Encoder names: services set `mjpeg`/`h264`, tacomp only knows `m2m-*` (H.264 never selected) | `m2m-jpeg` / `m2m-h264` everywhere; the API maps renderer -> encoder | eab450e |
+| Alpine nginx: our `ssl_session_cache shared:SSL:1m` clashes with Alpine's `shared:SSL:2m` (nginx -t fails); `$connection_upgrade` defined twice | own zone and variable names | 49cadd0 |
+| Offline mode was blanked on the Alpine image (`@OFFLINE_BLOCK@` -> empty); Pi OS spoofed to the private Pi address, included hermes, missed www.tesla.com/.cn, telemetry blocks unsupported | one renderer with upstream's final host lists and switches, to the hijack IP | 49cadd0 |
+| youtu.be answered an instant 302 to `DEVICE_HOST` (not upstream's 3 s page, not the fullscreen host) | upstream's page | 49cadd0 |
+| connman probes got 204 with only one header | 200 + both headers + upstream's `online/` files | 49cadd0 |
+| hostapd: fixed `HT40+` and centre index 42, so channels 36/149/157 or 2.4 GHz from the frontend would break the AP | computed per band/channel/width | 49cadd0 |
+| ATL's audio went to the Pi's own ALSA device; WirePlumber picked hardware sinks over the null sink | `pipewire-alsa` + `/etc/asound.conf` default -> PipeWire, hardware monitors off, sink priority | 49cadd0, bbf5288 |
+| Pi OS units used `/run/user/%U` (in system units `%U` is root's uid): PipeWire paths of ATL, audio and Waydroid all pointed at `/run/user/0` | PipeWire, WirePlumber, pipewire-pulse as system units for tesla in `/run/tesla` | bbf5288 |
+| Pi OS trim disabled `systemd-timesyncd` with no replacement: no NTP at all without an RTC | timesyncd kept | bbf5288 |
+| Pi OS installed `nginx-light` (gone in trixie) and `libwlroots-0.18` (tacomp needs 0.20) | `nginx`; the wlroots question is a blocker below | bbf5288 |
+| Alpine: `mdev` and `udev` both enabled; no `render` group (tacomp's GLES2 renderer cannot open the render node); `dhcpcd` never enabled (no LTE uplink) | eudev only (+ udev-settle so wlan0 exists before hostapd), render group, dhcpcd on uplinks with `denyinterfaces wlan0` | 49cadd0 |
+| Alpine boot: `config.txt` from Pi OS pointed at `kernel8.img`; Alpine's linux-rpi installs `vmlinuz-rpi` | `kernel=vmlinuz-rpi` + `initramfs initramfs-rpi followkernel` | 49cadd0 |
+| Certificate renewal ran weekly at 03:00 (a car Pi is off then) with Cloudflare credentials on the Pi | cloud renewer, no credentials on the Pi (section 4) | 0d3a9cd, 99651e6 |
+| The frontend posts its display state on every page load; the old helper restarted the compositor and the app each time | helpers restart only when something changed | 49cadd0 |
+
+## 4. Certificate
+
+### Design
+
+* **The key never leaves the Pi.** `teslalinux-tls init` (first boot / provisioning) creates an ECDSA
+  P-256 key in `/etc/teslalinux/tls/privkey.pem` (root, dir 0700, file 0600; nginx's master process
+  reads it as root) and a CSR with exactly `car.alexahub.dev`, `www.car.alexahub.dev`,
+  `fullscreen.car.alexahub.dev`, `www.fullscreen.car.alexahub.dev`. Until a real chain arrives,
+  nginx serves a self-signed certificate for the same key (the browser warns; the launcher says so).
+* **No DNS or ACME credential on the Pi or in any image.** acme.sh, `acme.env` and `teslalinux-cert`
+  are gone from the Pi side.
+* **Issuance in the cloud.** `.github/workflows/tls-renew.yml` + `host/tls/renew.sh` sign the
+  committed CSR (`host/tls/device.csr.pem`) with Let's Encrypt over DNS-01 on Cloudflare: daily check,
+  renew when less than 1/3 of the lifetime is left or when the CA's ARI window has opened (lifetimes
+  are shrinking: 90 -> 45 days, CA/B Forum caps toward 47 days by 2029; the rule follows the
+  certificate, not a day count). Only public material is published: `current/fullchain.pem` and
+  `current/meta.json` (notBefore/notAfter, chain sha256, SPKI sha256), the previous pair under
+  `previous/` for rollback.
+* **The Pi accepts a chain only if it is ours.** `teslalinux-tls fetch`: HTTPS with the system CAs,
+  64 KiB limit, timeouts; then PEM certificates only, leaf public key == our key (or the pending
+  rotation key), `openssl verify -purpose sslserver -x509_strict` against the system store, SANs
+  exactly the four names, digitalSignature + serverAuth, notBefore <= now + 10 min, notAfter > now and
+  later than the installed trusted chain's; a clock earlier than the install time defers instead of
+  judging. Then temp file, fsync, rename, `nginx -t`, reload; on failure the previous files return.
+  Every decision is logged (`/var/log/teslalinux/tls.log`) and written to
+  `/var/lib/teslalinux/tls-state/tls.json`. The workflow runs **the same checks** (`teslalinux-tls
+  verify` with `TLS_EXPECTED_SPKI` = the CSR's key) before it publishes.
+* **When it runs (Pi OS):** `teslalinux-tls-fetch.timer` (1 min after boot, then every 6 h, 15 min
+  random delay), the NetworkManager dispatcher hook `90-teslalinux-tls` when an uplink comes up (not
+  within 10 min of a success), and `teslalinux-tls-fetch.service`'s `Restart=on-failure` with
+  `RestartSteps`/`RestartMaxDelaySec` as exponential backoff from 1 min to 6 h. Never ordered before
+  nginx or anything on the boot path. (Alpine: the same tool as an OpenRC daemon, dhcpcd exit hook.)
+* **Visibility:** `GET /api/certificate` (expiry, days left, last result, self-signed or trusted);
+  the launcher shows a small dismissable notice when fewer than 14 days are left, the last update
+  failed or was rejected, or the certificate is the placeholder (`web/js/core/cert-warning.js`).
+  `GET /api/tls/csr` serves the CSR read-only (public data); there is no write route for anything TLS.
+
+### Threat model
+
+| Event | What the attacker gets | What limits it / what to do |
+|---|---|---|
+| Stolen Pi | the key and the current certificate (valid until expiry, at most ~90 days, 45 later) | they cannot get a new one: issuance needs the DNS token in GitHub, and the workflow only signs the committed CSR. Revoke: on the replacement Pi `teslalinux-tls rotate` (or a fresh install), commit its CSR, run the workflow with `action: revoke` (it refuses if the CSR still uses the stolen key). Reason `superseded`: Let's Encrypt accepts `keyCompromise` only when signed by the certificate's own key, which the thief has, not you |
+| Leaked Actions secret: ACME account key | an account that can request certificates | DNS-01 still needs the DNS token; rotate the account key (new key -> new account URI -> update CAA) |
+| Leaked Actions secret: Cloudflare DNS token | DNS edits in the scoped zone until the token expires | CAA `accounturi` pins issuance to our ACME account, so another account cannot get a certificate for the car names; in hardened mode the token cannot touch alexahub.dev at all; the token has an expiry date; CT monitoring reports any issuance |
+| Both of the above | certificates for the car names | CT monitoring alert; revoke, rotate both secrets, rotate the Pi key |
+| Leaked R2 token, or the download URL / CDN compromised | the ability to publish any file | substitution fails on the Pi: the chain must match the Pi's key, chain to a trusted root, carry exactly our names and be newer. The worst case is withholding renewals: the Pi keeps its certificate, the launcher warns at 14 days |
+| Push access to `main` | can change the workflow to exfiltrate secrets | the trust boundary is the repo: 2FA, no other collaborators, branch protection (no force pushes), Actions limited to GitHub-authored actions pinned by SHA |
+
+### Setup (once; exact steps)
+
+1. **CSR from the Pi** (after provisioning): `sudo teslalinux-tls export-csr > device.csr.pem` (or from
+   a laptop on the hotspot: `https://car.alexahub.dev/api/tls/csr`). Commit it as
+   `host/tls/device.csr.pem` in this repo and push.
+2. **ACME account key** (on your own computer, not the Pi):
+   `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out acme-account.key`; paste the
+   whole file into the secret below, then keep the file offline (password manager) or delete it.
+3. **Cloudflare DNS token** (default mode): Cloudflare dashboard -> My Profile -> API Tokens -> Create
+   Token -> Custom token: Permissions `Zone` / `DNS` / `Edit`; Zone Resources `Include` / `Specific
+   zone` / `alexahub.dev`; TTL: an end date (e.g. one year; put a reminder in the calendar); no IP
+   filter (GitHub runners have no fixed IPs). Zone ID: the alexahub.dev overview page, right column.
+   **Hardened mode** (the token cannot edit alexahub.dev at all): put a separate validation zone on
+   Cloudflare (e.g. a second cheap domain, `<validation-zone>`), create the token for that zone only,
+   and add in alexahub.dev four CNAMEs:
+   `_acme-challenge.car.alexahub.dev`, `_acme-challenge.www.car.alexahub.dev`,
+   `_acme-challenge.fullscreen.car.alexahub.dev`, `_acme-challenge.www.fullscreen.car.alexahub.dev`
+   -> `_acme-challenge.<validation-zone>` (DNS only). Then set `CHALLENGE_ALIAS=<validation-zone>` and
+   `CF_ZONE_ID` = the validation zone's ID.
+4. **R2 bucket**: R2 -> Create bucket `teslalinux-certs` -> Settings -> Custom Domains -> Connect
+   `certs.alexahub.dev` (keep the r2.dev URL disabled). R2 -> Manage R2 API Tokens -> Create API
+   token: `Object Read & Write`, "Apply to specific buckets only" = `teslalinux-certs`, TTL as above
+   -> note Access Key ID and Secret Access Key (R2 has no write-only permission; reading public
+   certificates exposes nothing). Account ID: R2 overview page.
+5. **GitHub Environment** (repo -> Settings -> Environments -> New environment `tls`):
+   Deployment branches and tags: "Selected branches and tags", rule `main`. Required reviewers: **off**
+   (a reviewer gate would hold every scheduled run until someone approves it).
+   Secrets: `ACME_ACCOUNT_KEY` (step 2, whole PEM), `CF_DNS_API_TOKEN` (step 3), `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY` (step 4).
+   Variables: `DEVICE_HOST=car.alexahub.dev`, `CF_ZONE_ID=<zone id>`, `R2_ACCOUNT_ID=<account id>`,
+   `R2_BUCKET=teslalinux-certs`, `CERT_PATH_PREFIX=car`, `PUBLIC_BASE_URL=https://certs.alexahub.dev/car`;
+   optional `CHALLENGE_ALIAS`, `ACME_EMAIL`, `CF_ACCOUNT_ID`.
+6. **Repo Actions policy** (Settings -> Actions -> General): allow only actions created by GitHub,
+   require actions to be pinned to a full-length commit SHA, default workflow permissions read-only.
+   Branch protection on `main`: block force pushes and deletion.
+7. **First runs**: Actions -> tls-renew -> Run workflow with `staging: true` (whole flow, nothing
+   published), then with `action: issue`. The job summary and the log line `ACME account: ...` show the
+   **account URI** for the CAA record.
+8. **DNS hardening** (Cloudflare DNS for alexahub.dev):
+   * A records, **DNS only** (grey cloud): `car`, `www.car`, `fullscreen.car`, `www.fullscreen.car`
+     -> `192.0.2.1`.
+   * CAA, after step 7, on the **`car.alexahub.dev`** node (CAA lookups climb from each name, so this
+     covers all four names and leaves the apex and `certs.alexahub.dev` to Cloudflare's own edge
+     certificates, which a pin at the apex would block):
+     `car.alexahub.dev CAA 0 issue "letsencrypt.org; accounturi=<ACME account URI>; validationmethods=dns-01"`,
+     `car.alexahub.dev CAA 0 issuewild ";"`,
+     `car.alexahub.dev CAA 0 iodef "mailto:<your address>"`.
+     (At the apex instead only if nothing else under alexahub.dev needs certificates from other CAs or
+     accounts.)
+   * DNSSEC: DNS -> Settings -> Enable DNSSEC, then add the DS record at the registrar (automatic with
+     Cloudflare Registrar).
+   * Certificate Transparency monitoring: SSL/TLS -> Edge Certificates -> "Certificate Transparency
+     Monitoring" on (Cloudflare mails new certificates for the domain), and/or Cert Spotter
+     (sslmate.com/certspotter) watching `alexahub.dev` with subdomains, or the crt.sh feed
+     `https://crt.sh/atom?q=%25.alexahub.dev`.
+9. **Pi**: `TLS_FETCH_URL=https://certs.alexahub.dev/car/current/fullchain.pem` is already in
+   `/etc/teslalinux/env`; after step 7, `sudo systemctl start teslalinux-tls-fetch.service` (or wait
+   for the timer) and `teslalinux-tls status`.
+
+Operations: **rotate** the key with `sudo teslalinux-tls rotate` (the old pair keeps serving), commit
+the printed CSR, run the workflow with `action: issue`; the Pi swaps key and certificate together
+when the new chain arrives. **Reflash** = a new key: same as rotation (commit the new CSR, `issue`).
+**Rollback**: copy `previous/` over `current/` in the bucket (the Pi only accepts it if it is newer
+than what it has, so this matters only for a Pi that never got the bad one).
+
+Pinned in `host/tls/renew.sh`: acme.sh 3.1.6, commit `807da6498377ee5e0cf43a78091f46f12dc59a89`,
+sha256 `acme.sh` `c7d68b021cfd6380ea83a82962abde5b484779fee0b97d38681dfa1396bbc8d7`, `dnsapi/dns_cf.sh`
+`9628ee8238cb3f9cfa1b1a985c0e9593436a3e4f8a9d65a6f775b981be9e76c8`; `actions/checkout` v5.1.0
+`fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09` (checked with `git ls-remote`).
+
+## 5. Pi OS blockers (outside this stack, must be solved before the one-line installer works)
+
+1. **ATL on Debian.** `android-translation-layer`, `art_standalone`, `bionic_translation` and
+   `libandroidfw` exist only as Alpine packages. The installer needs them built for Debian trixie
+   arm64 (from source, or a prebuilt `/opt/atl` tree with its libraries). ATL side of the project.
+2. **tacomp needs wlroots 0.20; trixie ships 0.18.** Either the installer builds wlroots 0.20 (meson,
+   into a private prefix) or tacomp gets a 0.18 build path. `provision.sh` installs a tacomp binary
+   only when one was built for the system.
+3. **One-liner distribution.** The repo is private, so `curl ... | sudo bash` cannot fetch from it.
+   Options: publish a signed installer bundle next to the certificate (R2, verified by a pinned
+   minisign/ssh-signature key in the one-liner), or clone with a read-only deploy key.
+
+## 6. Needs the VM run (`tools/atl-vm/carstack.sh`)
+
+* tacomp compiles with the new code (`carstack.sh install` builds it: the bind option, the forced
+  IDR, the main-thread frame request).
+* `/sockets/display` and `/sockets/touchscreen` upgrade through nginx (`carstack.sh check` expects
+  101) and the page shows Waze; taps reach the app; GPS from the page reaches Waze.
+* Alpine's nginx accepts the rendered site next to its own `nginx.conf` (the zone/variable clash fix).
+* `CARSTACK_AUDIO=1`: ATL -> ALSA -> PipeWire null sink -> audio.py (`ffmpeg -f pulse
+  -fragment_size`; Homebrew's ffmpeg has no Pulse input, so this was not exercised on the Mac).
+* `sh host/tls/test/run.sh` under busybox ash.
+
+## 7. Needs hardware
+
+* hostapd on brcmfmac: 5 GHz ch 44 80 MHz (and 36/149/157, 2.4 GHz HT40), country code.
+* The hijack path with the car: dnsmasq answers, DNAT/SNAT, connman probes keep the Wi-Fi in offline
+  mode, the youtu.be launcher goes full-screen.
+* TLS from the car (ChaCha20 preference, CPU cost of the stream), the issued certificate.
+* tacomp on V3D (GLES2, render group), the V4L2 M2M encoders (`m2m-jpeg`, `m2m-h264`), the forced IDR
+  with WebCodecs in the car.
+* PipeWire/WirePlumber as system units without a session bus.
+* LTE uplink, NetworkManager dispatcher kick, timesyncd, the DS3231 RTC.
+* `teslalinux-tls-fetch.service` sandbox (`nginx -t` and the reload under `ProtectSystem=strict`).
+* deviceInfo: CPU temperature, serial, modem and CarPlay detection.
+* Boot time: `teslalinux-netconfig` (Python only when settings changed), first boot key generation.
+* Alpine image only: firmware boot with `vmlinuz-rpi`/`initramfs-rpi`, DTB locations, udev-settle cost.
+
+## 8. In-car test procedure
+
+1. Pi: provisioned, rebooted. `systemctl --failed` empty; `systemctl status hostapd dnsmasq nftables
+   nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire`;
+   `teslalinux-tls status` shows `"trusted": true` (else run setup step 9 first; with the placeholder the
+   car shows a certificate error).
+2. Car: Wi-Fi -> join `Teslalinux` (`AP_SSID`; password from `AP_PSK`), tick "Remain connected in Drive".
+3. Browser: `https://car.alexahub.dev/`. Expect the launcher, no certificate warning, the stream
+   (MJPEG default), Waze after its start time. Tap: Waze reacts.
+4. Fullscreen: open the youtu.be launcher on port 6969, `http://youtu.be:6969/` (how a youtu.be
+   link is opened so the car switches to its full-screen video mode is the car's behaviour; upstream
+   documents no exact URL, so try the plain address first, then through a YouTube redirect link). The
+   redirect page appears and after 3 s loads `https://fullscreen.car.alexahub.dev`.
+5. Settings -> Display: switch to `h264 (WebCodecs)`: the page reloads the stream; picture within a
+   second (forced IDR). Back to MJPEG.
+6. Settings -> GPS on, allow location: Waze follows the car (check `journalctl -u teslalinux-gps` and the
+   feed: `nc 127.0.0.1 9997` on the Pi shows lines).
+7. Settings -> Audio on, press the speaker button: Waze voice prompts play in the car.
+8. Settings -> Network: toggle telemetry blocking, apply, reboot the Pi: `grep telemetry
+   /etc/dnsmasq.conf` follows the setting.
+9. Pull the LTE stick and put it back: `tail /var/log/teslalinux/tls.log` shows a fetch attempt
+   (or "fetched a moment ago" within 10 min).
+10. Offline: no LTE, the car keeps the hotspot connection (connman probe answered locally).
+
+## 9. Future
+
+* **Update `web/` without reflashing**: pull a signed frontend bundle over LTE when available (same
+  pattern as the certificate: public bundle, signature checked on the Pi against a pinned key, atomic
+  swap of `/var/www/teslalinux`, nginx reload, rollback copy).
+* The frontend's update button checks upstream's GitHub releases (tesla-android/android-raspberry-pi);
+  for this fork it should point at our own release feed once there is one.
+* The one-line installer (section 5).

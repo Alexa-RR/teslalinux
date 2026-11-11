@@ -1,0 +1,427 @@
+@@@
+public MenuItem add(int groupId, int itemId, int order, CharSequence title) {
+			MenuItemImpl item = new MenuItemImpl(itemId, this, String.valueOf(title), null);
+			items.add(item);
+			item.setVisible(true);
+			return item;
+		}
+===
+public MenuItem add(int groupId, int itemId, int order, CharSequence title) {
+			MenuItemImpl item = new MenuItemImpl(itemId, this, String.valueOf(title), null);
+			item.tlGroupId = groupId; // (layout) AOSP MenuItemImpl keeps its group and order
+			item.tlOrder = order;
+			items.add(item);
+			item.setVisible(true);
+			return item;
+		}
+@@@
+public MenuItem add(int groupId, int itemId, int order, int titleRes) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'add'");
+		}
+===
+public MenuItem add(int groupId, int itemId, int order, int titleRes) {
+			return add(groupId, itemId, order, mContext.getResources().getText(titleRes));
+		}
+@@@
+public void clear() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'clear'");
+		}
+===
+public void clear() {
+			// (layout) AOSP MenuBuilder.clear: every item leaves the menu
+			for (int i = items.size() - 1; i >= 0; i--)
+				items.get(i).setVisible(false);
+			items.clear();
+		}
+@@@
+public void removeGroup(int groupId) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'removeGroup'");
+		}
+===
+public void removeGroup(int groupId) {
+			for (int i = items.size() - 1; i >= 0; i--) {
+				if (items.get(i).tlGroupId == groupId) {
+					items.get(i).setVisible(false);
+					items.remove(i);
+				}
+			}
+		}
+@@@
+public SubMenu addSubMenu(int id) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'addSubMenu'");
+		}
+===
+public SubMenu addSubMenu(int titleRes) {
+			return addSubMenu(NONE, NONE, NONE, mContext.getResources().getText(titleRes));
+		}
+@@@
+public MenuItem add(int id) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'add'");
+		}
+===
+public MenuItem add(int titleRes) {
+			return add(NONE, NONE, NONE, mContext.getResources().getText(titleRes));
+		}
+@@@
+public MenuItem add(CharSequence text) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'add'");
+		}
+===
+public MenuItem add(CharSequence text) {
+			return add(NONE, NONE, NONE, text);
+		}
+@@@
+public void setGroupCheckable(int group, boolean checkable, boolean exclusive) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setGroupCheckable'");
+		}
+===
+public void setGroupCheckable(int group, boolean checkable, boolean exclusive) {
+			for (MenuItemImpl item : items) {
+				if (item.tlGroupId == group)
+					item.setCheckable(checkable);
+			}
+		}
+@@@
+public void setGroupVisible(int group, boolean visible) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setGroupVisible'");
+		}
+===
+public void setGroupVisible(int group, boolean visible) {
+			for (MenuItemImpl item : items) {
+				if (item.tlGroupId == group)
+					item.setVisible(visible);
+			}
+		}
+@@@
+public void removeItem(int id) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'removeItem'");
+		}
+===
+public void removeItem(int id) {
+			for (int i = 0; i < items.size(); i++) {
+				if (items.get(i).id == id) {
+					items.get(i).setVisible(false);
+					items.remove(i);
+					return;
+				}
+			}
+		}
+@@@
+public boolean hasVisibleItems() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'hasVisibleItems'");
+		}
+===
+public boolean hasVisibleItems() {
+			for (MenuItemImpl item : items) {
+				if (item.isVisible())
+					return true;
+			}
+			return false;
+		}
+@@@
+public SubMenu addSubMenu(int groupId, int itemId, int order, int titleRes) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'addSubMenu'");
+		}
+===
+public SubMenu addSubMenu(int groupId, int itemId, int order, int titleRes) {
+			return addSubMenu(groupId, itemId, order, mContext.getResources().getText(titleRes));
+		}
+@@@
+public MenuItem setIcon(int iconRes) {
+			return this;
+		}
+===
+public MenuItem setIcon(int iconRes) {
+			return setIcon(iconRes != 0 ? mContext.getDrawable(iconRes) : null);
+		}
+@@@
+public MenuItem setIcon(Drawable icon) {
+			return this;
+		}
+===
+public MenuItem setIcon(Drawable icon) {
+			tlIcon = icon; // (layout) kept for getIcon; the GTK menu shows text items
+			return this;
+		}
+		private Drawable tlIcon;
+@@@
+public MenuItem setChecked(boolean checked) {
+			return this;
+		}
+===
+public MenuItem setChecked(boolean checked) {
+			tlChecked = checked;
+			return this;
+		}
+@@@
+public MenuItem setEnabled(boolean enabled) {
+			return this;
+		}
+===
+public MenuItem setEnabled(boolean enabled) {
+			tlEnabled = enabled;
+			return this;
+		}
+@@@
+public MenuItem setCheckable(boolean checkable) {
+			return this;
+		}
+===
+public MenuItem setCheckable(boolean checkable) {
+			tlCheckable = checkable;
+			return this;
+		}
+@@@
+public boolean isCheckable() {
+			return false;
+		}
+===
+public boolean isCheckable() {
+			return tlCheckable;
+		}
+@@@
+public MenuItem setTitleCondensed(CharSequence titleCondensed) {
+			return this;
+		}
+===
+public MenuItem setTitleCondensed(CharSequence titleCondensed) {
+			tlTitleCondensed = titleCondensed;
+			return this;
+		}
+@@@
+public MenuItem setActionView(View actionView) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setActionView'");
+		}
+===
+public MenuItem setActionView(View actionView) {
+			tlActionView = actionView;
+			tlActionProvider = null;
+			return this;
+		}
+@@@
+public void setShowAsAction(int action) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setShowAsAction'");
+		}
+===
+public void setShowAsAction(int action) {
+			tlShowAsAction = action;
+		}
+@@@
+public int getGroupId() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'getGroupId'");
+		}
+===
+public int getGroupId() {
+			return tlGroupId;
+		}
+@@@
+public MenuItem setOnMenuItemClickListener(OnMenuItemClickListener listener) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setOnMenuItemClickListener'");
+		}
+===
+public MenuItem setOnMenuItemClickListener(OnMenuItemClickListener listener) {
+			tlClickListener = listener;
+			return this;
+		}
+@@@
+public MenuItem setTitle(int resId) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setTitle'");
+		}
+===
+public MenuItem setTitle(int resId) {
+			return setTitle(mContext.getResources().getText(resId));
+		}
+@@@
+public Drawable getIcon() {
+			return new Drawable();
+		}
+===
+public Drawable getIcon() {
+			return tlIcon; // AOSP: null without an icon
+		}
+@@@
+public MenuItem setActionView(int resId) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setActionView'");
+		}
+===
+public MenuItem setActionView(int resId) {
+			return setActionView(android.view.LayoutInflater.from(mContext).inflate(resId, null, false));
+		}
+@@@
+public View getActionView() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'getActionView'");
+		}
+===
+public View getActionView() {
+			if (tlActionView != null)
+				return tlActionView;
+			if (tlActionProvider != null) {
+				tlActionView = tlActionProvider.onCreateActionView(this);
+				return tlActionView;
+			}
+			return null;
+		}
+@@@
+public boolean hasSubMenu() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'hasSubMenu'");
+		}
+===
+public boolean hasSubMenu() {
+			return subMenu != null;
+		}
+@@@
+public MenuItem setOnActionExpandListener(OnActionExpandListener listener) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setOnActionExpandListener'");
+		}
+===
+public MenuItem setOnActionExpandListener(OnActionExpandListener listener) {
+			tlOnActionExpandListener = listener;
+			return this;
+		}
+@@@
+public boolean isChecked() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'isChecked'");
+		}
+===
+public boolean isChecked() {
+			return tlChecked;
+		}
+@@@
+public MenuItem setShowAsActionFlags(int action) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setShowAsActionFlags'");
+		}
+===
+public MenuItem setShowAsActionFlags(int action) {
+			setShowAsAction(action);
+			return this;
+		}
+@@@
+public MenuItem setAlphabeticShortcut(char alphaChar) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setAlphabeticShortcut'");
+		}
+===
+public MenuItem setAlphabeticShortcut(char alphaChar) {
+			tlShortcutAlphabeticChar = Character.toLowerCase(alphaChar);
+			return this;
+		}
+@@@
+public int getOrder() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'getOrder'");
+		}
+===
+public int getOrder() {
+			return tlOrder;
+		}
+@@@
+public boolean isEnabled() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'isEnabled'");
+		}
+===
+public boolean isEnabled() {
+			return tlEnabled;
+		}
+@@@
+public CharSequence getTitleCondensed() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'getTitleCondensed'");
+		}
+===
+public CharSequence getTitleCondensed() {
+			return tlTitleCondensed != null ? tlTitleCondensed : title;
+		}
+@@@
+public CharSequence getTitle() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'getTitle'");
+		}
+===
+public CharSequence getTitle() {
+			return title;
+		}
+@@@
+public MenuItem setNumericShortcut(char numericChar) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setNumericShortcut'");
+		}
+===
+public MenuItem setNumericShortcut(char numericChar) {
+			tlShortcutNumericChar = numericChar;
+			return this;
+		}
+@@@
+public boolean expandActionView() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'expandActionView'");
+		}
+===
+public boolean expandActionView() {
+			// AOSP MenuItemImpl: only a collapsible action view expands, if the listener lets it
+			if ((tlShowAsAction & SHOW_AS_ACTION_COLLAPSE_ACTION_VIEW) == 0 || getActionView() == null)
+				return false;
+			if (tlOnActionExpandListener == null || tlOnActionExpandListener.onMenuItemActionExpand(this)) {
+				tlActionViewExpanded = true;
+				return true;
+			}
+			return false;
+		}
+@@@
+public boolean isActionViewExpanded() {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'isActionViewExpanded'");
+		}
+===
+public boolean isActionViewExpanded() {
+			return tlActionViewExpanded;
+		}
+@@@
+public MenuItem setIntent(Intent intent) {
+			// TODO Auto-generated method stub
+			throw new UnsupportedOperationException("Unimplemented method 'setIntent'");
+		}
+===
+public MenuItem setIntent(Intent intent) {
+			tlIntent = intent;
+			return this;
+		}
+@@@
+		public MenuItem setShortcut(char numeric, char alpha) { return this; }
+===
+		public MenuItem setShortcut(char numeric, char alpha) {
+			tlShortcutNumericChar = numeric;
+			tlShortcutAlphabeticChar = Character.toLowerCase(alpha);
+			return this;
+		}
+@@@
+		if (mMenuItemClickListener != null) {
+			mMenuItemClickListener.onMenuItemClick(getMenu().findItem(id));
+		}
+===
+		// (layout) AOSP MenuItemImpl.invoke: the item's listener, the popup's, the intent, the provider
+		final MenuItem item = getMenu().findItem(id);
+		if (item instanceof MenuItemImpl)
+			((MenuItemImpl) item).tlInvoke();

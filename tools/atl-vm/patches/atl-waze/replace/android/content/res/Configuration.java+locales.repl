@@ -1,0 +1,31 @@
+@@@
+		locale = new Locale("en", "US");
+		userSetLocale = false;
+===
+		// AOSP (API 24+): no locale until the system's is applied (Resources fills in Locale.getDefault())
+		locale = null;
+		tlLocaleList = LocaleList.getEmptyLocaleList();
+		userSetLocale = false;
+@@@
+	public LocaleList getLocales() {
+		return LocaleList.getDefault();
+		/*fixUpLocaleList();
+		return mLocaleList;*/
+	}
+===
+	public LocaleList getLocales() {
+		tlFixUpLocaleList();
+		return tlLocaleList;
+	}
+@@@
+	public void setLocales(LocaleList locales) {
+		/*mLocaleList = locales == null ? LocaleList.getEmptyLocaleList() : locales;
+		locale = mLocaleList.get(0);
+		setLayoutDirection(locale);*/
+	}
+===
+	public void setLocales(LocaleList locales) {
+		tlLocaleList = locales == null ? LocaleList.getEmptyLocaleList() : locales;
+		locale = tlLocaleList.get(0);
+		setLayoutDirection(locale);
+	}

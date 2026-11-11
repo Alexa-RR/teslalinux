@@ -1,0 +1,34 @@
+[Unit]
+Description=teslalinux: fetch the car certificate the cloud renewer published and install it if it is ours
+Documentation=file:///usr/local/bin/teslalinux-tls
+# never on the boot path: nginx starts with whatever chain (or placeholder) is there; this only reloads it
+After=network.target nginx.service teslalinux-netconfig.service
+# the backoff below must never give up
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/teslalinux-tls fetch
+# failed download, rejected chain, clock not set yet: retry 1 min, 2, 4 ... up to 6 h
+Restart=on-failure
+RestartSec=60
+RestartSteps=9
+RestartMaxDelaySec=6h
+TimeoutStartSec=5min
+StandardOutput=append:/var/log/teslalinux/tls.log
+StandardError=append:/var/log/teslalinux/tls.log
+LogsDirectory=teslalinux
+# it writes only the key directory (swap), the public CSR copy, its state and nginx's test output
+ProtectSystem=strict
+ReadWritePaths=-/etc/teslalinux/tls -/etc/teslalinux/tls-public -/var/lib/teslalinux -/var/log/teslalinux -/var/log/nginx /run
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native

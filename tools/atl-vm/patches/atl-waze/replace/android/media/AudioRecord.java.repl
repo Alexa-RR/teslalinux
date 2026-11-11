@@ -1,0 +1,11 @@
+@@@
+			return new AudioRecord(audioSource, audioFormat.sampleRate, audioFormat.channelMask, audioFormat.encoding, 32768);
+===
+			return new AudioRecord(audioSource, audioFormat.getSampleRate(), audioFormat.getChannelMask(), audioFormat.getEncoding(), 32768);
+@@@
+		pcm_handle = native_constructor(streamType, sampleRateInHz, channelConfig, audioFormat, bufferSizeInBytes);
+===
+		pcm_handle = native_constructor(streamType, sampleRateInHz, channelConfig, audioFormat, bufferSizeInBytes);
+		tlChannelMask = channelConfig;
+		tlAudioFormat = audioFormat;
+		tlBufferSizeInBytes = bufferSizeInBytes;

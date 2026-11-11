@@ -1,0 +1,116 @@
+@@@
+	public void setFitsSystemWindows(boolean fitsSystemWindows) {}
+===
+	// (layout) setFitsSystemWindows: see View+layout.frag (AOSP window insets)
+@@@
+	public boolean getFitsSystemWindows() { return true; }
+===
+	// (layout) getFitsSystemWindows: see View+layout.frag (AOSP window insets)
+@@@
+	public void setOnApplyWindowInsetsListener(View.OnApplyWindowInsetsListener l) {}
+===
+	// (layout) setOnApplyWindowInsetsListener: see View+layout.frag (AOSP window insets)
+@@@
+	public void requestApplyInsets() {}
+===
+	// (layout) requestApplyInsets: see View+layout.frag (AOSP window insets)
+@@@
+	public WindowInsets getRootWindowInsets() { return isAttachedToWindow() ? new WindowInsets() : null; }
+===
+	// (layout) getRootWindowInsets: see View+layout.frag (AOSP window insets)
+@@@
+	public WindowInsets computeSystemWindowInsets(WindowInsets insets, Rect contentInsets) { return insets; }
+===
+	// (layout) computeSystemWindowInsets: see View+layout.frag (AOSP window insets)
+@@@
+	public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) { return onApplyWindowInsets(insets); }
+===
+	// (layout) dispatchApplyWindowInsets: see View+layout.frag (AOSP window insets)
+@@@
+	public WindowInsets onApplyWindowInsets(WindowInsets insets) { return insets; }
+===
+	// (layout) onApplyWindowInsets: see View+layout.frag (AOSP window insets)
+@@@
+		this.id = a.getResourceId(com.android.internal.R.styleable.View_id, View.NO_ID);
+===
+		this.id = a.getResourceId(com.android.internal.R.styleable.View_id, View.NO_ID);
+		// AOSP: android:fitsSystemWindows (layout)
+		if (a.hasValue(com.android.internal.R.styleable.View_fitsSystemWindows))
+			tlFitsSystemWindows = a.getBoolean(com.android.internal.R.styleable.View_fitsSystemWindows, false);
+@@@
+		if (isShown())
+			onVisibilityAggregated(true);
+	}
+===
+		if (isShown())
+			onVisibilityAggregated(true);
+		/* AOSP ViewRootImpl: a window root gets the window insets on its first traversal (layout) */
+		if (!(parent instanceof View))
+			tlScheduleApplyInsets();
+	}
+@@@
+	public void requestFitSystemWindows() {}
+===
+	// (layout) requestFitSystemWindows: see View+layout.frag
+@@@
+	public void scrollTo(int x, int y) {
+		scrollX = x;
+		scrollY = y;
+		invalidate();
+	}
+===
+	/**
+	 * AOSP: a new scroll position is reported through onScrollChanged (and so the
+	 * OnScrollChangeListener); ScrollView, HorizontalScrollView and the AndroidX scroll containers
+	 * rely on it (layout). The view is invalidated either way, which re-applies the scroll offset
+	 * of a view that implements computeScroll.
+	 */
+	public void scrollTo(int x, int y) {
+		final int oldX = scrollX;
+		final int oldY = scrollY;
+		scrollX = x;
+		scrollY = y;
+		if (oldX != x || oldY != y)
+			onScrollChanged(x, y, oldX, oldY);
+		invalidate();
+	}
+@@@
+	public void setOnScrollChangeListener(OnScrollChangeListener l) {}
+===
+	/** AOSP: called with every change of the scroll position (layout) */
+	public void setOnScrollChangeListener(OnScrollChangeListener l) {
+		on_scroll_change_listener = l;
+	}
+@@@
+	protected void onScrollChanged(int l, int t, int oldl, int oldt) {}
+===
+	/** AOSP: the scroll position changed; the OnScrollChangeListener hears it (layout) */
+	protected void onScrollChanged(int l, int t, int oldl, int oldt) {
+		if (on_scroll_change_listener != null)
+			on_scroll_change_listener.onScrollChange(this, l, t, oldl, oldt);
+	}
+@@@
+	protected int computeVerticalScrollOffset() {
+		return -1;
+	}
+===
+	/** AOSP: the vertical scroll position (scroll containers report their content offset) (layout) */
+	protected int computeVerticalScrollOffset() {
+		return scrollY;
+	}
+@@@
+	public int getOverScrollMode() { return 0; }
+===
+	// (layout) getOverScrollMode: see View+layout.frag
+@@@
+	public void setOverScrollMode(int mode) {}
+===
+	// (layout) setOverScrollMode: see View+layout.frag
+@@@
+	public boolean canScrollVertically(int value) { return false; }
+===
+	// (layout) canScrollVertically: see View+layout.frag
+@@@
+	public boolean canScrollHorizontally(int direction) { return false; }
+===
+	// (layout) canScrollHorizontally: see View+layout.frag

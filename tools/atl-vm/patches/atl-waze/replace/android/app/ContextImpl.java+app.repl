@@ -1,0 +1,10 @@
+@@@
+		final String className_ = className;
+===
+		final String className_ = className;
+		final ActivityOptions tlOptions_ = ActivityOptions.fromBundle(tlNextLaunchOptions); /* startActivity(Intent, Bundle) */
+@@@
+					Activity.nativeStartActivity(activity);
+===
+					activity.tlLaunchOptions = tlOptions_;
+					Activity.nativeStartActivity(activity);

@@ -1,0 +1,21 @@
+@@@
+	public static boolean is24HourFormat(Context context) {
+		return true;
+	}
+===
+	/** AOSP: the user's TIME_12_24 setting, else the convention of the configuration locale (its
+	 * LONG time pattern uses 'H'). This runtime's settings provider has no TIME_12_24 (no user
+	 * setting, as on a fresh AOSP device), so the locale decides (teslalinux +text). */
+	public static boolean is24HourFormat(Context context) {
+		return is24HourLocale(context.getResources().getConfiguration().locale);
+	}
+
+	/** AOSP: whether the locale formats times on a 24-hour clock */
+	public static boolean is24HourLocale(java.util.Locale locale) {
+		if (locale == null)
+			locale = java.util.Locale.getDefault();
+		final java.text.DateFormat natural = java.text.DateFormat.getTimeInstance(java.text.DateFormat.LONG, locale);
+		if (natural instanceof java.text.SimpleDateFormat)
+			return hasDesignator(((java.text.SimpleDateFormat) natural).toPattern(), 'H');
+		return false;
+	}

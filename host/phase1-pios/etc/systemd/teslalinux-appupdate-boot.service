@@ -1,0 +1,19 @@
+[Unit]
+Description=teslalinux: install a staged, verified app update before the app starts
+Documentation=file:///usr/local/share/doc/teslalinux/APP-UPDATES.md
+Before=teslalinux-atl.service
+After=local-fs.target
+# nothing staged: skipped without starting anything (no boot-time cost)
+ConditionPathExists=/var/lib/teslalinux/appupdate/pending/base.apk
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/teslalinux-appupdate boot
+EnvironmentFile=-/etc/teslalinux/appupdate.env
+TimeoutStartSec=10min
+StandardOutput=append:/var/log/teslalinux/appupdate.log
+StandardError=append:/var/log/teslalinux/appupdate.log
+LogsDirectory=teslalinux
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+# Reference clones of upstream projects (tesla-android, waydroid, lepton). Not part of this repo.
+/upstream/
+# Build outputs
+/out/
+/host/buildroot/output/
+*.img
+*.img.xz
+*.zip
+# Local secrets (TLS certs/keys for the device hostname)
+/host/secrets/
+# Python bytecode
+__pycache__/
+*.pyc
+# Cloudflare cf CLI local cache (account details)
+/.cloudflare/

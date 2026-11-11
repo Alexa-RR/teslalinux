@@ -1,0 +1,40 @@
+#!/sbin/openrc-run
+# teslalinux: Waze under the Android Translation Layer on tacomp's Wayland socket
+description="teslalinux app runtime (ATL)"
+command=/usr/local/bin/teslalinux-atl
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/teslalinux-atl.pid
+output_log=/var/log/teslalinux/atl.log
+error_log=/var/log/teslalinux/atl.log
+directory=/var/lib/tesla
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
+
+depend() {
+	need tacomp
+	use teslalinux-gps teslalinux-pipewire teslalinux-wireplumber
+	after chronyd
+}
+
+start_pre() {
+	checkpath -d -m 0755 -o tesla:tesla /var/log/teslalinux /var/lib/tesla/android /var/lib/tesla/.cache
+	# the socket of tacomp appears a moment after its process
+	local i=0
+	while [ ! -S /run/tesla/tesla-0 ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+	[ -S /run/tesla/tesla-0 ] || { eerror "no compositor socket /run/tesla/tesla-0"; return 1; }
+	[ -r /etc/teslalinux/display.env ] && . /etc/teslalinux/display.env
+	# language/region and time zone from the settings page (teslalinux-set-locale)
+	[ -r /etc/teslalinux/locale.env ] && . /etc/teslalinux/locale.env && export TESLALINUX_LOCALE TESLALINUX_TIMEZONE
+	# which keyboard types into the app (teslalinux-set-keyboard, from the settings page)
+	[ -r /etc/teslalinux/keyboard.env ] && . /etc/teslalinux/keyboard.env && export TESLALINUX_KEYBOARD
+	export HOME=/var/lib/tesla XDG_RUNTIME_DIR=/run/tesla WAYLAND_DISPLAY=tesla-0
+	# ALSA "default" -> pipewire-alsa -> the "android" sink in this runtime dir
+	export PIPEWIRE_RUNTIME_DIR=/run/tesla
+	export ATL_PREFIX="${ATL_PREFIX:-/opt/atl}" TACOMP_SIZE="${TACOMP_SIZE:-1088x832@60}"
+	export ATL_DENSITY_DPI="${ATL_DENSITY_DPI:-200}" TESLALINUX_APP_DIR="${TESLALINUX_APP_DIR:-/var/lib/teslalinux/apps/com.waze}"
+	export ANDROID_APP_DATA_DIR="${ANDROID_APP_DATA_DIR:-/var/lib/tesla/android/waze}"
+	export PULSE_SERVER="${PULSE_SERVER:-unix:/run/tesla/pulse/native}"
+	export GSK_RENDERER="${GSK_RENDERER:-ngl}" # GTK >= 4.18 has no "gl" any more (see host/phase1-pios/teslalinux-atl)
+}

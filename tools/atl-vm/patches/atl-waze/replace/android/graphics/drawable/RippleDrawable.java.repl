@@ -1,0 +1,4 @@
+@@@
+		final int N = mLayerState.mNum;
+===
+		final int N = mLayerState.mNumChildren;

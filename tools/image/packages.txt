@@ -1,0 +1,86 @@
+# Packages of the Alpine car image (apk names, Alpine edge aarch64). One per line, # comments.
+# base and boot
+alpine-base
+openrc
+busybox-openrc
+linux-rpi
+raspberrypi-bootloader
+linux-firmware-brcm
+mkinitfs
+e2fsprogs
+e2fsprogs-extra
+sfdisk
+dosfstools
+chrony
+dbus
+dbus-openrc
+seatd
+seatd-openrc
+eudev
+eudev-openrc
+sudo
+doas
+bash
+coreutils
+findutils
+util-linux
+openssl
+ca-certificates
+tzdata
+# networking: hotspot, hijack DNS, NAT, LTE modems
+hostapd
+hostapd-openrc
+dnsmasq
+dnsmasq-openrc
+nftables
+nftables-openrc
+iw
+wireless-regdb
+wpa_supplicant
+usb-modeswitch
+dhcpcd
+dhcpcd-openrc
+# web; the certificate is fetched (curl) and checked (openssl) by teslalinux-tls. No ACME client and
+# no DNS credentials on the Pi: issuance runs in .github/workflows/tls-renew.yml
+nginx
+nginx-openrc
+curl
+# services
+python3
+py3-websockets
+ffmpeg
+pipewire
+pipewire-pulse
+# ALSA "default" -> PipeWire: ATL's AudioTrack plays through ALSA
+pipewire-alsa
+wireplumber
+su-exec
+# display: mesa with v3d, the compositor's libraries
+mesa
+mesa-dri-gallium
+mesa-egl
+mesa-gles
+mesa-gbm
+wlroots0.20
+libwebsockets
+libjpeg-turbo
+x264-libs
+wayland
+libxkbcommon
+pixman
+libdrm
+libinput
+# app runtime: GTK and the ATL stack (the patched prefix in /opt/atl overlays the binaries)
+gtk4.0
+android-translation-layer
+art_standalone
+bionic_translation
+libandroidfw
+libportal
+webkit2gtk-6.0
+font-dejavu
+font-noto
+font-noto-hebrew
+font-noto-arabic
+font-noto-cjk
+font-roboto

@@ -1,0 +1,50 @@
+@@@
+	private static final boolean USE_VSYNC = false;
+===
+	/* teslalinux: the vsync comes from the toplevel's GdkFrameClock (native-choreographer-vsync.sh) */
+	private static final boolean USE_VSYNC = true;
+@@@
+	private void scheduleFrameLocked(long now) {
+		if (!mFrameScheduled) {
+			mFrameScheduled = true;
+			final long nextFrameTime = Math.max(
+			    mLastFrameTimeNanos / NANOS_PER_MS + sFrameDelay, now);
+===
+	private void scheduleFrameLocked(long now) {
+		if (!mFrameScheduled) {
+			mFrameScheduled = true;
+			if (USE_VSYNC && mLooper == Looper.getMainLooper()) {
+				// If running on the Looper thread, then schedule the vsync immediately,
+				// otherwise post a message to schedule the vsync from the UI thread
+				// as soon as possible.
+				if (isRunningOnLooperThreadLocked()) {
+					if (scheduleVsyncLocked())
+						return;
+					/* no frame clock yet (window not realized): the timer below paces this frame */
+				} else {
+					Message msg = mHandler.obtainMessage(MSG_DO_SCHEDULE_VSYNC);
+					msg.setAsynchronous(true);
+					mHandler.sendMessageAtFrontOfQueue(msg);
+					return;
+				}
+			}
+			final long nextFrameTime = Math.max(
+			    mLastFrameTimeNanos / NANOS_PER_MS + sFrameDelay, now);
+@@@
+				case MSG_DO_SCHEDULE_VSYNC:
+					Log.d(TAG, "VSYNC not supported!");
+					//doScheduleVsync();
+					break;
+===
+				case MSG_DO_SCHEDULE_VSYNC:
+					doScheduleVsync();
+					break;
+@@@
+				//scheduleVsyncLocked();
+				return;
+===
+				/* AOSP: wait for the next vsync. ATL had dropped this request, so a frame time that stepped
+				 * backwards (frame clock time vs the jitter-adjusted System.nanoTime base) left the frame
+				 * marked scheduled with no vsync coming: every later Compose recomposition waited forever. */
+				scheduleVsyncLocked();
+				return;

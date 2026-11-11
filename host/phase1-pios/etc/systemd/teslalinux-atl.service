@@ -1,0 +1,48 @@
+[Unit]
+# never give up restarting: a burst of restarts (display changes) must not leave the car without the app
+StartLimitIntervalSec=0
+Description=teslalinux: Waze under the Android Translation Layer on tacomp's Wayland socket
+After=tacomp.service teslalinux-gps.service teslalinux-wireplumber.service teslalinux-dbus.service
+Requires=tacomp.service
+Wants=teslalinux-gps.service teslalinux-wireplumber.service teslalinux-dbus.service
+
+# the ATL prefix of the dist (tools/debvm/build-dist.sh, installed by tools/pios/install.sh) and the
+# app as tools/apps/install-app.sh installs it; without the app the unit is skipped, and the car
+# page's upload screen (or teslalinux-appupdate) installs it and starts the unit
+ConditionPathExists=/opt/teslalinux/bin/android-translation-layer
+ConditionPathExists=/var/lib/teslalinux/apps/com.waze/base.apk
+
+[Service]
+User=tesla
+Group=tesla
+SupplementaryGroups=video render
+Environment=XDG_RUNTIME_DIR=/run/tesla
+Environment=WAYLAND_DISPLAY=tesla-0
+Environment=HOME=/var/lib/tesla
+Environment=PULSE_SERVER=unix:/run/tesla/pulse/native
+Environment=ATL_PREFIX=/opt/teslalinux
+Environment=TESLALINUX_APP_DIR=/var/lib/teslalinux/apps/com.waze
+Environment=ANDROID_APP_DATA_DIR=/var/lib/tesla/android/waze
+Environment=TACOMP_SIZE=1088x832@60
+Environment=ATL_DENSITY_DPI=200
+# ALSA "default" -> pipewire-alsa -> the "android" null sink of the tesla user
+Environment=PIPEWIRE_RUNTIME_DIR=/run/tesla
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/tesla/bus
+# overrides: ATL_DENSITY_DPI, TACOMP_SIZE, TESLALINUX_APP_DIR, ANDROID_LOG_TAGS, GSK_RENDERER
+EnvironmentFile=-/etc/teslalinux/display.env
+EnvironmentFile=-/etc/teslalinux/atl.env
+# language/region and time zone from the settings page (teslalinux-set-locale); wins over atl.env
+EnvironmentFile=-/etc/teslalinux/locale.env
+# which keyboard types into the app (teslalinux-set-keyboard, from the settings page)
+EnvironmentFile=-/etc/teslalinux/keyboard.env
+# the first launch after an app update logs the health marker (teslalinux-appupdate, docs/APP-UPDATES.md)
+EnvironmentFile=-/run/teslalinux/appupdate-health.env
+ExecStart=/usr/local/bin/teslalinux-atl
+Restart=always
+RestartSec=2
+# a crashed app comes back within seconds; the car browser keeps its stream from tacomp meanwhile
+TimeoutStopSec=10
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

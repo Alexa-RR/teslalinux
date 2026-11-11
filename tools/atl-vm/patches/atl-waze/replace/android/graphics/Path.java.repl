@@ -1,0 +1,58 @@
+@@@
+	public void addCircle(float x, float y, float radius, Direction direction) {
+		Log.w("Path", "STUB: addCircle");
+	}
+===
+	/** Add a closed circle contour to the path (AOSP: direction decides the contour's winding). */
+	public void addCircle(float x, float y, float radius, Direction direction) {
+		native_add_circle(getBuilder(), x, y, radius, direction == Direction.CW);
+	}
+	private static native void native_add_circle(long builder, float x, float y, float radius, boolean clockwise);
+@@@
+	public boolean op(Path path, Op op) {
+		Log.w("Path", "STUB: op");
+		return false;
+	}
+===
+	public boolean op(Path path, Op op) {
+		return op(this, path, op);
+	}
+@@@
+	public boolean op(Path path, Path dst, Op op) {
+		Log.w("Path", "STUB: op");
+		return false;
+	}
+===
+	/**
+	 * AOSP: set this path to the result of applying the Op to the two specified paths. The
+	 * operation runs on the flattened outlines (atl_pathops.c); false is returned when a result
+	 * could not be computed, in which case this path is left untouched.
+	 */
+	private static final boolean ATL_DEBUG_PATHOP = System.getenv("ATL_DEBUG_PATHOP") != null;
+	public boolean op(Path path1, Path path2, Op op) {
+		long result = native_op(path1.getGskPath(), path2.getGskPath(), op.ordinal());
+		if (ATL_DEBUG_PATHOP) {
+			RectF b1 = new RectF(), b2 = new RectF();
+			path1.computeBounds(b1, true);
+			path2.computeBounds(b2, true);
+			Log.i("Path", "[pathop] " + op + " " + b1 + " x " + b2 + " -> " + (result == 0 ? "failed" : native_is_empty(result) ? "empty" : "non-empty"));
+		}
+		if (result == 0)
+			return false;
+		reset();
+		path = result;
+		return true;
+	}
+	private static native long native_op(long path1, long path2, int op);
+@@@
+	public boolean isEmpty() {
+		return path == 0 && builder == 0;
+	}
+===
+	/** AOSP: true if the path contains no lines or curves (a geometric test, not "never touched"). */
+	public boolean isEmpty() {
+		if (path == 0 && builder == 0)
+			return true;
+		return native_is_empty(getGskPath());
+	}
+	private static native boolean native_is_empty(long path);

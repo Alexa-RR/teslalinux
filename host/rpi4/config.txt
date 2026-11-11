@@ -1,0 +1,43 @@
+# teslalinux: Raspberry Pi 4 firmware config tuned for fast boot.
+# Install to the FAT boot partition (/boot/firmware on Pi OS).
+
+[pi4]
+arm_64bit=1
+enable_gic=1
+# Boot the kernel directly (no U-Boot, no ARM-TF). ~0.8 s saved vs upstream's chain.
+kernel=kernel8.img
+# Firmware delays
+boot_delay=0
+boot_delay_ms=0
+disable_splash=1
+# Run at full clock from the first instruction (no ramp). arm_boost needs a decent PSU.
+initial_turbo=60
+arm_boost=1
+force_turbo=0
+
+# GPU / codec: VPU is needed for the V4L2 M2M encoder (/dev/video11, /dev/video31)
+# and Mesa v3d for Android's rendering. cma-512 is upstream's value; 256 is enough for 1088x832.
+dtoverlay=vc4-kms-v3d
+dtoverlay=cma,cma-256
+gpu_mem=128
+# No display is ever attached. Keep the DRM device up without an HDMI monitor.
+hdmi_force_hotplug=1
+hdmi_ignore_edid=0xa5000080
+hdmi_group=2
+hdmi_mode=16
+
+# Peripherals we don't use: skip their probing.
+camera_auto_detect=0
+display_auto_detect=0
+dtparam=audio=off
+dtoverlay=disable-bt
+# USB: host mode for the LTE stick. (Upstream used dwc2 peripheral for a gadget; not needed here.)
+dtparam=i2c_arm=on
+# Hardware RTC keeps TLS working before the LTE link is up (DS3231 on I2C). Remove if not fitted.
+dtoverlay=i2c-rtc,ds3231
+# Fan on GPIO18 (Argon / generic PWM-less fan). Remove if not fitted.
+dtoverlay=gpio-fan,gpiopin=18,temp=55000
+
+# Serial console costs boot time; enable only for debugging.
+enable_uart=0
+uart_2ndstage=0

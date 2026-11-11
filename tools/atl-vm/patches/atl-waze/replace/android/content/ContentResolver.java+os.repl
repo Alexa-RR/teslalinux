@@ -1,0 +1,50 @@
+@@@
+	public final void registerContentObserver(Uri uri, boolean notifyForDescendants, ContentObserver observer) {
+	}
+	public final void unregisterContentObserver(ContentObserver observer) {
+	}
+	public void notifyChange(Uri uri, ContentObserver observer) {
+	}
+	public int getUserId() {
+		return 0;
+	}
+	public final void registerContentObserver(Uri uri, boolean notifyForDescendants, ContentObserver observer, int userHandle) {
+	}
+===
+	/** AOSP: observe changes to uri (and to its descendants when notifyForDescendants). */
+	public final void registerContentObserver(Uri uri, boolean notifyForDescendants, ContentObserver observer) {
+		registerContentObserver(uri, notifyForDescendants, observer, getUserId());
+	}
+	/** AOSP: stops all registrations of the observer. */
+	public final void unregisterContentObserver(ContentObserver observer) {
+		tlUnregister(observer);
+	}
+	/** AOSP: notify registered observers that a row was updated (and sync to network). */
+	public void notifyChange(Uri uri, ContentObserver observer) {
+		notifyChange(uri, observer, true /* sync to network */);
+	}
+	/** AOSP: the user this resolver works for (the user of this process). */
+	public int getUserId() {
+		return android.os.UserHandle.myUserId();
+	}
+	/** AOSP (hidden): observe changes for a given user. */
+	public final void registerContentObserver(Uri uri, boolean notifyForDescendants, ContentObserver observer, int userHandle) {
+		tlRegister(uri, notifyForDescendants, observer, userHandle);
+	}
+@@@
+	public final AssetFileDescriptor openTypedAssetFileDescriptor(Uri uri, String mimeType, Bundle opts) throws FileNotFoundException {
+		/* FIXME */
+		return openAssetFileDescriptor(uri, "r");
+	}
+===
+	/** AOSP: a stream of the given MIME type from the provider of a content: URI. */
+	public final AssetFileDescriptor openTypedAssetFileDescriptor(Uri uri, String mimeType, Bundle opts) throws FileNotFoundException {
+		if (uri == null)
+			throw new NullPointerException("uri");
+		if (mimeType == null)
+			throw new NullPointerException("mimeType");
+		ContentProvider provider = ContentProvider.atl_get_content_provider(uri.getAuthority());
+		if (provider == null)
+			throw new FileNotFoundException("No content provider: " + uri);
+		return provider.openTypedAssetFile(uri, mimeType, opts);
+	}

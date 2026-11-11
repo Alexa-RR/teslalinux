@@ -1,0 +1,2 @@
+	/* teslalinux: KeyEvent additions */
+	public boolean isFromSource(int source) { return (getSource() & source) == source; }

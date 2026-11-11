@@ -1,0 +1,32 @@
+#cloud-config
+# teslalinux Debian trixie arm64 build VM (tools/debvm/vm-deb.sh init renders @PUBKEY@)
+hostname: debvm
+users:
+  - name: atl
+    groups: [sudo, video, render, input, audio]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+      - @PUBKEY@
+ssh_pwauth: false
+disable_root: true
+# grow the root partition and filesystem to the overlay's virtual size (48G)
+growpart:
+  mode: auto
+  devices: ["/"]
+resize_rootfs: true
+package_update: true
+package_upgrade: false
+packages:
+  - git
+  - rsync
+  - python3
+# the build's Java + dex2oat peaks do not fit in 4 GB alone: an 8 GB swap file on the overlay
+swap:
+  filename: /swapfile
+  size: 8G
+  maxsize: 8G
+runcmd:
+  - [ sh, -c, "mkdir -p /opt/teslalinux && chown atl:atl /opt/teslalinux" ]
+  - [ sh, -c, "touch /var/lib/cloud/atl-seeded" ]

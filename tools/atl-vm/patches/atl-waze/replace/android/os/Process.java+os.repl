@@ -1,0 +1,52 @@
+@@@
+	public static final /*native*/ void setThreadPriority(int tid, int priority)
+	    throws IllegalArgumentException, SecurityException {
+		// TODO - this is clearly not critical
+	}
+===
+	public static final native void setThreadPriority(int tid, int priority)
+	    throws IllegalArgumentException, SecurityException;
+@@@
+	public static final /*native*/ void setThreadPriority(int priority)
+	    throws IllegalArgumentException, SecurityException {}
+===
+	public static final native void setThreadPriority(int priority)
+	    throws IllegalArgumentException, SecurityException;
+@@@
+	public static long getStartUptimeMillis() {
+		return 1000;
+	};
+
+	public static long getStartElapsedRealtime() {
+		return 1000;
+	};
+===
+	/** AOSP: SystemClock.uptimeMillis() when this process started. */
+	public static long getStartUptimeMillis() {
+		return SystemClock.uptimeMillis() - (SystemClock.elapsedRealtime() - getStartElapsedRealtime());
+	}
+
+	private static long sStartElapsedRealtime = -1;
+
+	/**
+	 * AOSP: SystemClock.elapsedRealtime() when this process started: the kernel's start time of
+	 * the process (/proc/self/stat field 22, clock ticks since boot).
+	 */
+	public static long getStartElapsedRealtime() {
+		if (sStartElapsedRealtime < 0) {
+			long start = SystemClock.elapsedRealtime();
+			try {
+				String stat = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/proc/self/stat")));
+				// the command name (field 2) may hold spaces: count fields after its closing ')'
+				String[] f = stat.substring(stat.lastIndexOf(')') + 2).trim().split(" +");
+				long ticks = Long.parseLong(f[22 - 3]);
+				long hz = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK);
+				if (hz > 0)
+					start = ticks * 1000 / hz;
+			} catch (Exception e) {
+				// /proc unavailable: the first query is the best known start
+			}
+			sStartElapsedRealtime = start;
+		}
+		return sStartElapsedRealtime;
+	}

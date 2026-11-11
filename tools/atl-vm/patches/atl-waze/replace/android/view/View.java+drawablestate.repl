@@ -1,0 +1,132 @@
+@@@
+	protected int[] onCreateDrawableState(int extraSpace) {
+		return new int[0];
+	}
+
+	protected static int[] mergeDrawableStates(int[] curState, int[] newState) {
+		return new int[0];
+	}
+===
+	/** AOSP: the view's state set with extraSpace free slots at the end (for subclasses to merge into);
+	 * a view with duplicateParentState takes its parent's */
+	protected int[] onCreateDrawableState(int extraSpace) {
+		if (isDuplicateParentStateEnabled() && parent instanceof View)
+			return ((View) parent).onCreateDrawableState(extraSpace);
+		return tlBaseDrawableState(extraSpace);
+	}
+
+	/** AOSP: copies newState into the free (zero) tail of curState and returns curState */
+	protected static int[] mergeDrawableStates(int[] curState, int[] newState) {
+		final int n = curState.length;
+		int i = n - 1;
+		while (i >= 0 && curState[i] == 0)
+			i--;
+		System.arraycopy(newState, 0, curState, i + 1, newState.length);
+		return curState;
+	}
+@@@
+	public final int[] getDrawableState() {
+		int[] state = new int[2];
+		state[0] = R.attr.state_enabled;
+		if (pressed) {
+			state[1] = R.attr.state_pressed;
+		}
+		return state;
+	}
+===
+	/** AOSP: the cached state set, rebuilt through onCreateDrawableState(0) after refreshDrawableState() */
+	public final int[] getDrawableState() {
+		if (tlDrawableState != null && !tlDrawableStateDirty)
+			return tlDrawableState;
+		tlDrawableState = onCreateDrawableState(0);
+		tlDrawableStateDirty = false;
+		return tlDrawableState;
+	}
+@@@
+	public void refreshDrawableState() {
+	}
+===
+	/** AOSP: the state set is rebuilt; drawables and colours follow, and the parent hears of it */
+	public void refreshDrawableState() {
+		tlDrawableStateDirty = true;
+		drawableStateChanged();
+		if (parent instanceof ViewGroup)
+			((ViewGroup) parent).childDrawableStateChanged(this);
+	}
+@@@
+	public void setSelected(boolean selected) {}
+===
+	/** AOSP: the selected state (tabs, segmented controls, list rows), passed on to a group's children */
+	public void setSelected(boolean selected) {
+		if (tlSelected != selected) {
+			tlSelected = selected;
+			if (!selected && pressed)
+				setPressed(false);
+			invalidate();
+			refreshDrawableState();
+			dispatchSetSelected(selected);
+		}
+	}
+@@@
+	public boolean isSelected() { return false; }
+===
+	public boolean isSelected() { return tlSelected; }
+@@@
+	public void setActivated(boolean activated) {}
+
+	public boolean isActivated() { return false; }
+===
+	/** AOSP: the activated state (the current item of a list in an activated-choice mode) */
+	public void setActivated(boolean activated) {
+		if (tlActivated != activated) {
+			tlActivated = activated;
+			invalidate();
+			refreshDrawableState();
+			dispatchSetActivated(activated);
+		}
+	}
+
+	public boolean isActivated() { return tlActivated; }
+@@@
+	public void setPressed(boolean pressed) {
+		if (this.pressed != pressed) {
+			this.pressed = pressed;
+			if (background != null && background.isStateful())
+				background.setState(getDrawableState());
+		}
+	}
+===
+	/** AOSP: the pressed state; a group passes it to children that are not clickable themselves */
+	public void setPressed(boolean pressed) {
+		if (this.pressed != pressed) {
+			this.pressed = pressed;
+			refreshDrawableState();
+			dispatchSetPressed(pressed);
+		}
+	}
+@@@
+	public void onWindowFocusChanged(boolean hasFocus) {}
+===
+	/** AOSP: losing window focus ends a press; state_window_focused changes */
+	public void onWindowFocusChanged(boolean hasFocus) {
+		if (!hasFocus && pressed)
+			setPressed(false);
+		refreshDrawableState();
+	}
+@@@
+	public void setEnabled(boolean enabled) {
+		atl_enabled = enabled;
+		native_setVisibility(widget, visibility, alpha, atl_enabled);
+	}
+===
+	public void setEnabled(boolean enabled) {
+		if (atl_enabled == enabled)
+			return;
+		atl_enabled = enabled;
+		native_setVisibility(widget, visibility, alpha, atl_enabled);
+		// AOSP: a disabled view is not pressed, and state_enabled changes
+		if (!enabled && pressed)
+			setPressed(false);
+		refreshDrawableState();
+		invalidate();
+	}

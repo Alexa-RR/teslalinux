@@ -1,0 +1,57 @@
+@@@
+			default:
+				System.out.println("PackageManager.checkPermission: >" + permName + "< not handled\n");
+				return PERMISSION_DENIED;
+===
+			default:
+				/* teslalinux: single-app device, the car owner already consented; grant everything. */
+				return PERMISSION_GRANTED;
+@@@
+			case FEATURE_WATCH:
+				return System.getenv("ATL_IS_WATCH") != null;
+			default:
+				Slog.e(TAG, "!!!!!!! hasSystemFeature: case >" + name + "< is not implemented yet");
+				return false;
+===
+			case FEATURE_WATCH:
+				return System.getenv("ATL_IS_WATCH") != null;
+			/* teslalinux: the feature set of the car device (Pi 4 host): touch, location through the car's
+			 * GPS feed, Wi-Fi; no Bluetooth radio for apps, no camera, no microphone, no telephony. */
+			case "android.hardware.touchscreen":
+			case "android.hardware.touchscreen.multitouch":
+			case "android.hardware.touchscreen.multitouch.jazzhand":
+			case "android.hardware.faketouch":
+			case "android.hardware.location":
+			case "android.hardware.location.gps":
+			case "android.hardware.location.network":
+			case "android.hardware.wifi":
+			case "android.hardware.screen.landscape":
+			case "android.software.app_widgets":
+			case "android.software.webview":
+			case "android.hardware.opengles.aep":
+			case "android.hardware.vulkan.level":
+			case "android.hardware.vulkan.version":
+				return true;
+			case "android.hardware.bluetooth":
+			case "android.hardware.bluetooth_le":
+			case "android.hardware.camera":
+			case "android.hardware.camera.any":
+			case "android.hardware.camera.front":
+			case "android.hardware.microphone":
+			case "android.hardware.telephony":
+			case "android.hardware.telephony.gsm":
+			case "android.hardware.telephony.cdma":
+			case "android.hardware.nfc":
+			case "android.hardware.sensor.accelerometer":
+			case "android.hardware.sensor.compass":
+			case "android.hardware.sensor.gyroscope":
+			case "android.hardware.fingerprint":
+			case "android.hardware.type.embedded":
+			case "android.hardware.type.pc":
+			case "android.software.picture_in_picture":
+			case "android.software.managed_users":
+			case "android.software.device_admin":
+			case "cn.google":
+				return false;
+			default:
+				return false;

@@ -1,0 +1,30 @@
+@@@
+	public ColorFilter setColorFilter(ColorFilter colorFilter) {
+		if (colorFilter instanceof PorterDuffColorFilter) {
+			PorterDuffColorFilter porterDuff = (PorterDuffColorFilter)colorFilter;
+			native_set_color_filter(paint, porterDuff.getMode().ordinal(), porterDuff.getColor());
+		} else {
+			native_set_color_filter(paint, -1, 0);
+		}
+		color_filter = colorFilter;
+		return colorFilter;
+	}
+===
+	/** AOSP: a blend-mode colour filter (PorterDuffColorFilter, or BlendModeColorFilter as Compose and
+	 * AndroidX use on API 29+) with the mode's real result (native-paint-colorfilter-modes.sh). */
+	public ColorFilter setColorFilter(ColorFilter colorFilter) {
+		if (colorFilter instanceof PorterDuffColorFilter) {
+			PorterDuffColorFilter porterDuff = (PorterDuffColorFilter)colorFilter;
+			native_set_color_filter_mode(paint, porterDuff.getMode().ordinal(), porterDuff.getColor());
+		} else if (colorFilter instanceof BlendModeColorFilter) {
+			BlendModeColorFilter blend = (BlendModeColorFilter)colorFilter;
+			PorterDuff.Mode mode = BlendMode.blendModeToPorterDuffMode(blend.getMode());
+			if (blend.getMode() == BlendMode.MODULATE)
+				mode = PorterDuff.Mode.MULTIPLY;
+			native_set_color_filter_mode(paint, mode != null ? mode.ordinal() : PorterDuff.Mode.SRC_IN.ordinal(), blend.getColor());
+		} else {
+			native_set_color_filter_mode(paint, -1, 0);
+		}
+		color_filter = colorFilter;
+		return colorFilter;
+	}

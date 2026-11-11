@@ -1,0 +1,19 @@
+@@@
+		application_info.sourceDir = native_get_apk_path();
+===
+		// AOSP: sourceDir/publicSourceDir name the base APK; the split APKs that were given on the
+		// command line go to splitSourceDirs (ATL hands us the whole ':'-joined classpath).
+		String[] apkPaths = native_get_apk_path().split(":");
+		application_info.sourceDir = apkPaths[0];
+		application_info.publicSourceDir = apkPaths[0];
+		if (apkPaths.length > 1) {
+			application_info.splitSourceDirs = java.util.Arrays.copyOfRange(apkPaths, 1, apkPaths.length);
+			application_info.splitPublicSourceDirs = application_info.splitSourceDirs;
+			application_info.splitNames = android.content.pm.PackageParser.readSplitNames(primary_application.default_resources.getAssets(), application_info.splitSourceDirs);
+		}
+@@@
+	public static final String INPUT_METHOD_SERVICE = "input";
+===
+	/** AOSP: the input method manager is "input_method"; "input" is the InputManager (INPUT_SERVICE). */
+	public static final String INPUT_METHOD_SERVICE = "input_method";
+	public static final String INPUT_SERVICE = "input";

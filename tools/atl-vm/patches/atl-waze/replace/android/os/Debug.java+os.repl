@@ -1,0 +1,59 @@
+@@@
+	public static void waitForDebugger() {
+	}
+===
+	/** AOSP: blocks until a debugger attaches, when the VM has debugging enabled. */
+	public static void waitForDebugger() {
+		if (!VMDebug.isDebuggingEnabled())
+			return;
+		if (isDebuggerConnected())
+			return;
+		System.out.println("Sending WAIT chunk");
+		tlWaitingForDebugger = true;
+		try {
+			while (!isDebuggerConnected()) {
+				try {
+					Thread.sleep(200);
+				} catch (InterruptedException ie) {
+				}
+			}
+		} finally {
+			tlWaitingForDebugger = false;
+		}
+	}
+@@@
+	public static boolean isDebuggerConnected() {
+		return false;
+	}
+===
+	/** AOSP: whether a debugger is attached to the VM (ART's JDWP state). */
+	public static boolean isDebuggerConnected() {
+		return VMDebug.isDebuggerConnected();
+	}
+@@@
+	public static long getNativeHeapFreeSize() {
+		return 0;
+	}
+===
+	/** AOSP: the free part of the native heap (see tlProcStatusKb). */
+	public static long getNativeHeapFreeSize() {
+		return Math.max(0, getNativeHeapSize() - getNativeHeapAllocatedSize());
+	}
+@@@
+	public static long getNativeHeapAllocatedSize() {
+		return 0;
+	}
+===
+	/** AOSP: the allocated part of the native heap (see tlProcStatusKb). */
+	public static long getNativeHeapAllocatedSize() {
+		return Math.min(tlProcStatusKb("RssAnon:"), tlProcStatusKb("VmData:")) * 1024;
+	}
+@@@
+	public static boolean waitingForDebugger() {
+		return false;
+	}
+===
+	/** AOSP: whether waitForDebugger() is waiting. */
+	public static boolean waitingForDebugger() {
+		return tlWaitingForDebugger;
+	}

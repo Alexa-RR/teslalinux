@@ -1,0 +1,190 @@
+@@@
+	public Paint(Paint paint) {
+		this.paint = native_clone(paint.paint);
+	}
+===
+	/** AOSP: a copy of every setting of the paint (the native part is cloned, the Java state copied). */
+	public Paint(Paint paint) {
+		this.paint = native_clone(paint.paint);
+		tlCopyJavaState(paint);
+	}
+@@@
+	public void set(Paint paint) {
+		native_recycle(this.paint);
+		this.paint = native_clone(paint.paint);
+	}
+===
+	/** AOSP: copies every setting of src into this paint. */
+	public void set(Paint paint) {
+		if (paint == this)
+			return;
+		native_recycle(this.paint);
+		this.paint = native_clone(paint.paint);
+		tlCopyJavaState(paint);
+	}
+@@@
+	public /*native*/ void setLinearText(boolean linearText) {}
+	public /*native*/ void setSubpixelText(boolean subpixelText) {}
+	public /*native*/ void setUnderlineText(boolean underlineText) {}
+	public /*native*/ void setStrikeThruText(boolean strikeThruText) {}
+	public /*native*/ void setFakeBoldText(boolean fakeBoldText) {}
+===
+	/* AOSP: these set their flag in the flag word; GskCanvas draws underline and strike-through
+	 * (Skia's positions), linear/subpixel text only select glyph positioning that Pango does anyway. */
+	public void setLinearText(boolean linearText) { tlSetFlag(LINEAR_TEXT_FLAG, linearText); }
+	public void setSubpixelText(boolean subpixelText) { tlSetFlag(SUBPIXEL_TEXT_FLAG, subpixelText); }
+	public void setUnderlineText(boolean underlineText) { tlSetFlag(UNDERLINE_TEXT_FLAG, underlineText); }
+	public void setStrikeThruText(boolean strikeThruText) { tlSetFlag(STRIKE_THRU_TEXT_FLAG, strikeThruText); }
+	public void setFakeBoldText(boolean fakeBoldText) {
+		tlSetFlag(FAKE_BOLD_TEXT_FLAG, fakeBoldText);
+		tlApplyFace();
+	}
+	public boolean isLinearText() { return (mFlags & LINEAR_TEXT_FLAG) != 0; }
+	public boolean isSubpixelText() { return (mFlags & SUBPIXEL_TEXT_FLAG) != 0; }
+	public boolean isUnderlineText() { return (mFlags & UNDERLINE_TEXT_FLAG) != 0; }
+	public boolean isStrikeThruText() { return (mFlags & STRIKE_THRU_TEXT_FLAG) != 0; }
+
+	private void tlSetFlag(int flag, boolean on) {
+		if (on)
+			mFlags |= flag;
+		else
+			mFlags &= ~flag;
+	}
+@@@
+	public /*native*/ float getStrokeMiter() { return 0; }
+	public /*native*/ void setStrokeMiter(float miter) {}
+===
+	/** AOSP: the stroke miter limit (4 by default), kept on the GSK stroke. */
+	public float getStrokeMiter() {
+		return native_get_stroke_miter(paint);
+	}
+
+	/** AOSP: sets the miter limit; negative values are ignored. */
+	public void setStrokeMiter(float miter) {
+		if (miter >= 0)
+			native_set_stroke_miter(paint, miter);
+	}
+@@@
+	public /*native*/ float getTextSkewX() { return 0; }
+	public /*native*/ void setTextSkewX(float skewX) {}
+===
+	/** AOSP: horizontal skew of the text (0 by default, -0.25 for synthetic italic); GskCanvas skews the text. */
+	public float getTextSkewX() {
+		return mTextSkewX;
+	}
+
+	public void setTextSkewX(float skewX) {
+		mTextSkewX = skewX;
+	}
+@@@
+	public PathEffect getPathEffect() {
+		return new PathEffect();
+	}
+
+	public PathEffect setPathEffect(PathEffect effect) {
+		return effect;
+	}
+===
+	/** AOSP: the paint's path effect, or null. */
+	public PathEffect getPathEffect() {
+		return mPathEffect;
+	}
+
+	/**
+	 * AOSP: sets or clears the path effect. A DashPathEffect also goes onto the GSK stroke, so a
+	 * dashed stroke is drawn by GSK directly; GskCanvas applies every other effect to the geometry.
+	 */
+	public PathEffect setPathEffect(PathEffect effect) {
+		mPathEffect = effect;
+		if (effect instanceof DashPathEffect) {
+			DashPathEffect dash = (DashPathEffect) effect;
+			native_set_dash(paint, dash.tlIntervals(), dash.tlPhase());
+		} else {
+			native_set_dash(paint, null, 0);
+		}
+		return effect;
+	}
+@@@
+	public MaskFilter setMaskFilter(MaskFilter filter) { return filter; }
+===
+	/** AOSP: sets or clears the mask filter (BlurMaskFilter is drawn by GskCanvas). */
+	public MaskFilter setMaskFilter(MaskFilter filter) {
+		mMaskFilter = filter;
+		return filter;
+	}
+
+	/** AOSP: the paint's mask filter, or null. */
+	public MaskFilter getMaskFilter() {
+		return mMaskFilter;
+	}
+@@@
+		} else {
+			native_set_color_filter_mode(paint, -1, 0);
+		}
+		color_filter = colorFilter;
+===
+		} else if (colorFilter instanceof ColorMatrixColorFilter) {
+			native_set_color_matrix(paint, ((ColorMatrixColorFilter) colorFilter).tlArray());
+		} else if (colorFilter instanceof LightingColorFilter) {
+			native_set_color_matrix(paint, ((LightingColorFilter) colorFilter).tlArray());
+		} else {
+			native_set_color_filter_mode(paint, -1, 0);
+		}
+		color_filter = colorFilter;
+@@@
+		align = Align.CENTER;
+		color_filter = null;
+	}
+===
+		align = Align.LEFT;
+		color_filter = null;
+		tlResetGfx();
+	}
+@@@
+	private Align align = Align.CENTER;
+===
+	private Align align = Align.LEFT; // AOSP's default; the native paint starts left-aligned too
+@@@
+	public boolean setFontVariationSettings(String fvs) {
+		return true;
+	}
+===
+	/**
+	 * AOSP: font variation settings ("'wght' 700, 'wdth' 50"); false (and unchanged) when the string
+	 * does not parse. Pango applies the axes to the variable font.
+	 */
+	public boolean setFontVariationSettings(String fvs) {
+		if (fvs == null || fvs.isEmpty()) {
+			mFontVariationSettings = null;
+			native_set_font_variations(paint, null);
+			return true;
+		}
+		android.graphics.fonts.FontVariationAxis[] axes;
+		try {
+			axes = android.graphics.fonts.FontVariationAxis.fromFontVariationSettings(fvs);
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
+		StringBuilder pango = new StringBuilder();
+		for (android.graphics.fonts.FontVariationAxis axis : axes) {
+			if (pango.length() > 0)
+				pango.append(',');
+			pango.append(axis.getTag()).append('=').append(axis.getStyleValue());
+		}
+		mFontVariationSettings = fvs;
+		native_set_font_variations(paint, pango.toString());
+		return true;
+	}
+
+	public String getFontVariationSettings() {
+		return mFontVariationSettings;
+	}
+@@@
+	public boolean isFakeBoldText() {
+		return false;
+	}
+===
+	/** AOSP: whether FAKE_BOLD_TEXT_FLAG is set (text drawn bolder than its font when the font has no bold face). */
+	public boolean isFakeBoldText() {
+		return (mFlags & FAKE_BOLD_TEXT_FLAG) != 0;
+	}

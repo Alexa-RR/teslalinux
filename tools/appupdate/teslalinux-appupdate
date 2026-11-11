@@ -1,0 +1,1157 @@
+#!/usr/bin/env python3
+"""teslalinux-appupdate: the Pi keeps Waze current from Google Play by itself (docs/APP-UPDATES.md).
+
+    teslalinux-appupdate run [--force]   one cycle (teslalinux-appupdate.timer hourly, the NetworkManager
+                                         hook on uplink-up, "Check now" on the settings page): the daily
+                                         DETAILS check (jittered, exponential backoff on failure),
+                                         download (unmetered uplink unless "allow over LTE"), verify,
+                                         stage; install when the car is not connected, else at next boot
+    teslalinux-appupdate stage [--force] the same cycle up to a staged, verified set, never installing it
+                                         (the installer; the boot unit installs it at the next start).
+                                         Exit 1 when nothing is staged and no app is installed
+    teslalinux-appupdate boot            before teslalinux-atl.service: install a staged update
+    teslalinux-appupdate health          after teslalinux-atl.service: the post-install health check;
+                                         rolls back to <pkg>.old when it fails
+    teslalinux-appupdate kick [--force]  start teslalinux-appupdate.service now (no-op if it runs)
+    teslalinux-appupdate status          the state as JSON (what GET /api/appUpdate shows)
+    teslalinux-appupdate rollback        back to <pkg>.old by hand (marks the current version bad)
+    teslalinux-appupdate receive-upload --size N --name FILE
+                                         (api.py through sudo) a bundle uploaded from the settings page on
+                                         stdin: stored root-only, unpacked, verified, staged like a download
+
+Sources (setting "source"): "apkpure" (default; tlplay --source apkpure: APKPure's public app API,
+no account), "manual" (only bundles uploaded from the settings page: .apkm, .xapk, .apks, a zip of
+APKs or one APK), or "play" (Google Play with an anonymous login from a token dispenser; off unless
+"playEnabled" is set in the advanced settings; Aurora's dispenser refuses non-Aurora clients). No
+Google account and no credentials of the user anywhere; tlplay always names itself (no option
+changes its User-Agent).
+
+Verification before anything is installed (all must hold, else the version is marked bad and never
+downloaded again until the source offers a newer one; an upload that fails is only refused): every APK passes the full APK Signature Scheme v3/v2
+check (tools/apps/apk_verify.py), every APK is the same package signed by the same certificate
+(SHA-256) as the installed app (with no app installed: the pinned signer, APPUPDATE_FIRST_SIGNER or the
+known Waze signer), the versionCode is strictly higher, minSdk is at most the SDK level ATL
+reports (ATL_SDK_INT, 32), each split_config.<q>.apk is the split its manifest says it is, and the set
+holds our ABI (split or base lib/), a density split (ours, else the nearest: density_order) and our
+language split when the source has one.
+
+Install rule (never while the app is in use): either at the next boot before the app starts, or
+while the car is not connected: no station associated on the hotspot interface (iw) and no
+established connection to the display or touch sockets (9091, 9999).
+
+Runs as root (systemd units in host/phase1-pios/etc/systemd). Settings (written by services/api/api.py
+as tesla): /var/lib/teslalinux/state/appupdate.json {"source", "autoUpdate", "allowMetered",
+"playEnabled", "dispenserUrl"}.
+State (read by api.py): /var/lib/teslalinux/appupdate/state.json.
+"""
+import fcntl
+import json
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+E = os.environ.get
+PKG = E("APPUPDATE_PKG", "com.waze")
+APPS_DIR = E("APPS_DIR", "/var/lib/teslalinux/apps")
+APP_USER = E("APPUPDATE_APP_USER", "tesla")
+APP_UNIT = E("APPUPDATE_APP_UNIT", "teslalinux-atl.service")
+APP_DATA_DIR = E("ANDROID_APP_DATA_DIR", "/var/lib/tesla/android/waze")
+ART_CACHE = E("APPUPDATE_ART_CACHE", "/var/lib/tesla/.cache/art")
+STATE_DIR = E("APPUPDATE_STATE_DIR", "/var/lib/teslalinux/appupdate")
+SETTINGS_FILE = E("APPUPDATE_SETTINGS", "/var/lib/teslalinux/state/appupdate.json")
+AUTH_FILE = E("APPUPDATE_AUTH_FILE", "/etc/teslalinux/play/auth.json")
+TLPLAY = E("APPUPDATE_TLPLAY", "/usr/local/bin/tlplay")
+DEVICE_PROPERTIES = E("APPUPDATE_DEVICE_PROPERTIES", "/usr/local/share/teslalinux/appupdate/device.properties")
+APPS_TOOLS = E("APPUPDATE_APPS_TOOLS", "/usr/local/lib/teslalinux/apps")  # install-app.sh, apk-info.py, apk_verify.py
+ENV_FILE = E("TESLALINUX_ENV", "/etc/teslalinux/env")
+# A first install has no installed app to compare the signer with: it must carry the signer pinned
+# here (APPUPDATE_FIRST_SIGNER, SHA-256 of the signing certificate; tools/pios/install.sh writes it to
+# appupdate.env), else it is refused. Waze's is known: the one of every Waze set installed so far.
+KNOWN_SIGNERS = {"com.waze": "03637f6c5d8f604e6fdb79a6ffbfa578de4e318f8da22fc6106665247f8807d7"}
+FIRST_SIGNER = (E("APPUPDATE_FIRST_SIGNER") or KNOWN_SIGNERS.get(PKG, "")).strip().lower()
+ABI = E("APP_ABI", "arm64_v8a")
+DENSITY = E("APP_DENSITY", "xhdpi")
+LOCALE_ENV = E("TESLALINUX_LOCALE_ENV", "/etc/teslalinux/locale.env")
+
+
+def device_locale():
+    """The device's language/region from the settings page (teslalinux-set-locale writes
+    TESLALINUX_LOCALE=he_IL style values to locale.env), else en_US."""
+    try:
+        with open(LOCALE_ENV) as f:
+            for line in f:
+                m = re.match(r"\s*TESLALINUX_LOCALE=['\"]?([a-z]{2,3})(_[A-Z]{2}|_[0-9]{3})?['\"]?\s*$", line)
+                if m:
+                    return m.group(1) + (m.group(2) or "")
+    except OSError:
+        pass
+    return "en_US"
+
+
+# the language split we want: APP_LANG, else the device language (split names use the language only)
+LANG = E("APP_LANG") or device_locale().split("_")[0]
+# Java's legacy ISO 639 codes, which bundletool may use in split names (config.iw for Hebrew)
+LANG_LEGACY = {"he": "iw", "id": "in", "yi": "ji"}
+
+
+# density buckets (dpi) as Android's resource qualifiers name them
+DENSITY_DPI = {"ldpi": 120, "mdpi": 160, "tvdpi": 213, "hdpi": 240, "xhdpi": 320, "xxhdpi": 480, "xxxhdpi": 640}
+
+
+def density_order(density=None):
+    """Our density first, then the higher ones nearest first (scaling down looks better than up),
+    then the lower ones nearest first. A source that has no split for our density (APKPure lists only
+    mdpi, xxhdpi and xxxhdpi variants of Waze 5.26) still gives a set whose resources resolve: Android's
+    resource selection takes the closest density present."""
+    d = density or DENSITY
+    if d not in DENSITY_DPI:
+        return [d]
+    dpi = DENSITY_DPI[d]
+    higher = sorted((q for q in DENSITY_DPI if DENSITY_DPI[q] > dpi and q != "tvdpi"), key=DENSITY_DPI.get)
+    lower = sorted((q for q in DENSITY_DPI if DENSITY_DPI[q] < dpi and q != "tvdpi"), key=DENSITY_DPI.get, reverse=True)
+    return [d] + higher + lower
+
+
+def lang_splits(lang=None):
+    lang = lang or LANG
+    return [lang] + ([LANG_LEGACY[lang]] if lang in LANG_LEGACY else [])
+SDK = int(E("ATL_SDK_INT", "32"))
+DISPLAY_PORTS = [int(p) for p in E("APPUPDATE_DISPLAY_PORTS", "9091,9999").split(",") if p]
+CHECK_INTERVAL = int(E("APPUPDATE_CHECK_INTERVAL", "86400"))
+BACKOFF_BASE = int(E("APPUPDATE_BACKOFF_BASE", "600"))
+BACKOFF_MAX = int(E("APPUPDATE_BACKOFF_MAX", "86400"))
+MAX_TOTAL_BYTES = int(E("APPUPDATE_MAX_TOTAL_BYTES", str(1 << 30)))
+MAX_FILE_BYTES = int(E("APPUPDATE_MAX_FILE_BYTES", str(600 << 20)))
+DOWNLOAD_DEADLINE = int(E("APPUPDATE_DOWNLOAD_DEADLINE", "5400"))
+HEALTH_TIMEOUT = int(E("APPUPDATE_HEALTH_TIMEOUT", "900"))
+HEALTH_MARKER = E("APPUPDATE_HEALTH_MARKER", "MainScreenVisible")
+HEALTH_LOG_TAGS = E("APPUPDATE_HEALTH_LOG_TAGS", "*:d")
+HEALTH_ENV = E("APPUPDATE_HEALTH_ENV", "/run/teslalinux/appupdate-health.env")
+HEALTH_MAX_RESTARTS = int(E("APPUPDATE_HEALTH_MAX_RESTARTS", "3"))
+KICK_MIN_AGE = int(E("APPUPDATE_KICK_MIN_AGE", "600"))
+SERVICE = "teslalinux-appupdate.service"
+
+# source: "apkpure" (automatic, default), "manual" (uploads from the settings page only) or "play"
+# (Google Play through a token dispenser; used only while playEnabled, an advanced setting, is on)
+SOURCES = ("apkpure", "manual", "play")
+DEFAULT_SETTINGS = {"source": "apkpure", "autoUpdate": True, "allowMetered": False, "playEnabled": False, "dispenserUrl": ""}
+DEFAULT_DISPENSER = "https://auroraoss.com/api/auth"
+MAX_UPLOAD = int(E("APPUPDATE_MAX_UPLOAD", str(400 << 20)))
+
+# NetworkManager's NMMetered (libnm nm-dbus-interface.h)
+NM_METERED = {0: "unknown", 1: "yes", 2: "no", 3: "guess-yes", 4: "guess-no"}
+
+
+def log(msg):
+    print("%s teslalinux-appupdate: %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), msg), flush=True)
+
+
+# ---------------------------------------------------------------------------- files
+
+def _p(*parts):
+    return os.path.join(STATE_DIR, *parts)
+
+
+def read_json(path, default=None):
+    try:
+        with open(path) as f:
+            v = json.load(f)
+        return v if isinstance(v, dict) else default
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, obj, mode=0o644):
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f, indent=1, sort_keys=True)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def load_settings():
+    s = dict(DEFAULT_SETTINGS)
+    raw = read_json(SETTINGS_FILE, {}) or {}
+    for k in ("autoUpdate", "allowMetered", "playEnabled"):
+        if isinstance(raw.get(k), bool):
+            s[k] = raw[k]
+    if raw.get("source") in SOURCES:
+        s["source"] = raw["source"]
+    if isinstance(raw.get("dispenserUrl"), str) and valid_dispenser_url(raw["dispenserUrl"]):
+        s["dispenserUrl"] = raw["dispenserUrl"]
+    return s
+
+
+def effective_source(settings):
+    """The source automatic checks use: Google Play only while it is enabled in the advanced settings."""
+    if settings["source"] == "play" and not settings["playEnabled"]:
+        return "manual"
+    return settings["source"]
+
+
+def valid_dispenser_url(u):
+    """"" (the default dispenser) or an https:// URL without spaces, quotes or credentials."""
+    if u == "":
+        return True
+    return bool(re.fullmatch(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*)?", u)) and len(u) <= 256
+
+
+def new_state():
+    return {"installed": None, "latest": None, "lastCheck": 0, "lastCheckOk": 0, "lastResult": "never-run",
+            "lastMessage": "", "serverUnavailableSince": None, "failures": 0, "nextTryAt": 0, "wanted": None,
+            "pending": None, "health": None, "bad": {}, "notices": [], "history": []}
+
+
+def load_state():
+    st = new_state()
+    st.update(read_json(_p("state.json"), {}) or {})
+    return st
+
+
+def save_state(st):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    write_json(_p("state.json"), st, 0o644)
+    # the health service's start condition (ConditionPathExists) mirrors st["health"]
+    flag = _p("health.json")
+    if st.get("health"):
+        write_json(flag, st["health"], 0o644)
+    elif os.path.exists(flag):
+        os.unlink(flag)
+
+
+def event(st, result, message, now=None, notice=False):
+    now = int(now or time.time())
+    st["lastResult"], st["lastMessage"] = result, message
+    st["history"] = (st.get("history") or [])[-29:] + [{"at": now, "result": result, "message": message}]
+    if notice:
+        st["notices"] = (st.get("notices") or [])[-9:] + [{"at": now, "text": message}]
+    log("%s: %s" % (result, message))
+
+
+# ---------------------------------------------------------------------------- backoff
+
+def backoff_delay(failures, rnd=random.random):
+    """Seconds until the next try after `failures` consecutive failures: BACKOFF_BASE * 2^(n-1), at most
+    BACKOFF_MAX, with +-20 % jitter so a fleet (or one Pi's timer and hook) does not retry in lockstep."""
+    if failures <= 0:
+        return 0
+    d = min(BACKOFF_BASE * (2 ** min(failures - 1, 20)), BACKOFF_MAX)
+    return int(d * (0.8 + 0.4 * rnd()))
+
+
+def record_failure(st, kind, message, now):
+    st["failures"] = int(st.get("failures") or 0) + 1
+    st["nextTryAt"] = int(now + backoff_delay(st["failures"]))
+    if kind in ("dispenser", "apkpure"):  # the update server itself is down, blocking or changed
+        if not st.get("serverUnavailableSince"):
+            st["serverUnavailableSince"] = int(now)
+    event(st, {"dispenser": "dispenser-unavailable", "apkpure": "source-unavailable", "play": "play-unavailable", "play_auth": "play-rejected-login",
+               "not_available": "not-offered", "download": "download-failed"}.get(kind, "error"),
+          "%s (retry in %d min)" % (message, (st["nextTryAt"] - now) // 60), now)
+
+
+def record_success(st, now):
+    st["failures"], st["nextTryAt"], st["serverUnavailableSince"] = 0, 0, None
+    st["lastCheckOk"] = int(now)
+
+
+def check_due(st, now, force, rnd=random.random):
+    """Whether this run should ask Play: forced, retrying after a failure whose backoff is over, or the
+    daily check (24 h +-10 %; the timer adds its own random delay)."""
+    if force:
+        return True
+    if now < int(st.get("nextTryAt") or 0):
+        return False
+    if int(st.get("failures") or 0) > 0:
+        return True
+    return now - int(st.get("lastCheckOk") or 0) >= CHECK_INTERVAL * (0.9 + 0.2 * rnd())
+
+
+# ---------------------------------------------------------------------------- uplink
+
+def nm_metered():
+    """NetworkManager's global Metered property (the primary connection's), or None without NM."""
+    try:
+        out = subprocess.run(["busctl", "get-property", "org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager",
+                              "org.freedesktop.NetworkManager", "Metered"], capture_output=True, text=True, timeout=10)
+        m = re.fullmatch(r"u (\d+)\s*", out.stdout)
+        if out.returncode == 0 and m:
+            return int(m.group(1))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        out = subprocess.run(["nmcli", "-t", "-g", "GENERAL.METERED", "general"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    word = out.stdout.strip().split(" ")[0] if out.returncode == 0 else ""
+    return {"yes": 1, "no": 2}.get(word, {"yes (guessed)": 3, "no (guessed)": 4}.get(out.stdout.strip()))
+
+
+def download_allowed(metered, allow_metered):
+    """(allowed, why). Only a connection NetworkManager calls unmetered (no / guess-no: Wi-Fi, Ethernet) is
+    used unless "allow updates over LTE" is on; an LTE modem is guess-yes, and unknown counts as metered."""
+    if allow_metered:
+        return True, "allowed on any uplink (setting)"
+    if metered in (2, 4):
+        return True, "unmetered uplink (%s)" % NM_METERED[metered]
+    return False, "uplink is metered (%s); waiting for Wi-Fi or Ethernet" % NM_METERED.get(metered, "unknown")
+
+
+# ---------------------------------------------------------------------------- car connected?
+
+def established_local_ports(texts):
+    """Local ports with an ESTABLISHED (01) TCP connection, from /proc/net/tcp{,6} contents."""
+    ports = set()
+    for text in texts:
+        for line in text.splitlines()[1:]:
+            f = line.split()
+            if len(f) > 3 and f[3] == "01":
+                ports.add(int(f[1].rsplit(":", 1)[1], 16))
+    return ports
+
+
+def hotspot_iface():
+    iface = "wlan0"
+    try:
+        with open(ENV_FILE) as f:
+            for line in f:
+                m = re.match(r"\s*AP_IFACE=['\"]?([A-Za-z0-9_.-]+)", line)
+                if m:
+                    iface = m.group(1)
+    except OSError:
+        pass
+    return iface
+
+
+def car_state():
+    """(connected, why). Connected = a station on the hotspot or a live display/touch socket."""
+    texts = []
+    for p in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(p) as f:
+                texts.append(f.read())
+        except OSError:
+            pass
+    busy = established_local_ports(texts) & set(DISPLAY_PORTS)
+    if busy:
+        return True, "display/touch connection open (port %s)" % ",".join(map(str, sorted(busy)))
+    iface = hotspot_iface()
+    try:
+        out = subprocess.run(["iw", "dev", iface, "station", "dump"], capture_output=True, text=True, timeout=10)
+        n = out.stdout.count("Station ")
+        if out.returncode == 0 and n:
+            return True, "%d station(s) on the hotspot %s" % (n, iface)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return False, "no station on %s and no display/touch connection" % iface
+
+
+def car_idle():
+    # twice, 20 s apart: a car that is just joining the hotspot must not get the app stopped under it
+    for i in range(2):
+        connected, why = car_state()
+        if connected:
+            return False, why
+        if i == 0:
+            time.sleep(int(E("APPUPDATE_IDLE_RECHECK", "20")))
+    return True, why
+
+
+# ---------------------------------------------------------------------------- APK facts + verification
+
+def _tools_import():
+    if APPS_TOOLS not in sys.path:
+        sys.path.insert(0, APPS_TOOLS)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("apk_info", os.path.join(APPS_TOOLS, "apk-info.py"))
+    apk_info = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(apk_info)
+    import apk_verify
+    return apk_info, apk_verify
+
+
+def installed_info(app_dir=None):
+    """{package, versionCode, versionName, signer} of the installed app, or None."""
+    app_dir = app_dir or os.path.join(APPS_DIR, PKG)
+    base = os.path.join(app_dir, "base.apk")
+    if not os.path.isfile(base):
+        return None
+    meta = read_json(os.path.join(app_dir, "installed.json"))
+    if meta and meta.get("package") and meta.get("signer"):
+        return {k: meta.get(k) for k in ("package", "versionCode", "versionName", "signer")}
+    apk_info, _ = _tools_import()
+    i = apk_info.apk_info(base)
+    return {k: i.get(k) for k in ("package", "versionCode", "versionName", "signer")}
+
+
+def verify_candidate(cand_dir, installed, abi=None, density=None, lang=None, sdk=None, lang_required=True):
+    """(True, facts) or (False, reason) for a downloaded set in cand_dir (base.apk + split_config.*.apk).
+    lang_required=False when Play offers no split for our language (the app then uses base.apk's strings,
+    as on a phone set to that language)."""
+    abi, density, lang, sdk = abi or ABI, density or DENSITY, lang or LANG, sdk or SDK
+    apk_info, apk_verify = _tools_import()
+    base = os.path.join(cand_dir, "base.apk")
+    if not os.path.isfile(base):
+        return False, "no base.apk"
+    files = sorted(f for f in os.listdir(cand_dir) if f.endswith(".apk"))
+    facts = {}
+    for f in files:
+        path = os.path.join(cand_dir, f)
+        try:
+            scheme, signer = apk_verify.verify(path, sdk)
+            info = apk_info.apk_info(path)
+        except apk_verify.VerifyError as e:
+            return False, "%s: signature check failed: %s" % (f, e)
+        except Exception as e:  # zipfile.BadZipFile, struct.error, ...: whatever a broken file raises
+            return False, "%s: unreadable APK: %s: %s" % (f, type(e).__name__, e)
+        if signer != info["signer"]:
+            return False, "%s: verified signer differs from the reported one" % f
+        expect_split = None if f == "base.apk" else (f[len("split_"):-len(".apk")] if f.startswith("split_") else "?")
+        if (info.get("split") or None) != expect_split:
+            return False, "%s: manifest says split %r" % (f, info.get("split"))
+        facts[f] = info
+    b = facts["base.apk"]
+    if installed:
+        if b["package"] != installed["package"]:
+            return False, "package %s is not the installed %s" % (b["package"], installed["package"])
+        if b["signer"] != installed["signer"]:
+            return False, "signing certificate %s differs from the installed app's %s" % (b["signer"], installed["signer"])
+        if not int(b["versionCode"]) > int(installed["versionCode"]):
+            return False, "versionCode %s is not higher than the installed %s" % (b["versionCode"], installed["versionCode"])
+    else:
+        # nothing installed: the package and the pinned signer stand in for the installed app
+        if b["package"] != PKG:
+            return False, "package %s is not %s" % (b["package"], PKG)
+        if not FIRST_SIGNER:
+            return False, "no installed %s and no pinned signer for a first install (APPUPDATE_FIRST_SIGNER)" % PKG
+        if b["signer"] != FIRST_SIGNER:
+            return False, "signing certificate %s is not the pinned %s" % (b["signer"], FIRST_SIGNER)
+    for f, i in facts.items():
+        if i["package"] != b["package"] or i["signer"] != b["signer"]:
+            return False, "%s is not %s signed by %s" % (f, b["package"], b["signer"])
+        if f != "base.apk" and int(i["versionCode"] or 0) != int(b["versionCode"]):
+            return False, "%s has versionCode %s, base.apk %s" % (f, i["versionCode"], b["versionCode"])
+    if b.get("minSdk") is not None and int(b["minSdk"]) > sdk:
+        return False, "minSdk %s is above the SDK level ATL reports (%d)" % (b["minSdk"], sdk)
+    abi_dir = abi.replace("_", "-")
+    abi_split = "split_config.%s.apk" % abi
+    if abi_split in facts:
+        if abi_dir not in facts[abi_split]["abis"]:
+            return False, "%s holds no lib/%s/" % (abi_split, abi_dir)
+    elif abi_dir not in b["abis"]:
+        # as install-app.sh: the native code must come from the ABI split or from base.apk's lib/
+        others = [f for f in facts if re.fullmatch(r"split_config\.(arm64_v8a|armeabi_v7a|armeabi|x86_64|x86|mips64|mips)\.apk", f)]
+        return False, "no native code for %s: no %s and base.apk has lib/ for [%s]%s" % (
+            abi, abi_split, ",".join(b["abis"]), (" (other ABI splits: %s)" % ", ".join(others)) if others else "")
+    got_density = next((q for q in density_order(density) if "split_config.%s.apk" % q in facts), None)
+    if got_density is None:
+        return False, "split_config.%s.apk missing (and no other density split)" % density
+    got_lang = next((q for q in lang_splits(lang) if "split_config.%s.apk" % q in facts), None)
+    if lang_required and got_lang is None:
+        return False, "split_config.%s.apk missing" % lang
+    return True, {"package": b["package"], "versionCode": int(b["versionCode"]), "versionName": b["versionName"],
+                  "signer": b["signer"], "minSdk": b.get("minSdk"), "files": sorted(facts),
+                  "density": got_density, "lang": got_lang}
+
+
+# ---------------------------------------------------------------------------- Play (tlplay)
+
+def tlplay(settings, *args, timeout=600):
+    src = effective_source(settings)
+    cmd = [TLPLAY, "--source", src]
+    if src == "play":
+        cmd += ["--auth-file", AUTH_FILE, "--device-properties", DEVICE_PROPERTIES, "--locale", device_locale()]
+        if settings.get("dispenserUrl"):
+            cmd += ["--dispenser", settings["dispenserUrl"]]
+    cmd += list(args)
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "play", "message": "tlplay timed out"}
+    except OSError as e:
+        return {"ok": False, "error": "local", "message": "tlplay: %s" % e}
+    try:
+        res = json.loads(out.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"ok": False, "error": "local", "message": "tlplay exit %d without a result" % out.returncode}
+    return res if isinstance(res, dict) else {"ok": False, "error": "local", "message": "tlplay: bad result"}
+
+
+# ---------------------------------------------------------------------------- the app
+
+def run(cmd, timeout=600, check=True):
+    log("$ " + " ".join(cmd))
+    r = subprocess.run(cmd, timeout=timeout)
+    if check and r.returncode != 0:
+        raise RuntimeError("%s exited %d" % (cmd[0], r.returncode))
+    return r.returncode
+
+
+def app_ctl(action):
+    """start | stop the app's service (systemd on Pi OS/Debian)."""
+    if E("APPUPDATE_FAKE_APPCTL"):  # tests: a script that records the call
+        return run([E("APPUPDATE_FAKE_APPCTL"), action], check=False)
+    return run(["systemctl", action, APP_UNIT], timeout=120, check=False)
+
+
+def as_app_user(cmd):
+    if os.geteuid() == 0 and APP_USER:
+        return ["runuser", "-u", APP_USER, "--"] + cmd
+    return cmd
+
+
+def clear_art_cache():
+    """ART keeps AOT code compiled from base.apk; the new APK must not run against it (carstack.sh)."""
+    n = 0
+    for root, _dirs, files in os.walk(ART_CACHE):
+        for f in files:
+            if "base" in f:
+                try:
+                    os.unlink(os.path.join(root, f))
+                    n += 1
+                except OSError:
+                    pass
+    return n
+
+
+def dir_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def snapshot_data(vc):
+    """Copy of the app's data before the update, restored on rollback: a newer app may migrate its
+    databases in a way the old one cannot read. Skipped (and said so) when the disk is too full."""
+    dst = _p("data-before")
+    shutil.rmtree(dst, ignore_errors=True)
+    if not os.path.isdir(APP_DATA_DIR):
+        return None
+    need = dir_size(APP_DATA_DIR)
+    free = shutil.disk_usage(STATE_DIR).free
+    if need * 1.2 + (512 << 20) > free:
+        log("no data snapshot: %d MB of app data, %d MB free" % (need >> 20, free >> 20))
+        return None
+    run(["cp", "-a", APP_DATA_DIR, dst], timeout=1800)
+    write_json(_p("data-before.json"), {"versionCode": vc, "at": int(time.time()), "bytes": need})
+    return dst
+
+
+def install_pending(st, now):
+    """Swap the staged set in (install-app.sh: .new, rename, .old kept). The app must not be running."""
+    pend = st["pending"]
+    before = installed_info()
+    snap = snapshot_data(pend["versionCode"])
+    lang = next((q for q in lang_splits() if os.path.isfile(_p("pending", "split_config.%s.apk" % q))), LANG)
+    dens = next((q for q in density_order() if os.path.isfile(_p("pending", "split_config.%s.apk" % q))), DENSITY)
+    cmd = as_app_user(["env", "APPS_DIR=%s" % APPS_DIR, "sh", os.path.join(APPS_TOOLS, "install-app.sh"), _p("pending"),
+                       "--abi", ABI, "--density", dens, "--lang", lang, "--no-restart"])
+    run(cmd, timeout=1800)
+    n = clear_art_cache()
+    after = installed_info()
+    if not after or int(after["versionCode"]) != int(pend["versionCode"]):
+        raise RuntimeError("install-app.sh finished but %s is not installed" % pend["versionCode"])
+    st["installed"] = after
+    st["health"] = {"versionCode": after["versionCode"], "versionName": after.get("versionName"),
+                    "previousVersionCode": before["versionCode"] if before else None,
+                    "previousVersionName": before.get("versionName") if before else None,
+                    "installedAt": int(now), "windowStart": int(now), "dataSnapshot": bool(snap)}
+    st["pending"] = None
+    shutil.rmtree(_p("pending"), ignore_errors=True)
+    # the first launch logs at a level that shows the health marker (the car's default is *:w)
+    os.makedirs(os.path.dirname(HEALTH_ENV), exist_ok=True)
+    with open(HEALTH_ENV, "w") as f:
+        f.write("# teslalinux-appupdate: the launch after an update is checked for %s\nANDROID_LOG_TAGS=%s\n"
+                % (HEALTH_MARKER, HEALTH_LOG_TAGS))
+    event(st, "installed", "installed %s (%s), was %s; ART cache cleared (%d files); health check next"
+          % (after.get("versionName"), after["versionCode"], before["versionCode"] if before else "none", n), now)
+
+
+def rollback(st, reason, now):
+    """Back to <pkg>.old (install-app.sh keeps it), with the data snapshot when there is one; the failed
+    versionCode is marked bad. The app is stopped during the swap and started again afterwards."""
+    cur = os.path.join(APPS_DIR, PKG)
+    old = cur + ".old"
+    h = st.get("health") or {}
+    bad_vc = h.get("versionCode") or (installed_info() or {}).get("versionCode")
+    if not os.path.isfile(os.path.join(old, "base.apk")):
+        st["health"] = None
+        event(st, "rollback-impossible", "cannot roll back %s: no %s.old (%s)" % (bad_vc, PKG, reason), now, notice=True)
+        return False
+    app_ctl("stop")
+    rejected = cur + ".rejected"
+    shutil.rmtree(rejected, ignore_errors=True)
+    os.rename(cur, rejected)
+    os.rename(old, cur)
+    shutil.rmtree(rejected, ignore_errors=True)
+    snap = _p("data-before")
+    restored = False
+    if os.path.isdir(snap) and os.path.isdir(os.path.dirname(APP_DATA_DIR)):
+        shutil.rmtree(APP_DATA_DIR, ignore_errors=True)
+        os.rename(snap, APP_DATA_DIR)
+        restored = True
+    clear_art_cache()
+    try:
+        os.unlink(HEALTH_ENV)
+    except OSError:
+        pass
+    if bad_vc is not None:
+        st.setdefault("bad", {})[str(bad_vc)] = {"at": int(now), "reason": reason}
+    st["health"] = None
+    st["installed"] = installed_info()
+    app_ctl("start")
+    event(st, "rolled-back", "Waze %s failed its health check (%s); back to %s%s; %s will not be installed again"
+          % (h.get("versionName") or bad_vc, reason, (st["installed"] or {}).get("versionName"),
+             " with its data" if restored else "", bad_vc), now, notice=True)
+    return True
+
+
+def health_verdict(found_marker, elapsed, restarts, timeout=None, max_restarts=None):
+    """"ok", "wait" or "fail: why" for the launch after an install."""
+    timeout = HEALTH_TIMEOUT if timeout is None else timeout
+    max_restarts = HEALTH_MAX_RESTARTS if max_restarts is None else max_restarts
+    if found_marker:
+        return "ok"
+    if restarts >= max_restarts:
+        return "fail: the app crashed %d times without reaching %s" % (restarts, HEALTH_MARKER)
+    if elapsed >= timeout:
+        return "fail: no %s within %d s" % (HEALTH_MARKER, timeout)
+    return "wait"
+
+
+def unit_restarts():
+    try:
+        out = subprocess.run(["systemctl", "show", "-p", "NRestarts", "--value", APP_UNIT], capture_output=True, text=True, timeout=10)
+        return int(out.stdout.strip() or 0)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
+def marker_logged(since):
+    try:
+        out = subprocess.run(["journalctl", "-u", APP_UNIT, "--since", "@%d" % since, "-o", "cat", "--no-pager",
+                              "-g", HEALTH_MARKER, "-n", "1", "-q"], capture_output=True, text=True, timeout=30)
+        return HEALTH_MARKER in out.stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def boot_time():
+    try:
+        with open("/proc/uptime") as f:
+            return time.time() - float(f.read().split()[0])
+    except (OSError, ValueError):
+        return 0
+
+
+def watch_health(st):
+    h = st["health"]
+    start = max(int(h.get("windowStart") or 0), int(boot_time()) - 5)  # a power cut restarts the window
+    if start != h.get("windowStart"):
+        h["windowStart"] = start
+        save_state(st)
+    r0 = unit_restarts()
+    log("health: waiting up to %d s for %s from %s %s" % (HEALTH_TIMEOUT, HEALTH_MARKER, PKG, h.get("versionName")))
+    while True:
+        now = time.time()
+        v = health_verdict(marker_logged(start - 2), now - start, unit_restarts() - r0)
+        if v == "ok":
+            st["health"] = None
+            shutil.rmtree(_p("data-before"), ignore_errors=True)
+            try:
+                os.unlink(HEALTH_ENV)
+            except OSError:
+                pass
+            event(st, "updated", "Waze %s is running (%s after the update; was %s)"
+                  % (h.get("versionName"), "%d s" % (now - start), h.get("previousVersionName")), now, notice=True)
+            return True
+        if v.startswith("fail"):
+            rollback(st, v[len("fail: "):], now)
+            return False
+        time.sleep(5)
+
+
+# ---------------------------------------------------------------------------- the cycle
+
+def stage_download(st, settings, vc, vn, now):
+    """Download vc into staging/, verify it, move it to pending/. True when pending holds vc afterwards."""
+    staging = _p("staging", str(vc))
+    for d in os.listdir(_p("staging")) if os.path.isdir(_p("staging")) else []:
+        if d != str(vc):  # an older, abandoned download
+            shutil.rmtree(_p("staging", d), ignore_errors=True)
+    os.makedirs(staging, exist_ok=True)
+    os.chmod(_p("staging"), 0o755)
+    os.chmod(staging, 0o755)
+    args = ["download", PKG, "--version-code", str(vc), "--out", staging,
+            "--split", "config.%s" % ABI, "--split", "|".join("config.%s" % q for q in density_order()),
+            "--max-file-bytes", str(MAX_FILE_BYTES), "--max-total-bytes", str(MAX_TOTAL_BYTES),
+            "--deadline", str(DOWNLOAD_DEADLINE)]
+    args += ["--split", "|".join("config.%s" % q for q in lang_splits())]
+    res = tlplay(settings, *args, timeout=DOWNLOAD_DEADLINE + 600)
+    if not res.get("ok"):
+        record_failure(st, res.get("error", "download"), "download of %s: %s" % (vn, res.get("message")), now)
+        return False
+    for f in os.listdir(staging):
+        os.chmod(os.path.join(staging, f), 0o644)
+    offered = res.get("offeredSplits")
+    lang_required = not isinstance(offered, list) or any("config.%s" % q in offered for q in lang_splits())
+    ok, facts = verify_candidate(staging, installed_info(), lang_required=lang_required)
+    if not ok:
+        shutil.rmtree(staging, ignore_errors=True)
+        st.setdefault("bad", {})[str(vc)] = {"at": int(now), "reason": "verification: " + facts}
+        st["wanted"] = None
+        event(st, "verify-failed", "Waze %s (%s) refused: %s" % (vn, vc, facts), now, notice=True)
+        return False
+    shutil.rmtree(_p("pending"), ignore_errors=True)
+    os.rename(staging, _p("pending"))
+    st["pending"] = {"versionCode": vc, "versionName": facts["versionName"], "verifiedAt": int(now), "files": facts["files"],
+                     "bytes": res.get("totalBytes")}
+    st["wanted"] = None
+    event(st, "downloaded", "Waze %s downloaded and verified (%d MB); installs when the car is not connected or at the next boot"
+          % (facts["versionName"], (res.get("totalBytes") or 0) >> 20), now)
+    return True
+
+
+def cycle(force=False):
+    now = int(time.time())
+    st, settings = load_state(), load_settings()
+    st["installed"] = installed_info()
+    if st.get("health"):
+        event(st, "health-pending", "a health check is pending for %s" % st["health"].get("versionName"), now)
+        return st
+    if not settings["autoUpdate"] and not force:
+        st["lastResult"], st["lastMessage"] = "disabled", "automatic updates are off"
+        return st
+    inst_vc = int((st["installed"] or {}).get("versionCode") or 0)
+    if st.get("pending") and int(st["pending"]["versionCode"]) <= inst_vc:
+        st["pending"] = None  # installed by hand meanwhile
+        shutil.rmtree(_p("pending"), ignore_errors=True)
+    if effective_source(settings) == "manual":
+        st["wanted"] = None
+        if not st.get("pending"):
+            why = ("Google Play is selected but not enabled (Advanced)" if settings["source"] == "play"
+                   else "the source is manual uploads")
+            st["lastResult"], st["lastMessage"] = "manual-only", "no automatic checks: %s" % why
+        return st
+    if check_due(st, now, force):
+        st["lastCheck"] = now
+        res = tlplay(settings, "details", PKG, timeout=300)
+        if not res.get("ok"):
+            record_failure(st, res.get("error", "play"), res.get("message", "?"), now)
+            return st
+        record_success(st, now)
+        vc, vn = int(res["versionCode"]), res.get("versionName")
+        st["latest"] = {"versionCode": vc, "versionName": vn, "checkedAt": now}
+        if vc <= inst_vc:
+            st["wanted"] = None
+            event(st, "up-to-date", "Waze %s is the latest" % (vn,), now)
+        elif str(vc) in (st.get("bad") or {}):
+            st["wanted"] = None
+            event(st, "skipping-bad", "%s offers %s (%s), which failed before: %s"
+                  % ({"play": "Play"}.get(effective_source(settings), "APKPure"), vn, vc, st["bad"][str(vc)]["reason"]), now)
+        elif st.get("pending") and int(st["pending"]["versionCode"]) >= vc:
+            pass
+        else:
+            st["wanted"] = {"versionCode": vc, "versionName": vn}
+    elif now < int(st.get("nextTryAt") or 0):
+        return st
+    if st.get("wanted") and not st.get("pending"):
+        allowed, why = download_allowed(nm_metered(), settings["allowMetered"])
+        if not allowed:
+            event(st, "waiting-unmetered", "Waze %s is available; %s" % (st["wanted"]["versionName"], why), now)
+            return st
+        stage_download(st, settings, st["wanted"]["versionCode"], st["wanted"]["versionName"], now)
+    return st
+
+
+def try_install_when_idle(st):
+    if not st.get("pending") or st.get("health"):
+        return st
+    idle, why = car_idle()
+    now = int(time.time())
+    if not idle:
+        event(st, "waiting-idle", "Waze %s is ready; installs when the car is not connected or at the next boot (%s)"
+              % (st["pending"]["versionName"], why), now)
+        return st
+    log("car not connected (%s): installing now" % why)
+    app_ctl("stop")
+    try:
+        install_pending(st, now)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        st.setdefault("bad", {})[str(st["pending"]["versionCode"])] = {"at": now, "reason": "install: %s" % e}
+        event(st, "install-failed", "installing %s failed: %s" % (st["pending"]["versionName"], e), now, notice=True)
+        st["pending"] = None
+        shutil.rmtree(_p("pending"), ignore_errors=True)
+        app_ctl("start")
+        return st
+    save_state(st)
+    app_ctl("start")
+    watch_health(st)
+    return st
+
+
+# ---------------------------------------------------------------------------- manual upload
+
+UPLOAD_DIR = lambda *p: _p("upload", *p)  # noqa: E731  root 0700: the uploaded bundle never belongs to tesla
+
+
+def upload_status(update=None):
+    """upload.json (0644): what the settings page shows about the last upload."""
+    cur = read_json(_p("upload.json"), {}) or {}
+    if update is not None:
+        cur = dict(update, at=int(time.time()))
+        os.makedirs(STATE_DIR, exist_ok=True)
+        write_json(_p("upload.json"), cur, 0o644)
+    return cur
+
+
+def classify_bundle_apks(paths):
+    """{install name: path} for the APKs of a bundle, named by their manifests (not their file names,
+    which differ: .apkm/SAI base.apk + split_config.X.apk, XAPK <pkg>.apk + config.X.apk, bundletool
+    .apks splits/base-master.apk + splits/base-X.apk), plus the ignored ones. The base is the one APK
+    without a split attribute; bundletool's standalones/ (whole-app APKs for old devices) are left out."""
+    apk_info, _ = _tools_import()
+    base, splits, ignored = [], {}, []
+    for p in paths:
+        rel = p.replace(os.sep, "/")
+        if "/standalones/" in "/" + rel:
+            ignored.append(os.path.basename(p))
+            continue
+        try:
+            info = apk_info.apk_info(p)
+        except Exception as e:
+            raise ValueError("%s is not a readable APK (%s)" % (os.path.basename(p), type(e).__name__))
+        sp = info.get("split")
+        if not sp:
+            base.append(p)
+        elif sp.startswith("config."):
+            splits["split_%s.apk" % sp] = p
+        else:
+            ignored.append(os.path.basename(p))  # a feature split: install-app.sh installs config splits only
+    if len(base) != 1:
+        raise ValueError("the bundle has %d base APKs (expected exactly one)" % len(base))
+    return dict(splits, **{"base.apk": base[0]}), ignored
+
+
+def unpack_bundle(bundle, dst):
+    """The APKs of an uploaded bundle (.apkm, .xapk, .apks, a zip of APKs, or one plain APK) into dst
+    as base.apk + split_config.*.apk: only the base, our ABI split, our density (or the nearest) and
+    our language. Returns (facts, ignored names). Encrypted .apkm files (older APKMirror format) are
+    not ZIP files and are refused with that reason."""
+    import zipfile
+    shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(dst, mode=0o700)
+    try:
+        z = zipfile.ZipFile(bundle)
+    except zipfile.BadZipFile:
+        raise ValueError("not a ZIP file (.apkm/.xapk/.apks/.zip/.apk are; an encrypted .apkm is not)")
+    with z:
+        names = z.namelist()
+        if "AndroidManifest.xml" in names:  # one plain APK
+            z.close()
+            shutil.copy(bundle, os.path.join(dst, "base.apk"))
+            return {"base.apk": os.path.join(dst, "base.apk")}, []
+        apks = [i for i in z.infolist() if i.filename.lower().endswith(".apk") and not i.is_dir()]
+        if not apks:
+            raise ValueError("the bundle holds no APK")
+        if sum(i.file_size for i in apks) > MAX_TOTAL_BYTES:
+            raise ValueError("the bundle's APKs unpack to more than %d MB" % (MAX_TOTAL_BYTES >> 20))
+        raw = os.path.join(dst, "raw")
+        os.makedirs(raw)
+        paths = []
+        for k, i in enumerate(apks):
+            # members are written under our own names: a path in the archive never becomes a path here
+            # bundletool's standalones/ keep their directory name (classify_bundle_apks leaves them out)
+            parent = [c for c in i.filename.split("/")[:-1] if c not in ("", ".", "..")][-1:]
+            sub = os.path.join(raw, "%03d" % k, *[re.sub(r"[^A-Za-z0-9._-]", "_", c) for c in parent])
+            os.makedirs(sub, exist_ok=True)
+            out = os.path.join(sub, "m%03d.apk" % k)
+            with z.open(i) as src, open(out, "wb") as f:
+                shutil.copyfileobj(src, f, 1 << 20)
+            paths.append(out)
+    named, ignored = classify_bundle_apks(paths)
+    keep = {"base.apk"}
+    keep |= {"split_config.%s.apk" % ABI}
+    dens = next((q for q in density_order() if "split_config.%s.apk" % q in named), None)
+    if dens:
+        keep.add("split_config.%s.apk" % dens)
+    lang = next((q for q in lang_splits() if "split_config.%s.apk" % q in named), None)
+    if lang:
+        keep.add("split_config.%s.apk" % lang)
+    for name, path in named.items():
+        if name in keep:
+            os.rename(path, os.path.join(dst, name))
+    shutil.rmtree(raw, ignore_errors=True)
+    unused = sorted(set(named) - keep)
+    return {n: os.path.join(dst, n) for n in named if n in keep}, ignored + unused
+
+
+def process_upload(st, now):
+    """Unpack, verify and stage the uploaded bundle (upload/bundle). The result goes to upload.json and
+    the history; the bundle and its unpacked copy are deleted either way."""
+    bundle = UPLOAD_DIR("bundle")
+    if not os.path.isfile(bundle):
+        return None
+    meta = upload_status()
+    name = meta.get("name") or "bundle"
+    work = UPLOAD_DIR("unpacked")
+    upload_status(dict(meta, state="verifying", message="verifying %s" % name))
+    try:
+        try:
+            _files, ignored = unpack_bundle(bundle, work)
+        except ValueError as e:
+            res = ("rejected", "%s refused: %s" % (name, e))
+        else:
+            apk_info, _ = _tools_import()
+            b = apk_info.apk_info(os.path.join(work, "base.apk"))
+            inst = installed_info()
+            inst_vc = int((inst or {}).get("versionCode") or 0)
+            if inst and b.get("package") == inst["package"] and int(b.get("versionCode") or 0) == inst_vc:
+                res = ("nothing-to-do", "%s is Waze %s, the installed version: same version, nothing to do" % (name, b.get("versionName")))
+            elif inst and b.get("package") == inst["package"] and int(b.get("versionCode") or 0) < inst_vc:
+                res = ("older", "%s is Waze %s, older than the installed %s; not installed" % (name, b.get("versionName"), inst.get("versionName")))
+            else:
+                lang_offered = any(f.startswith("split_config.%s." % q) for q in lang_splits() for f in os.listdir(work))
+                ok, facts = verify_candidate(work, inst, lang_required=lang_offered)
+                if not ok:
+                    res = ("rejected", "%s refused: %s" % (name, facts))
+                elif st.get("pending") and int(st["pending"]["versionCode"]) > facts["versionCode"]:
+                    res = ("nothing-to-do", "%s is Waze %s; the newer %s is already waiting to be installed"
+                           % (name, facts["versionName"], st["pending"].get("versionName")))
+                else:
+                    shutil.rmtree(_p("pending"), ignore_errors=True)
+                    os.makedirs(_p("pending"), mode=0o755)
+                    for f in facts["files"]:
+                        os.rename(os.path.join(work, f), _p("pending", f))
+                        os.chmod(_p("pending", f), 0o644)
+                    st["pending"] = {"versionCode": facts["versionCode"], "versionName": facts["versionName"], "verifiedAt": int(now),
+                                     "files": facts["files"], "source": "upload"}
+                    st["wanted"] = None
+                    res = ("staged", "Waze %s from %s verified (signature, signer, version, splits: %s); installs when the car "
+                           "is not connected or at the next start" % (facts["versionName"], name, ", ".join(facts["files"])))
+            if ignored and res[0] == "staged":
+                res = (res[0], res[1] + "; not needed here: %s" % ", ".join(sorted(ignored)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        try:
+            os.unlink(bundle)
+        except OSError:
+            pass
+    upload_status(dict(meta, state=res[0], message=res[1]))
+    event(st, "upload-" + res[0], res[1], now, notice=res[0] in ("staged", "rejected"))
+    return res
+
+
+def cmd_receive_upload(size, name):
+    """Run as root through sudo by services/api/api.py (POST /api/appUpdateUpload): read exactly `size`
+    bytes from stdin into upload/ (root 0700), then unpack + verify + stage them right away when no
+    other run holds the lock (else the running cycle picks the bundle up). Prints one JSON line."""
+    name = re.sub(r"[^A-Za-z0-9._ ()+-]", "_", os.path.basename(name or "bundle"))[:120] or "bundle"
+    if not 0 < size <= MAX_UPLOAD:
+        print(json.dumps({"ok": False, "state": "rejected", "message": "upload size %d is not within 1..%d bytes" % (size, MAX_UPLOAD)}))
+        return 1
+    os.makedirs(UPLOAD_DIR(), mode=0o700, exist_ok=True)
+    os.chmod(UPLOAD_DIR(), 0o700)
+    part = UPLOAD_DIR("incoming.part")
+    got = 0
+    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        while got < size:
+            buf = sys.stdin.buffer.read(min(1 << 20, size - got))
+            if not buf:
+                break
+            f.write(buf)
+            got += len(buf)
+        f.flush()
+        os.fsync(f.fileno())
+    if got != size or sys.stdin.buffer.read(1):
+        os.unlink(part)
+        msg = "upload of %s ended at %d of %d bytes" % (name, got, size)
+        upload_status({"state": "rejected", "name": name, "bytes": got, "message": msg})
+        print(json.dumps({"ok": False, "state": "rejected", "message": msg}))
+        return 1
+    os.replace(part, UPLOAD_DIR("bundle"))
+    upload_status({"state": "received", "name": name, "bytes": size, "message": "%s received (%d MB)" % (name, size >> 20)})
+    with Lock(wait=False) as lk:
+        if lk is None:
+            msg = "%s received; it is verified after the update run in progress" % name
+            print(json.dumps({"ok": True, "state": "received", "message": msg}))
+            return 0
+        st = load_state()
+        state, msg = process_upload(st, int(time.time()))
+        save_state(st)
+    if state == "staged":
+        cmd_kick(True)  # the service installs it when the car is not connected
+    print(json.dumps({"ok": state in ("staged", "nothing-to-do"), "state": state, "message": msg}))
+    return 0
+
+
+# ---------------------------------------------------------------------------- commands
+
+class Lock:
+    def __init__(self, wait):
+        os.makedirs(STATE_DIR, exist_ok=True)
+        self.f = open(_p("lock"), "w")
+        self.wait = wait
+
+    def __enter__(self):
+        try:
+            fcntl.flock(self.f, fcntl.LOCK_EX | (0 if self.wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            return None
+        return self
+
+    def __exit__(self, *a):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+def cmd_run(force):
+    flag = _p("force")
+    if os.path.exists(flag):
+        force = True
+        os.unlink(flag)
+    with Lock(wait=False) as lk:
+        if lk is None:
+            log("another run holds the lock")
+            return 0
+        st = load_state()
+        if process_upload(st, int(time.time())):  # an upload that arrived while another run was busy
+            save_state(st)
+        st = cycle(force)
+        save_state(st)
+        st = try_install_when_idle(st)
+        save_state(st)
+    return 0
+
+
+def cmd_stage(force):
+    """One cycle up to a verified, staged set (pending/), never the install: the installer runs this,
+    and teslalinux-appupdate-boot.service installs the set at the next start, before the app."""
+    with Lock(wait=True):
+        st = load_state()
+        if process_upload(st, int(time.time())):
+            save_state(st)
+        st = cycle(force)
+        save_state(st)
+    pend = st.get("pending")
+    if pend:
+        print("staged: %s %s (%s); installs at the next start" % (PKG, pend.get("versionName"), pend.get("versionCode")))
+        return 0
+    print("nothing staged: %s" % (st.get("lastMessage") or "see teslalinux-appupdate status"))
+    return 0 if st.get("installed") else 1
+
+
+def cmd_boot():
+    with Lock(wait=True):
+        st = load_state()
+        if st.get("health"):
+            # the previous boot ended inside a health window: this launch is checked again
+            return 0
+        if not st.get("pending") or not os.path.isfile(_p("pending", "base.apk")):
+            return 0
+        now = int(time.time())
+        try:
+            install_pending(st, now)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            st.setdefault("bad", {})[str(st["pending"]["versionCode"])] = {"at": now, "reason": "install: %s" % e}
+            event(st, "install-failed", "installing %s at boot failed: %s" % (st["pending"]["versionName"], e), now, notice=True)
+            st["pending"] = None
+            shutil.rmtree(_p("pending"), ignore_errors=True)
+        save_state(st)
+    return 0  # never fail the boot: the app starts with whatever is installed
+
+
+def cmd_health():
+    with Lock(wait=True):
+        st = load_state()
+        if not st.get("health"):
+            return 0
+        if not os.path.exists(HEALTH_ENV):  # a reboot cleared /run: the next launch logs the marker again
+            os.makedirs(os.path.dirname(HEALTH_ENV), exist_ok=True)
+            with open(HEALTH_ENV, "w") as f:
+                f.write("ANDROID_LOG_TAGS=%s\n" % HEALTH_LOG_TAGS)
+            app_ctl("restart")
+        watch_health(st)
+        save_state(st)
+    return 0
+
+
+def cmd_kick(force):
+    if force:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        open(_p("force"), "w").close()
+    else:
+        st = load_state()
+        if time.time() - int(st.get("lastCheck") or 0) < KICK_MIN_AGE and not st.get("wanted") and not st.get("pending"):
+            return 0
+    if E("APPUPDATE_FAKE_APPCTL"):  # tests: no systemd
+        return run([E("APPUPDATE_FAKE_APPCTL"), "kick"], check=False)
+    try:
+        return subprocess.run(["systemctl", "start", "--no-block", SERVICE], timeout=30).returncode
+    except (OSError, subprocess.SubprocessError) as e:
+        log("cannot start %s: %s" % (SERVICE, e))
+        return 1
+
+
+def status():
+    st, settings = load_state(), load_settings()
+    st["installed"] = installed_info() or st.get("installed")
+    st.pop("history", None)
+    return {"settings": settings, "source": effective_source(settings), "state": st, "upload": upload_status(),
+            "defaultDispenser": DEFAULT_DISPENSER, "authCached": os.path.exists(AUTH_FILE)}
+
+
+def cmd_rollback():
+    with Lock(wait=True):
+        st = load_state()
+        ok = rollback(st, "rolled back by hand", int(time.time()))
+        save_state(st)
+    return 0 if ok else 1
+
+
+def main(argv):
+    if not argv:
+        sys.exit(__doc__)
+    cmd, rest = argv[0], argv[1:]
+    force = "--force" in rest
+    if cmd == "run":
+        return cmd_run(force)
+    if cmd == "stage":
+        return cmd_stage(force)
+    if cmd == "boot":
+        return cmd_boot()
+    if cmd == "health":
+        return cmd_health()
+    if cmd == "kick":
+        return cmd_kick(force)
+    if cmd == "status":
+        print(json.dumps(status(), indent=1, sort_keys=True))
+        return 0
+    if cmd == "rollback":
+        return cmd_rollback()
+    if cmd == "receive-upload":
+        args = dict(zip(rest[0::2], rest[1::2]))
+        try:
+            size = int(args.get("--size", "0"))
+        except ValueError:
+            size = 0
+        return cmd_receive_upload(size, args.get("--name", "bundle"))
+    sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

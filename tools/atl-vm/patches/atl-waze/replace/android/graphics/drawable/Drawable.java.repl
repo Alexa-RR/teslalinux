@@ -1,0 +1,246 @@
+@@@
+	public void setColorFilter(ColorFilter filter) {}
+===
+	/** AOSP: a colour filter applied when drawing; it takes precedence over the tint. */
+	public void setColorFilter(ColorFilter filter) {
+		if (mColorFilter != filter) {
+			mColorFilter = filter;
+			invalidateSelf();
+		}
+	}
+@@@
+	public void setTintList(ColorStateList tint) {}
+===
+	/** AOSP: tint colour list, resolved against the drawable state into a PorterDuff filter. */
+	public void setTintList(ColorStateList tint) {
+		mTint = tint;
+		mTintFilter = updateTintFilter(mTintFilter, mTint, mTintMode);
+		invalidateSelf();
+	}
+@@@
+	PorterDuffColorFilter updateTintFilter(PorterDuffColorFilter tintFilter, ColorStateList tint, PorterDuff.Mode tintMode) {
+		System.out.println("updateTintFilter(" + tintFilter + ", " + tint + ", " + tintMode + ")");
+		if (tint == null || tintMode == null) {
+===
+	PorterDuffColorFilter updateTintFilter(PorterDuffColorFilter tintFilter, ColorStateList tint, PorterDuff.Mode tintMode) {
+		if (tint == null || tintMode == null) {
+@@@
+	public void setTintMode(PorterDuff.Mode tintMode) {}
+===
+	/**
+	 * AOSP: the tint mode (null: SRC_IN). ATL keeps the tint of a plain drawable in the base class;
+	 * as in AOSP the call is also handed to setTintBlendMode, so subclasses that only override
+	 * the blend-mode variant (ColorDrawable, LayerDrawable, ...) get it too.
+	 */
+	public void setTintMode(PorterDuff.Mode tintMode) {
+		if (tintMode == null)
+			tintMode = DEFAULT_TINT_MODE;
+		if (mTintMode != tintMode) {
+			mTintMode = tintMode;
+			mTintFilter = updateTintFilter(mTintFilter, mTint, mTintMode);
+			invalidateSelf();
+		}
+		if (!mSetTintModeInvoked) {
+			mSetTintModeInvoked = true;
+			BlendMode mode = BlendMode.fromValue(tintMode.nativeInt);
+			setTintBlendMode(mode != null ? mode : DEFAULT_BLEND_MODE);
+			mSetTintModeInvoked = false;
+		}
+	}
+@@@
+	public void draw(Canvas canvas) {
+		if (canvas instanceof GskCanvas) {
+			if (mBounds.left != 0 || mBounds.top != 0)
+				canvas.translate(mBounds.left, mBounds.top);
+			native_draw(paintable, ((GskCanvas)canvas).snapshot, mBounds.width(), mBounds.height());
+			if (mBounds.left != 0 || mBounds.top != 0)
+				canvas.translate(-mBounds.left, -mBounds.top);
+		}
+	}
+===
+	/**
+	 * Draws the paintable behind this drawable; the colour filter (or the tint filter derived from
+	 * the tint list and the current state, AOSP) is applied as a GSK colour matrix around it.
+	 */
+	public void draw(Canvas canvas) {
+		final GskCanvas gsk = canvas.tlGskCanvas(); /* a Canvas(Bitmap) draws through its GSK canvas too */
+		if (gsk != null) {
+			if (mTlAlpha == 0)
+				return;
+			/* the alpha is a DST_IN filter with the alpha as the filter colour: every channel keeps
+			 * its colour and its alpha is multiplied by alpha/255 (Skia's paint alpha) */
+			boolean alphaPushed = false;
+			if (mTlAlpha != 0xFF) {
+				if (mTlAlphaFilter == null || mTlAlphaFilter.getColor() != mTlAlpha << 24)
+					mTlAlphaFilter = new PorterDuffColorFilter(mTlAlpha << 24, PorterDuff.Mode.DST_IN);
+				alphaPushed = gsk.tlPushColorFilter(mTlAlphaFilter);
+			}
+			ColorFilter filter = mColorFilter != null ? mColorFilter : mTintFilter;
+			boolean pushed = filter != null && gsk.tlPushColorFilter(filter);
+			if (mBounds.left != 0 || mBounds.top != 0)
+				canvas.translate(mBounds.left, mBounds.top);
+			native_draw(paintable, gsk.snapshot, mBounds.width(), mBounds.height());
+			if (mBounds.left != 0 || mBounds.top != 0)
+				canvas.translate(-mBounds.left, -mBounds.top);
+			if (pushed)
+				gsk.tlPopGroup();
+			if (alphaPushed)
+				gsk.tlPopGroup();
+		}
+	}
+@@@
+	public boolean setState(int[] stateSet) {
+		if (!Arrays.equals(this.mStateSet, stateSet)) {
+			this.mStateSet = stateSet;
+===
+	public boolean setState(int[] stateSet) {
+		if (!Arrays.equals(this.mStateSet, stateSet)) {
+			this.mStateSet = stateSet;
+			if (mTint != null)
+				mTintFilter = updateTintFilter(mTintFilter, mTint, mTintMode);
+@@@
+			case "inset": {
+				InsetDrawable drawable = new InsetDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+		}
+
+		return null;
+	}
+===
+			case "inset": {
+				InsetDrawable drawable = new InsetDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			/* AOSP DrawableInflater.inflateFromTag: the remaining drawable tags */
+			case "animated-selector": {
+				AnimatedStateListDrawable drawable = new AnimatedStateListDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "level-list": {
+				LevelListDrawable drawable = new LevelListDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "color": {
+				ColorDrawable drawable = new ColorDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "animated-vector": {
+				AnimatedVectorDrawable drawable = new AnimatedVectorDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "scale": {
+				ScaleDrawable drawable = new ScaleDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "clip": {
+				ClipDrawable drawable = new ClipDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "rotate": {
+				RotateDrawable drawable = new RotateDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "animated-image": {
+				AnimatedImageDrawable drawable = new AnimatedImageDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+			case "animated-rotate": {
+				AnimatedRotateDrawable drawable = new AnimatedRotateDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+		}
+
+		/* AOSP DrawableInflater: a tag that is not in the table is a Drawable class name */
+		Drawable drawable = tlInflateFromClass(resources, parser.getName(), parser);
+		drawable.inflate(resources, parser, attrs, theme);
+		return drawable;
+	}
+@@@
+			case "transition": {
+				return new Drawable();
+			}
+===
+			case "transition": {
+				TransitionDrawable drawable = new TransitionDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+@@@
+			case "animation-list": {
+				return new AnimationDrawable();
+			}
+===
+			case "animation-list": {
+				AnimationDrawable drawable = new AnimationDrawable();
+				drawable.inflate(resources, parser, attrs, theme);
+				return drawable;
+			}
+@@@
+	public boolean isVisible() {
+		return false;
+	}
+
+	public boolean setVisible(boolean visible, boolean restart) {
+		return false;
+	}
+===
+	public boolean isVisible() {
+		return mVisible;
+	}
+
+	/** AOSP: sets the visibility; returns true when it changed (subclasses restart animations then). */
+	public boolean setVisible(boolean visible, boolean restart) {
+		boolean changed = mVisible != visible;
+		if (changed) {
+			mVisible = visible;
+			invalidateSelf();
+		}
+		return changed;
+	}
+@@@
+		Path path = Paths.get(android.os.Environment.getExternalStorageDirectory().getPath(), file);
+		if (!Files.exists(path)) {
+			try (InputStream inputStream = resources.getAssets().openNonAsset(file)) {
+				if (inputStream != null) {
+					Files.createDirectories(path.getParent());
+					Files.copy(inputStream, path);
+				}
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+		return new NinePatchDrawable(path.toString());
+===
+		/* AOSP decodes the PNG with its npTc chunk and builds the NinePatchDrawable with the resource's
+		 * density and the chunk's padding; GDK decodes the asset stream directly (no copy to storage). */
+		int density = Bitmap.DENSITY_NONE;
+		if (value != null) {
+			if (value.density == TypedValue.DENSITY_DEFAULT)
+				density = android.util.DisplayMetrics.DENSITY_DEFAULT;
+			else if (value.density != TypedValue.DENSITY_NONE)
+				density = value.density;
+		}
+		android.graphics.NinePatch patch = android.graphics.NinePatch.tlDecode(is, density, file);
+		if (patch == null)
+			return null;
+		return new NinePatchDrawable(resources, patch);
+@@@
+		if (path.endsWith(".9.png"))
+			return new NinePatchDrawable(path);
+===
+		if (path.endsWith(".9.png")) {
+			android.graphics.NinePatch patch = android.graphics.NinePatch.tlDecodeFile(path);
+			return patch != null ? new NinePatchDrawable(null, patch) : null;
+		}

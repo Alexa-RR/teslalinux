@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+# teslalinux: route through the uplink that reaches the internet (LTE, backup Wi-Fi, Ethernet), and run
+# wpa_supplicant on the backup Wi-Fi card (host/teslalinux-uplink)
+description="teslalinux uplink failover"
+command=/usr/bin/python3
+command_args="/usr/local/bin/teslalinux-uplink"
+command_background=true
+pidfile=/run/teslalinux-uplink.pid
+output_log=/var/log/teslalinux/uplink.log
+error_log=/var/log/teslalinux/uplink.log
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
+
+depend() {
+	need localmount
+	after net dhcpcd
+}
+
+start_pre() {
+	checkpath -d -m 0755 /var/log/teslalinux /run/teslalinux
+}

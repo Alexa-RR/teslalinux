@@ -1,0 +1,5 @@
+@@@
+	public static CharSequence concat(CharSequence[] array) {
+===
+	/** AOSP: varargs concatenation (a single argument is returned as is). */
+	public static CharSequence concat(CharSequence... array) {

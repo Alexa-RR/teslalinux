@@ -1,0 +1,16 @@
+@@@
+		Bitmap bm = null;
+
+		Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "decodeBitmap");
+		try {
+			bm = decodeStreamInternal(is, outPadding, opts);
+===
+		Bitmap bm = null;
+
+		Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "decodeBitmap");
+		try {
+			// teslalinux: AOSP's options (bounds only, sample size, density scaling, mime type,
+			// mutability); the native decoder only decodes
+			if (opts != null)
+				return tlDecodeWithOptions(is, outPadding, opts);
+			bm = decodeStreamInternal(is, outPadding, opts);

@@ -1,0 +1,126 @@
+# teslalinux release: builds the Raspberry Pi OS runtime (ATL stack + tacomp + tlplay) on an arm64
+# runner inside Debian trixie, the same distribution and architecture as Raspberry Pi OS 13, and
+# publishes what tools/pios/install.sh downloads:
+#   teslalinux-dist-<ver>-arm64.tar.zst, MANIFEST, SHA256SUMS, install.sh
+# The Pi never compiles. Install on the Pi:
+#   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/install.sh | sudo bash -s -- --waze apkpure
+#
+# Triggers: a pushed tag v* (the release is created or updated for it), or by hand (workflow_dispatch)
+# with an optional tag; without one the files are only kept as the run's artifact.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish to (empty: build only; the files stay as the run's artifact)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag || 'push' }}
+  cancel-in-progress: false
+
+jobs:
+  dist:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 330
+    container:
+      image: debian:trixie
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      # the whole compiler output goes through ccache (Debian's /usr/lib/ccache masquerade links)
+      CCACHE_DIR: /github/home/.ccache
+      CCACHE_MAXSIZE: 3G
+      CARGO_HOME: /github/home/.cargo
+    steps:
+      - name: Tools the checkout and the cache need
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends git ca-certificates zstd
+
+      - uses: actions/checkout@v4.2.2
+
+      - name: Build dependencies (tools/debvm/guest-provision.sh --ci)
+        run: sh tools/debvm/guest-provision.sh --ci
+
+      # sources (git clones of every pinned repo), the pinned r8.jar, cargo's registry and ccache:
+      # keyed by the pins, so a new pin set starts from the previous cache and refreshes it
+      - name: Cache sources and compiler output
+        uses: actions/cache@v4.2.3
+        with:
+          path: |
+            /github/home/src
+            /github/home/atl-src
+            /github/home/build/r8-*.jar
+            /github/home/.cargo/registry
+            /github/home/.ccache
+          key: dist-${{ hashFiles('tools/debvm/versions.env', 'tools/debvm/patches/**', 'tools/atl-vm/patches/bionic_translation-*') }}-${{ github.run_id }}
+          restore-keys: |
+            dist-${{ hashFiles('tools/debvm/versions.env', 'tools/debvm/patches/**', 'tools/atl-vm/patches/bionic_translation-*') }}-
+            dist-
+
+      - name: Build into /opt/teslalinux (tools/debvm/build-dist.sh)
+        env:
+          TL_REPO: ${{ github.workspace }}
+          HOME: /github/home
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache -z
+          bash tools/debvm/build-dist.sh all
+          bash tools/debvm/build-dist.sh status
+          ccache -s
+
+      - name: Build logs
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: build-logs
+          path: /github/home/build/logs/
+          if-no-files-found: ignore
+
+      - name: Pack (tools/debvm/pack-dist.sh)
+        env:
+          HOME: /github/home
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # install.sh downloads from the repository it was released from
+          bash tools/debvm/pack-dist.sh --release "$TAG" --release-repo "$GITHUB_REPOSITORY" "$GITHUB_WORKSPACE/out-dist"
+          grep -E '^(version|release|repo_commit|build_cpu_cflags|unresolved)=' out-dist/MANIFEST
+          ls -la out-dist
+
+      - name: Keep the files as the run's artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: teslalinux-dist
+          path: |
+            out-dist/teslalinux-dist-*
+            out-dist/MANIFEST
+            out-dist/SHA256SUMS
+            out-dist/install.sh
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: env.TAG != ''
+        uses: softprops/action-gh-release@v2.2.1
+        with:
+          tag_name: ${{ env.TAG }}
+          name: teslalinux ${{ env.TAG }}
+          body: |
+            Raspberry Pi 4 (Raspberry Pi OS Lite 64-bit, trixie). Install or update on the Pi:
+
+                curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/install.sh | sudo bash -s -- --dist ${{ env.TAG }}
+
+            Options (`--waze apkpure`, `--apk FILE`, `--config FILE`, ...): `install.sh --help`. MANIFEST lists every pinned source and the Debian packages the runtime needs.
+          files: |
+            out-dist/teslalinux-dist-*
+            out-dist/MANIFEST
+            out-dist/SHA256SUMS
+            out-dist/install.sh
+          fail_on_unmatched_files: true

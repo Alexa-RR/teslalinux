@@ -1,0 +1,118 @@
+@@@
+	public static PendingIntent getBroadcast(Context context, int requestCode, Intent intent, int flags) {
+		return new PendingIntent(requestCode, intent, 2);
+	}
+
+	public IntentSender getIntentSender() {
+		return null;
+	}
+
+	public void send(Context context, int code, Intent intent) {}
+===
+	public static PendingIntent getBroadcast(Context context, int requestCode, Intent intent, int flags) {
+		return tlObtain(new PendingIntent(requestCode, new Intent(intent), 2), flags, null);
+	}
+
+	/**
+	 * AOSP: performs the operation with the fill-in intent merged in (Intent.fillIn); a canceled
+	 * PendingIntent throws CanceledException, a FLAG_ONE_SHOT one is canceled by its first send.
+	 * (AOSP declares the CanceledException; ATL's signature never did and framework callers rely on
+	 * that, so it is thrown undeclared: the same exception reaches the app's catch.)
+	 */
+	public void send(Context context, int code, Intent fillIn) {
+		Intent target = tlFillIn(fillIn, 0, 0);
+		if (target == null)
+			PendingIntent.<RuntimeException>tlThrow(new CanceledException());
+		if (tlFlags >= 0 && (tlFlags & FLAG_ONE_SHOT) != 0)
+			cancel();
+		Context ctx = ATLLoadedApp.getPrimaryApplication().getApplication();
+		if (type == 0) {
+			if (tlIntents != null && tlIntents.length > 1) {
+				for (int i = 0; i < tlIntents.length - 1; i++)
+					ctx.startActivity(tlIntents[i]);
+			}
+			ctx.startActivity(target);
+		} else if (type == 1) {
+			ctx.startService(target);
+		} else if (type == 2) {
+			ctx.sendBroadcast(target);
+		}
+	}
+@@@
+	public void send() {
+		Context context = ATLLoadedApp.getPrimaryApplication().getApplication();
+		if (type == 0) { // type Activity
+			context.startActivity(intent);
+		} else if (type == 1) { // type Service
+			context.startService(intent);
+		} else if (type == 2) { // type Broadcast
+			context.sendBroadcast(intent);
+		}
+	}
+
+	public static PendingIntent getActivity(Context context, int requestCode, Intent intent, int flags) {
+		return new PendingIntent(requestCode, intent, 0);
+	}
+
+	public static PendingIntent getService(Context context, int requestCode, Intent intent, int flags) {
+		return new PendingIntent(requestCode, intent, 1);
+	}
+
+	public static PendingIntent getActivities(Context context, int requestCode, Intent[] intents, int flags, Bundle options) {
+		return new PendingIntent(requestCode, intents[0], 0);
+	}
+===
+	public void send() {
+		send(null, 0, null);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static <E extends Throwable> void tlThrow(Throwable e) throws E {
+		throw (E) e;
+	}
+
+	public static PendingIntent getActivity(Context context, int requestCode, Intent intent, int flags) {
+		return tlObtain(new PendingIntent(requestCode, new Intent(intent), 0), flags, null);
+	}
+
+	public static PendingIntent getService(Context context, int requestCode, Intent intent, int flags) {
+		return tlObtain(new PendingIntent(requestCode, new Intent(intent), 1), flags, null);
+	}
+
+	/** AOSP: the intents are started in order when sent (the last one is on top); the PendingIntent is identified by the last. */
+	public static PendingIntent getActivities(Context context, int requestCode, Intent[] intents, int flags, Bundle options) {
+		Intent[] copies = new Intent[intents.length];
+		for (int i = 0; i < intents.length; i++)
+			copies[i] = new Intent(intents[i]);
+		return tlObtain(new PendingIntent(requestCode, copies[copies.length - 1], 0), flags, copies);
+	}
+@@@
+	public void cancel() {}
+
+	public class CanceledException extends Exception {
+	}
+===
+	/** AOSP: thrown when sending a PendingIntent that was canceled. */
+	public static class CanceledException extends android.util.AndroidException {
+		public CanceledException() {
+		}
+
+		public CanceledException(String name) {
+			super(name);
+		}
+
+		public CanceledException(Exception cause) {
+			super(cause);
+		}
+	}
+@@@
+	public static PendingIntent getForegroundService(Context context, int requestCode, Intent intent, int flags) {
+		return getService(context, requestCode, intent, flags);
+	}
+===
+	public static PendingIntent getForegroundService(Context context, int requestCode, Intent intent, int flags) {
+		PendingIntent pi = getService(context, requestCode, intent, flags);
+		if (pi != null)
+			pi.tlForegroundService = true;
+		return pi;
+	}

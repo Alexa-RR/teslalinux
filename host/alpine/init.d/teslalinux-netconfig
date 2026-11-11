@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# teslalinux: before the hotspot and the web server come up, (1) render hostapd, dnsmasq, nftables,
+# nginx and the display environment again when /etc/teslalinux/env or the settings saved through the
+# frontend changed since the last render (this is how the frontend's network settings are "applied
+# during the next system startup", like upstream), and (2) make sure the TLS key and a certificate
+# for it exist so nginx can start. Fast path: two file tests, no Python.
+description="teslalinux host configuration and TLS files"
+
+STAMP=/etc/teslalinux/.rendered
+PROPS=/var/lib/teslalinux/state/props.json
+
+depend() {
+	need localmount
+	after teslalinux-firstboot
+	before hostapd dnsmasq nftables nginx networking tacomp teslalinux-atl
+}
+
+start() {
+	ebegin "teslalinux configuration"
+	rc=0
+	if [ ! -e "$STAMP" ] || [ /etc/teslalinux/env -nt "$STAMP" ] || { [ -e "$PROPS" ] && [ "$PROPS" -nt "$STAMP" ]; }; then
+		/usr/local/bin/teslalinux-render --root / --layout alpine || rc=1
+	fi
+	. /etc/teslalinux/env
+	if [ ! -s "${TLS_KEY:-/etc/teslalinux/tls/privkey.pem}" ] || [ ! -s "${TLS_CERT:-/etc/teslalinux/tls/fullchain.pem}" ]; then
+		/usr/local/bin/teslalinux-tls init >>/var/log/teslalinux/tls.log 2>&1 || rc=1
+	fi
+	eend $rc
+}
