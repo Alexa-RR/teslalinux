@@ -25,20 +25,45 @@ navigation with voice prompts, settings and the on-screen keyboard. First boots 
 
 ## Install on a Raspberry Pi 4
 
-You need a Raspberry Pi 4, a microSD card with **Raspberry Pi OS Lite 64-bit (Debian 13 trixie)**,
-and for use in the car a USB LTE modem.
+You need a Raspberry Pi 4 (4 B, 400 or CM4) with **Raspberry Pi OS Lite 64-bit (Debian 13
+trixie)** on its microSD card, internet access during the install (Ethernet is best: the installer
+turns the Pi's Wi-Fi into the car's hotspot), and for use in the car a USB LTE modem. Nothing is
+compiled on the Pi: the runtime comes prebuilt from this repository's
+[Releases](https://github.com/Alexa-RR/teslalinux/releases).
 
-1. Get the latest release from this repository's **Releases** page on GitHub. It carries the
-   prebuilt runtime (ATL stack and compositor) for Raspberry Pi OS.
-2. On the Pi, run the release installer, `tools/pios/install.sh` (its header lists the options). It
-   installs the runtime, the services and the host configuration (hotspot, DNS, nginx).
-3. Before the first start, set your own values in `/etc/teslalinux/env` (template:
-   `host/phase1-pios/env`): at least the hotspot password `AP_PSK`, and `DEVICE_HOST`, a hostname
-   under a domain you control. The Tesla browser only opens pages over HTTPS with a publicly trusted
-   certificate, so that hostname needs a real certificate; `docs/CAR-STACK-READINESS.md`, section
-   "Certificate", describes the setup (the key stays on the Pi; issuance runs elsewhere).
-4. In the car: join the Pi's Wi-Fi (`AP_SSID`, default `Teslalinux`), then open
-   `https://<DEVICE_HOST>/` in the browser.
+**One command**, on the Pi:
+
+```sh
+curl -fsSL https://github.com/Alexa-RR/teslalinux/releases/latest/download/install.sh | sudo bash -s -- \
+  --set AP_PSK='your-hotspot-password' \
+  --set DEVICE_HOST=car.example.com \
+  --waze apkpure
+```
+
+- `AP_PSK`: the password of the Pi's Wi-Fi hotspot (`AP_SSID`, default `Teslalinux`). Leave it out
+  and the installer generates one and prints it at the end.
+- `DEVICE_HOST`: the hostname the car opens, under a domain you control. The Tesla browser only
+  opens pages over HTTPS with a publicly trusted certificate, so it needs a real certificate:
+  `docs/CAR-STACK-READINESS.md`, section "Certificate" (the key stays on the Pi; issuance runs
+  elsewhere).
+- Waze: `--waze apkpure` downloads it (checked against Waze's own signing certificate), or
+  `--apk /path/to/waze.apkm` installs a bundle you downloaded yourself, or `--waze none` leaves it
+  to the upload screen of the car page.
+- More settings: `--config FILE` with `KEY=VALUE` lines (the keys of `host/phase1-pios/env`, plus
+  `LTE_APN`, `LTE_USER`, `LTE_PASSWORD`, `LTE_ROAMING` for the modem). `--dist vX.Y.Z` picks a
+  release instead of the latest. The full option list is the header of `tools/pios/install.sh`.
+
+The installer can be run again at any time (it only redoes what changed), keeps a backup of every
+system file it replaces, and asks before the final reboot. Afterwards:
+
+```sh
+sudo teslalinux doctor      # health check
+sudo teslalinux status      # installed release, previous release, backups
+sudo teslalinux rollback    # back to the previous release and system files
+sudo teslalinux uninstall   # remove everything (--keep-data keeps the app and settings)
+```
+
+In the car: join the Pi's Wi-Fi, then open `https://<DEVICE_HOST>/` in the browser.
 
 No app is included. The Pi downloads Waze itself and keeps it updated (APKPure's public API by
 default; every APK must carry the app's original signature), or you upload an app bundle from the
