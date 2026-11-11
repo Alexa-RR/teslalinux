@@ -1,4 +1,4 @@
-# Reference clones of upstream projects (tesla-android, waydroid, lepton). Not part of this repo.
+# Reference clones of upstream projects (tesla-android, ATL and others). Not part of this repo.
 /upstream/
 # Build outputs
 /out/

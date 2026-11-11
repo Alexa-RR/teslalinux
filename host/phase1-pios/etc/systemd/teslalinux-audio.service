@@ -1,6 +1,6 @@
 [Unit]
 Description=teslalinux: Android audio (PipeWire sink monitor) -> FLAC fMP4 WebSocket (8080)
-After=teslalinux-pipewire-pulse.service waydroid-session.service teslalinux-atl.service
+After=teslalinux-pipewire-pulse.service teslalinux-atl.service
 Wants=teslalinux-pipewire-pulse.service
 
 [Service]

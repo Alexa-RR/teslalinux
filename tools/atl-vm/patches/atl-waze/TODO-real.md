@@ -318,7 +318,7 @@ large build. Options, in order of least risk:
    /dev/dri, /dev/video*, the tacomp Wayland socket (/run/tesla) and PipeWire bind-mounted. Reuses
    everything the VM proved, Mesa v3d inside the container. Recommended.
 2. Alpine as the whole Pi image (Alpine supports the Pi 4/5): simplest runtime, but tacomp,
-   nginx, hostapd, waydroid remnants and provision.sh are written for Pi OS.
+   nginx, hostapd and provision.sh are written for Pi OS.
 3. Build the ART/bionic stack from source on Debian: hours of build, upstream-divergent.
 The launcher (host/phase1-pios/teslalinux-atl) already takes ATL_PREFIX; option 1 wraps its exec
 in the container entry. Not started: no Pi here to test a bake.

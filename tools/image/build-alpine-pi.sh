@@ -105,7 +105,7 @@ iface $AP_IFACE inet static
 	netmask 255.255.255.0
 EOF
 touch "$ROOT/etc/dhcpcd.conf"
-grep -q '^# teslalinux' "$ROOT/etc/dhcpcd.conf" || printf '\n# teslalinux: the hotspot has its static address (networking); dhcpcd serves the uplinks\ndenyinterfaces %s waydroid0 lo\n# the backup Wi-Fi card is associated by teslalinux-uplink (wpa_supplicant), not by a dhcpcd hook\nnohook wpa_supplicant\n' "$AP_IFACE" >> "$ROOT/etc/dhcpcd.conf"
+grep -q '^# teslalinux' "$ROOT/etc/dhcpcd.conf" || printf '\n# teslalinux: the hotspot has its static address (networking); dhcpcd serves the uplinks\ndenyinterfaces %s lo\n# the backup Wi-Fi card is associated by teslalinux-uplink (wpa_supplicant), not by a dhcpcd hook\nnohook wpa_supplicant\n' "$AP_IFACE" >> "$ROOT/etc/dhcpcd.conf"
 install -m 0755 "$REPO/host/alpine/dhcpcd.exit-hook" "$ROOT/etc/dhcpcd.exit-hook"
 echo "net.ipv4.ip_forward = 1" > "$ROOT/etc/sysctl.d/10-teslalinux.conf"
 # web: the frontend; nginx's site, includes and the youtu.be page are rendered below
@@ -229,7 +229,7 @@ awk '/^kernel=/ { print "kernel=vmlinuz-rpi"; print "initramfs initramfs-rpi fol
 	"$REPO/host/rpi4/config.txt" > "$ROOT/boot/config.txt"
 grep -q '^kernel=vmlinuz-rpi' "$ROOT/boot/config.txt" || printf '[pi4]\nkernel=vmlinuz-rpi\ninitramfs initramfs-rpi followkernel\n' >> "$ROOT/boot/config.txt"
 cat > "$ROOT/boot/cmdline.txt" <<EOF
-modules=sd-mod,usb-storage,ext4 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait console=tty1 quiet psi=1 coherent_pool=1M pcie_aspm=off
+modules=sd-mod,usb-storage,ext4 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait console=tty1 quiet coherent_pool=1M pcie_aspm=off
 EOF
 KVER=$(ls "$ROOT/lib/modules" | head -1)
 if [ -n "$KVER" ]; then

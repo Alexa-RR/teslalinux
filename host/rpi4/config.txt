@@ -16,7 +16,7 @@ arm_boost=1
 force_turbo=0
 
 # GPU / codec: VPU is needed for the V4L2 M2M encoder (/dev/video11, /dev/video31)
-# and Mesa v3d for Android's rendering. cma-512 is upstream's value; 256 is enough for 1088x832.
+# and Mesa v3d for the app's GL rendering (GTK) and tacomp. cma-512 is upstream's value; 256 is enough for 1088x832.
 dtoverlay=vc4-kms-v3d
 dtoverlay=cma,cma-256
 gpu_mem=128

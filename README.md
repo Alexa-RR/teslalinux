@@ -75,7 +75,7 @@ The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`) is the second, experim
 
 | Path | What |
 |---|---|
-| `docs/` | Architecture and boot-time budget, the upstream protocol contract, the car stack, app updates, the Alpine image |
+| `docs/` | Architecture and boot time, the upstream protocol contract, the car stack, app updates, the Alpine image |
 | `web/` | The browser frontend, forked from Tesla Android's `frontend` |
 | `services/display/` | `tacomp`: a headless wlroots compositor that streams frames (JPEG, or H.264/JPEG through the Pi's V4L2 M2M encoder) and injects touches |
 | `services/gps/`, `services/audio/`, `services/api/` | GPS bridge, audio stream, the settings and status API |
@@ -84,7 +84,6 @@ The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`) is the second, experim
 | `tools/pios/` | The Raspberry Pi OS installer and release packaging |
 | `tools/debvm/`, `tools/atl-vm/`, `tools/debian/` | The Debian and Alpine aarch64 build and test VMs, the ATL patch history and test tools |
 | `tools/image/` | The Alpine SD-card image builder |
-| `android/` | Tuning for the earlier Waydroid-based design (see `docs/ARCHITECTURE.md`) |
 
 The ATL changes made for this project live in a fork of ATL,
 [Alexa-RR/android_translation_layer](https://github.com/Alexa-RR/android_translation_layer), pinned in

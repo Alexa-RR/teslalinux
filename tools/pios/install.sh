@@ -59,7 +59,7 @@ REBOOT_FLAG=/run/teslalinux/reboot-required
 # directories that belong to teslalinux as a whole (not tracked file by file)
 OWNED_DIRS=(/usr/share/teslalinux /usr/local/lib/teslalinux /usr/local/share/teslalinux /usr/local/share/doc/teslalinux
   /var/www/teslalinux /var/www/teslalinux-redirect /var/cache/teslalinux)
-# the car stack's units (host/phase1-pios/etc/systemd), without the Waydroid session
+# the car stack's units (host/phase1-pios/etc/systemd)
 UNITS=(teslalinux-netconfig.service teslalinux-dbus.service teslalinux-uplink.service tacomp.service
   teslalinux-api.service teslalinux-gps.service teslalinux-audio.service teslalinux-pipewire.service
   teslalinux-wireplumber.service teslalinux-pipewire-pulse.service teslalinux-atl.service)

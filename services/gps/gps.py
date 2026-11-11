@@ -13,8 +13,8 @@ Feed (TESLALINUX_GPS_FEED_PORT, 9997): one line per fix,
 with unknown values written as "NaN". That spelling matters: the reader is Java
 (tools/atl-vm/patches/atl-waze/android/location/LocationManager.java, Double.parseDouble), which
 accepts "NaN" but throws on Python's default "nan" and would drop the connection on every fix.
-The feed binds to loopback by default (ATL runs on the same host); the Waydroid variant sets
-TESLALINUX_GPS_FEED_BIND to the container bridge address.
+The feed binds to loopback by default, because the app (ATL) runs on the same host;
+TESLALINUX_GPS_FEED_BIND overrides the address.
 """
 import asyncio
 import json

@@ -237,7 +237,7 @@ wireplumber.profiles = {
 EOF
   printf '# teslalinux: every ALSA client plays through PipeWire\npcm.!default { type pipewire }\nctl.!default { type pipewire }\n' > /etc/asound.conf
 
-  log "7/7 systemd units (host/phase1-pios/etc/systemd, without Waydroid) + this machine's drop-ins"
+  log "7/7 systemd units (host/phase1-pios/etc/systemd) + this machine's drop-ins"
   for u in $UNITS; do install -m 0644 "$REPO/host/phase1-pios/etc/systemd/$u.service" /etc/systemd/system/; done
   if [[ $selfsigned == 0 ]]; then
     install -m 0644 "$REPO/host/phase1-pios/etc/systemd/teslalinux-tls-fetch.service" "$REPO/host/phase1-pios/etc/systemd/teslalinux-tls-fetch.timer" /etc/systemd/system/

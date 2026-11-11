@@ -10,7 +10,8 @@ takes touch back, the GPS/audio/config daemons, and Waze under the patched Andro
 Layer (ATL). Alpine because the ATL stack (`android-translation-layer`, `art_standalone`,
 `bionic_translation`, `libandroidfw`) exists only as Alpine packages, and the whole stack was proven
 on the Alpine test VM (`tools/atl-vm`); the image is that VM's userland plus the Pi boot files and
-the car services. Pi OS stays as the documented Phase-1 host for the Waydroid variant.
+the car services. Raspberry Pi OS with ATL built for Debian (`tools/debvm`, `tools/pios/install.sh`)
+is the primary target.
 
 ## Pieces
 

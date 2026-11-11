@@ -24,8 +24,6 @@ DISPLAY_W=1088
 DISPLAY_H=832
 DISPLAY_FPS=60
 DISPLAY_DENSITY=200
-# Waydroid image flavour: GAPPS (needed for Waze) or VANILLA
-WAYDROID_SYSTEM_TYPE=GAPPS
 # Offline mode (upstream persist.tesla-android.offline-mode.*; defaults from upstream vendor.mk, the
 # frontend's Network settings override them, applied at the next boot):
 #   OFFLINE_MODE=1                     answer Tesla's connectivity probes here so the car keeps the Wi-Fi

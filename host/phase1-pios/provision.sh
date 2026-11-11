@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# teslalinux Phase 1: turn a fresh Raspberry Pi OS Lite (arm64, trixie) into the full stack.
+# teslalinux: turn a fresh Raspberry Pi OS Lite (arm64, trixie) into the full stack.
 #
 #   sudo ./provision.sh            # full run
 #   sudo ./provision.sh --no-trim  # skip the systemd/boot trimming (for debugging)
 #
-# Idempotent: safe to re-run. Reads ./env. Reboot afterwards, then run ../../android/bake.sh.
+# Idempotent: safe to re-run. Reads ./env. Reboot afterwards. The app runtime (ATL in /opt/teslalinux)
+# and the app itself come from a release dist (tools/pios/install.sh) and tools/apps/install-app.sh.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -25,8 +26,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
   hostapd dnsmasq nftables nginx \
-  lxc python3 python3-gbinder python3-websockets python3-dbus \
-  waydroid \
+  python3 python3-websockets \
   pipewire pipewire-pulse pipewire-alsa wireplumber ffmpeg curl openssl bind9-dnsutils \
   modemmanager network-manager usb-modeswitch usb-modeswitch-data \
   mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 libgbm1 \
@@ -36,7 +36,7 @@ apt-get install -y -q --no-install-recommends \
 # Packages pulled in only for development that we don't want: none of the desktop stack.
 apt-get autoremove -y -q
 
-# Dedicated user that owns the Wayland socket + Waydroid session.
+# Dedicated user that owns the Wayland socket and runs the app.
 id tesla >/dev/null 2>&1 || useradd -r -m -d /var/lib/tesla -s /usr/sbin/nologin -G video,render,input,audio tesla
 install -d -o tesla -g tesla -m 0700 /run/tesla
 echo 'd /run/tesla 0700 tesla tesla -' > /etc/tmpfiles.d/tesla.conf
@@ -49,11 +49,8 @@ cp "$REPO/host/rpi4/config.txt" "$BOOT/config.txt"
 ROOTPART=$(findmnt -no SOURCE / )
 ROOTUUID=$(blkid -s PARTUUID -o value "$ROOTPART")
 sed "s|PARTUUID=CHANGEME-02|PARTUUID=$ROOTUUID|" "$REPO/host/rpi4/cmdline.txt" > "$BOOT/cmdline.txt"
-# binder/ashmem are built in; make sure binderfs is mounted early for Waydroid.
-cat > /etc/modules-load.d/teslalinux.conf <<'EOF'
-veth
-bridge
-EOF
+# an earlier provisioning preloaded the veth and bridge modules; nothing on the car uses them
+rm -f /etc/modules-load.d/teslalinux.conf
 
 # ---------------------------------------------------------------------------------------------
 log "3/9 hotspot: hostapd + dnsmasq + nftables (static wlan0, NetworkManager leaves it alone)"
@@ -69,7 +66,7 @@ render --only net
 # wlan0 is managed by systemd-networkd-free static config; keep NM off it.
 cat > /etc/NetworkManager/conf.d/teslalinux-unmanaged.conf <<EOF
 [keyfile]
-unmanaged-devices=interface-name:$AP_IFACE;interface-name:waydroid0
+unmanaged-devices=interface-name:$AP_IFACE
 EOF
 cat > /etc/systemd/system/teslalinux-ap-addr.service <<EOF
 [Unit]
@@ -120,20 +117,7 @@ nginx -t
 systemctl enable nginx
 
 # ---------------------------------------------------------------------------------------------
-log "5/9 Waydroid"
-install -d /var/lib/waydroid
-if [[ ! -f /var/lib/waydroid/images/system.img ]]; then
-  waydroid init -s "$WAYDROID_SYSTEM_TYPE" -f
-fi
-cp "$REPO/android/waydroid_base.prop" /var/lib/waydroid/waydroid_base.prop
-sed -i -e "s/^persist.waydroid.width=.*/persist.waydroid.width=$DISPLAY_W/" \
-       -e "s/^persist.waydroid.height=.*/persist.waydroid.height=$DISPLAY_H/" \
-       -e "s/^ro.sf.lcd_density=.*/ro.sf.lcd_density=$DISPLAY_DENSITY/" /var/lib/waydroid/waydroid_base.prop
-# Waydroid: freeze (not kill) the container when the session stops -> warm standby.
-sed -i 's/^suspend_action *=.*/suspend_action = freeze/' /var/lib/waydroid/waydroid.cfg || true
-grep -q '^suspend_action' /var/lib/waydroid/waydroid.cfg || echo 'suspend_action = freeze' >> /var/lib/waydroid/waydroid.cfg
-# The container must start at boot, before any user session, and the session is our headless one.
-systemctl enable waydroid-container.service
+log "5/9 car services: units, daemons, helpers, the compositor"
 install -m 0644 "$HERE/etc/systemd/"*.service "$HERE/etc/systemd/"*.timer /etc/systemd/system/
 # an earlier provisioning installed the certificate daemon unit; the timer replaces it
 systemctl disable --now teslalinux-tls.service 2>/dev/null || true
@@ -141,7 +125,8 @@ rm -f /etc/systemd/system/teslalinux-tls.service
 install -d /usr/local/lib/teslalinux
 install -m 0644 "$REPO/services/gps/gps.py" "$REPO/services/audio/audio.py" "$REPO/services/api/api.py" "$REPO/services/api/tlprops.py" /usr/local/lib/teslalinux/
 install -m 0755 "$HERE/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display
-# the ATL launcher (teslalinux-atl.service starts it once /opt/atl holds the baked ATL prefix)
+# the ATL launcher (teslalinux-atl.service starts it once /opt/teslalinux holds the ATL prefix and
+# the app is installed)
 install -m 0755 "$HERE/teslalinux-atl" /usr/local/bin/teslalinux-atl
 install -m 0755 "$REPO/host/teslalinux-restart-app" /usr/local/bin/teslalinux-restart-app
 install -m 0755 "$REPO/host/teslalinux-set-locale" /usr/local/bin/teslalinux-set-locale
@@ -164,8 +149,8 @@ fi
 systemctl daemon-reload
 systemctl enable teslalinux-netconfig.service teslalinux-tls-fetch.timer \
   teslalinux-pipewire.service teslalinux-wireplumber.service teslalinux-pipewire-pulse.service \
-  teslalinux-dbus.service tacomp.service waydroid-session.service teslalinux-api.service teslalinux-gps.service teslalinux-audio.service \
-  teslalinux-uplink.service
+  teslalinux-dbus.service tacomp.service teslalinux-atl.service teslalinux-api.service teslalinux-gps.service \
+  teslalinux-audio.service teslalinux-uplink.service
 
 # ---------------------------------------------------------------------------------------------
 log "6/9 audio: PipeWire for tesla in /run/tesla with a null sink the app plays into"
@@ -265,5 +250,5 @@ else
 fi
 
 systemctl daemon-reload
-log "done. Reboot, then run: sudo $REPO/android/bake.sh"
+log "done. Reboot. Waze starts once ATL is in /opt/teslalinux and the app is installed (tools/apps/install-app.sh)"
 log "measure with: systemd-analyze && systemd-analyze critical-chain hostapd.service"

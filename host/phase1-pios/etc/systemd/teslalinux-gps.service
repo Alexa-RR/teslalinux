@@ -6,7 +6,7 @@ User=tesla
 Environment=TESLALINUX_GPS_WS_PORT=9998
 Environment=TESLALINUX_GPS_WS_BIND=127.0.0.1
 Environment=TESLALINUX_GPS_FEED_PORT=9997
-# ATL reads the feed on loopback; for the Waydroid variant set the waydroid0 bridge address
+# the app (ATL, same host) reads the feed on loopback
 Environment=TESLALINUX_GPS_FEED_BIND=127.0.0.1
 ExecStart=/usr/bin/python3 /usr/local/lib/teslalinux/gps.py
 Restart=always

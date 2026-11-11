@@ -1,6 +1,6 @@
 # Architecture
 
-## 1. What upstream does, and why we are not keeping it
+## 1. What upstream does, and what this fork does instead
 
 Upstream Tesla Android (2026.x) is **AOSP 14 (GloDroid) on bare metal**: Pi firmware → ARM-TF → U-Boot →
 Android boot image → full Android init. Every user-facing service (the hotspot, the web server, the
@@ -8,70 +8,71 @@ display streamer) is an Android init service that starts `on property:sys.boot_c
 cannot even see a web page until Android has fully booted. Upstream publishes no boot number; the
 release notes talk about shaving "~10 s" and first boot taking "5-15 minutes".
 
-This fork puts **Linux underneath**. Everything the car needs to *see something* (Wi-Fi AP, DHCP/DNS,
-TLS web server, launcher page) runs on Linux and is up in seconds. Android runs in a
-[Waydroid](https://github.com/waydroid/waydroid) LXC container that boots *in parallel*, and the page
-switches from the splash to the live stream when the container is ready.
+This fork puts **Linux underneath** and runs no Android system at all. Everything the car needs to
+*see something* (Wi-Fi AP, DHCP/DNS, TLS web server, launcher page) is an ordinary Linux service. The
+app (Waze) runs as one Linux process under the **Android Translation Layer** (ATL): Android framework
+APIs reimplemented on GTK 4, a standalone ART runtime and bionic_translation. There is no Android
+image, no container, no Google Play services. The browser side of upstream's protocol is kept as it
+is, so its frontend runs unchanged (`docs/UPSTREAM-NOTES.md`).
 
-## 2. Decisions
+```
+Tesla browser ──Wi-Fi──> hostapd / dnsmasq / nftables ──> nginx (TLS, car.alexahub.dev)
+   │  /                    launcher page (web/)
+   │  /sockets/display     <── tacomp (9091) <── Wayland ── ATL: Waze (GTK 4, ART)
+   │  /sockets/touchscreen ──> tacomp (9999) ──> wl_touch ──┘
+   │  /sockets/keyboard    <─> tacomp (9996) <─> text-input-v3
+   │  /sockets/gps         ──> gps.py (9998) ──> line feed 9997 ──> ATL LocationManager
+   │  /sockets/audio       <── audio.py (8080) <── PipeWire null sink <── ALSA <── ATL AudioTrack
+   └  /api/*               <─> api.py (8081)
+```
 
-### 2.1 Waydroid (LXC) rather than Lepton
+## 2. The app runtime: ATL
 
-[Lepton](https://gitlab.steamos.cloud/frame-public/lepton) (Valve, open-sourced 2026-09) was examined
-in full (`upstream/lepton`). It is a Waydroid fork re-plumbed for the Steam Frame:
+* **Our fork of ATL**, [Alexa-RR/android_translation_layer](https://github.com/Alexa-RR/android_translation_layer),
+  pinned in `tools/debvm/versions.env` (`ATL_REPO`, `ATL_COMMIT`). It carries the framework classes,
+  natives and fixes Waze needs (many of them AOSP ports); `tools/atl-vm/patches/` is the patch set it
+  was built from.
+* **Built for Debian trixie arm64** by `tools/debvm/build-dist.sh` (bionic_translation, art_standalone,
+  OpenSLES, ATL, and tacomp with its private wlroots 0.20 stack) into `/opt/teslalinux`. The Alpine
+  image uses Alpine's packages, patched and rebuilt (`/opt/atl`).
+* **Started by** `host/phase1-pios/teslalinux-atl` (`teslalinux-atl.service`, OpenRC
+  `host/alpine/init.d/teslalinux-atl`) as the unprivileged `tesla` user on tacomp's Wayland socket,
+  fullscreen at the display size and density of the frontend's display state, with the location
+  source `tesla:127.0.0.1:9997`. GTK renders with `GSK_RENDERER=ngl` on the Pi's V3D (Mesa). The
+  unit restarts the app whenever it exits; `teslalinux-restart-app` (Settings, "Restart Waze")
+  restarts only the app, the stream and the page stay up.
+* **Apps are installed as their original signed split APKs** (`tools/apps/install-app.sh`, into
+  `/var/lib/teslalinux/apps/<package>`), never merged or re-signed: Google's APIs check the APK
+  Signing Block. Signer and versionCode are checked against the installed app; the previous version
+  is kept for rollback.
+* **Ahead-of-time compilation** (`host/teslalinux-dexopt`) is opt-in (`TESLALINUX_DEXOPT=1`): measured
+  on the VM it costs the main thread 20-25% more CPU than ART's JIT, and only the first start after an
+  install is faster (2 s to the map instead of 21 s while ART compiles its cache copy).
 
-* rootless **podman** container, every Android process runs as the same host uid (fake-uid patches);
-* AOSP 14 with Qualcomm sm8150 display HALs (Snapdragon-first; Mesa/minigbm is a secondary path);
-* removes Telephony, Tethering, wificond; FusedLocation is kept only "because required"; hides the
-  flatscreen window; is explicitly "not designed for general Android use";
-* hard-wired to Steam (steam.pipe mount, Steamworks libs, SteamVR paths).
+## 3. Host
 
-Waze needs Google Play Services (or microG), a location provider, a working network stack and a normal
-window. Lepton strips exactly those. So the container is **Waydroid**, which:
+### 3.1 Targets
 
-* runs on aarch64 today, has LineageOS 20 (Android 13) images with GApps on `ota.waydro.id`;
-* needs only `binder`/`binderfs` and PSI, which the stock Raspberry Pi kernel ships (see 2.3);
-* talks to the host through a plain Wayland socket (hwcomposer is a Wayland client) and a PulseAudio
-  socket. That is the hook we use for display, touch and audio.
+* **Primary: Raspberry Pi OS Lite 64-bit (Debian 13 trixie)**, systemd, NetworkManager. Installed by
+  `tools/pios/install.sh` from a release (section 7). `host/phase1-pios/provision.sh` is the older
+  from-source provisioning of the same host setup.
+* **Secondary: the Alpine image** (`tools/image/build-alpine-pi.sh`, OpenRC, `host/alpine/`,
+  `docs/ALPINE-IMAGE.md`).
 
-What we **borrow from Lepton** (all host-side or property-level, no AOSP rebuild needed for Phase 1):
+Both render their host configuration (hostapd, dnsmasq, nftables, nginx, the display state) from the
+same templates (`host/phase1-pios/etc/`) and the same settings file (`/etc/teslalinux/env`) with
+`host/teslalinux-render`, so a fix lands in both.
 
-| Lepton trick | Our equivalent |
-|---|---|
-| `sysbake`: boot once, snapshot `/data`, overlay it on every launch | Waydroid keeps `/data` persistent; `android/bake.sh` does the one-time first boot + `pm disable` pass so the SD card ships pre-baked |
-| `config.disable_cameraservice/otadexopt/systemtextclassifier/networktime=true` | same props in `android/waydroid_base.prop` |
-| `RemovePackages` override list (~60 packages) | `android/disable-packages.txt`, applied with `pm disable-user` during bake |
-| no `bootanimation`, lmkd/dalvik tuning, `debug.sf.*` latency props | same props |
-| frameworks/base patch "disable many more services" | Phase 3 (custom image) only |
+### 3.2 Kernel
 
-### 2.2 Host OS: Pi OS Lite first, Buildroot second
+The stock Raspberry Pi kernel (`bcm2711_defconfig`, rpi-6.12.y) has everything the stack uses:
+`DRM_VC4`/`DRM_V3D`, the V4L2 M2M codec (`/dev/video11` H.264 encoder, `/dev/video31` JPEG encoder),
+`QMI_WWAN`, `CDC_MBIM`, `CDC_NCM`, `CDC_ETHER`, `RNDIS_HOST`, `USB_SERIAL_OPTION`. No custom kernel
+is needed. Upstream kernel patches we do **not** need: the `virtual_touchscreen` char driver (touch
+goes in via Wayland, see 4.3), and the `cdc_*` `FLAG_ETHER` renaming patches (NetworkManager doesn't
+care). Firmware and command line: `host/rpi4/`.
 
-Phase 1 uses **Raspberry Pi OS Lite arm64 (trixie)** because Waydroid, hostapd, nginx, ModemManager and
-Mesa are all packaged and the Pi kernel is maintained. `host/phase1-pios/provision.sh` turns a fresh
-image into the full stack and strips systemd down to the critical path.
-
-Phase 2 replaces it with a **Buildroot** image (`host/buildroot/`, external tree, to be added):
-no initramfs, kernel with built-in drivers, LZ4 kernel, squashfs root on an f2fs data partition,
-busybox init or a 30-line static init that starts the critical path in parallel, then `lxc-start`.
-Waydroid's Python tool is not needed at runtime: its job (mount images, write LXC config, inject
-props, create `waydroid0` bridge) can be pre-generated at image build time.
-
-### 2.3 Kernel
-
-Stock `bcm2711_defconfig` (rpi-6.12.y, verified from `raspberrypi/linux`) already has:
-`CONFIG_ANDROID_BINDER_IPC=y`, `CONFIG_ANDROID_BINDERFS=y`, `CONFIG_PSI=y` (default disabled, so we pass
-`psi=1`), cgroups/namespaces, `VETH`/`BRIDGE`/`TUN` as modules, `DRM_VC4`/`DRM_V3D` as modules, the V4L2
-M2M codec (`/dev/video11` H.264 encoder, `/dev/video31` JPEG encoder), `QMI_WWAN`, `CDC_MBIM`, `CDC_NCM`,
-`CDC_ETHER`, `RNDIS_HOST`, `USB_SERIAL_OPTION`, overlayfs, squashfs, erofs, f2fs.
-
-There is **no ashmem**; Waydroid detects that and sets `sys.use_memfd=true`. No custom kernel is
-needed for Phase 1. Phase 2 rebuilds the same tree with the modules we use built in (saves module
-loading and udev), LZ4 compression, and without the USB/PCIe drivers we don't own.
-
-Upstream kernel patches we do **not** need: the `virtual_touchscreen` char driver (touch goes in via
-Wayland, see 3.3), and the `cdc_*` `FLAG_ETHER` renaming patches (NetworkManager doesn't care).
-
-### 2.4 Networking: identical to upstream on purpose
+### 3.3 Networking: identical to upstream on purpose
 
 The Tesla browser constraints, learned from upstream's code and release notes:
 
@@ -83,132 +84,145 @@ The Tesla browser constraints, learned from upstream's code and release notes:
 * "Offline mode" answers Tesla's connectivity probes (`connman.vn.tesla.services`) with
   `X-ConnMan-Status: online` so the car keeps the Wi-Fi even without LTE.
 
-We reproduce this 1:1 on Linux with hostapd + dnsmasq (`--address` overrides) + nftables DNAT + nginx.
-You must bring **your own hostname and certificate** (the upstream certificate is a private Jenkins
-secret). `host/phase1-pios/env` holds the hostname, the public IP to hijack and the cert paths.
+We reproduce this 1:1 with hostapd + dnsmasq (`address=` overrides) + nftables DNAT/SNAT + nginx.
+Our hostname is `car.alexahub.dev`, resolved on the hotspot to `192.0.2.1` (TEST-NET-1, never
+routed) and DNATed to the Pi. `host/phase1-pios/env` holds the hostname, the hijack IP and the
+certificate settings. The parity table, item by item: `docs/CAR-STACK-READINESS.md`, section 2.
 
-### 2.5 LTE modem
+### 3.4 Uplinks: LTE and others
 
 Upstream has no RIL; modems are USB-Ethernet. Same here:
 
 * **Preferred: HiLink / ECM-mode sticks** (Huawei E3372h HiLink, ZTE MF833, Alcatel IK41 in `AT+USBMODE=1`).
-  They enumerate as `cdc_ether`/`cdc_ncm`, DHCP gives an address, no ModemManager at all. Zero boot cost.
+  They enumerate as `cdc_ether`/`cdc_ncm` and DHCP gives an address.
 * **Supported: QMI/MBIM modems** (Quectel EC25/EM05, Sierra, Telit) via ModemManager + NetworkManager.
   ModemManager is started *after* the hotspot and web server, off the critical path.
 * `usb_modeswitch` rules from upstream are carried over for sticks that enumerate as mass storage.
+* `host/teslalinux-uplink` checks every uplink (LTE, a second Wi-Fi card, Ethernet, a phone on USB)
+  through that interface alone and routes through the best one that reaches the internet; the car's
+  NAT follows the route.
 
-### 2.6 GPS
+## 4. Data path
 
-Browser `navigator.geolocation` → `/sockets/gps` JSON → host daemon → Android.
+### 4.1 Display: `tacomp` (services/display)
 
-* ATL path (current): the Tesla browser geolocation reaches `services/gps/gps.py` (WebSocket 9998) and is re-emitted as a line feed on 9997; the ATL `android.location.LocationManager` reads it directly (`ATL_LOCATION_SOURCE=tesla:9997`), so no mock-location app is needed. The Waydroid-era plan below is kept for reference.
-* Phase 1: feed Waydroid through **mock location** (a tiny bundled app with `ACCESS_MOCK_LOCATION`,
-  `appops set ... android:mock_location allow`, listening on a TCP port the container reaches via
-  `waydroid0`). Works with Waze.
-* Phase 3: port upstream's property-driven `android.hardware.gnss@2.0-service.tesla-android` into the
-  custom image. Identical browser JSON contract either way.
-
-## 3. Data path
-
-### 3.1 Display: `tacomp` (services/display)
-
-Waydroid's hwcomposer is a Wayland client that needs only: `wl_compositor`, `wl_shm`, `wl_seat`,
-`wl_output`, `xdg_wm_base`, `wl_subcompositor`, `wp_viewporter`, `wp_presentation`,
-`wl_data_device_manager`, optionally `zwp_linux_dmabuf_v1` (verified in
-`upstream/android_hardware_waydroid/hwcomposer`). It submits the whole screen as one surface in
-non-multi-window mode.
-
-`tacomp` is a small **headless wlroots compositor** that *is* that Wayland server. Because we own the
-compositor, every Android frame lands in our hands with zero copies:
+`tacomp` is a small **headless wlroots compositor**, and the app's only Wayland server. ATL's GTK
+window is its fullscreen `xdg_toplevel`. On its own frame clock (the output refresh, 60 Hz by
+default) it composites the scene into
+the output buffer and hands it to an encoder thread:
 
 ```
-Android SurfaceFlinger -> hwcomposer.waydroid -> wl_surface.commit (dmabuf from Mesa v3d)
-  -> tacomp: on commit, take the dmabuf fd
-  -> V4L2 M2M /dev/video11 (H.264 CBP) or /dev/video31 (JPEG)
+ATL (GTK 4, GSK GL on V3D) -> wl_surface.commit
+  -> tacomp: scene -> output buffer (GLES2 on the Pi)
+  -> V4L2 M2M /dev/video11 (H.264) or /dev/video31 (JPEG), dmabuf in; CPU JPEG / x264 where missing
   -> one binary WebSocket message per frame on :9091 (/sockets/display)
 ```
 
-* The V4L2 M2M encoder code is upstream's `encode/m2m.c` (from PiKVM ustreamer) and is vendored as-is:
-  it already takes DMABUF input, forces IDR on client connect, repeats SPS/PPS, 2-18 Mbit/s.
-* Frame pacing is event-driven (nothing sent while the screen is static), newest-frame-wins.
-* Resolution is fixed at image build time (default **1088x832@30, density 200**, upstream's default
-  for the Model 3/Y screen) and set in Android via `persist.waydroid.width/height`. Resizing from the
-  browser (`POST /api/displayState`) restarts tacomp with a new output size; same contract as upstream.
-* No screencopy, no PipeWire video, no second compositor.
+* The V4L2 M2M encoder code is upstream's `encode/m2m.c` (from PiKVM ustreamer), vendored as-is:
+  DMABUF input, forced IDR on client connect, repeated SPS/PPS.
+* Frames without damage are not encoded; newest-frame-wins when the encoder is busy.
+* Size, encoder and quality come from the frontend's display state (`POST /api/displayState` →
+  `teslalinux-apply-display` → `/etc/teslalinux/display.env`). tacomp applies a new size, encoder or
+  quality in place (SIGHUP); the app gets the new window size as a configuration change, as upstream
+  resizes its virtual display under a running app. Only a new density restarts the app.
+* Details: `services/display/README.md`.
 
-### 3.2 Codec choice
+### 4.2 Codec choice
 
 Upstream's default renderer is **MJPEG into an `<img>`** (renderer 0). H.264 via WebCodecs (renderer 1)
 is lighter on Wi-Fi but depends on the MCU generation. tacomp supports both through the same `m2m.c`;
-the frontend chooses. Keep MJPEG as the default for the first in-car tests.
+the frontend chooses and the API maps the renderer to tacomp's encoder. MJPEG (`m2m-jpeg`) is the
+default.
 
-### 3.3 Touch
+### 4.3 Touch and keyboard
 
 Browser Pointer Events → `/sockets/touchscreen` text protocol (upstream format, unchanged) →
-`tacomp` → `wl_touch` down/motion/up events on the Android surface. Waydroid's hwcomposer already
-turns `wl_touch` into `ABS_MT_*` evdev events for Android's InputFlinger (`wayland-hwc.cpp`,
-`touch_handle_*`). No uinput, no kernel driver.
+`tacomp` → `wl_touch` down/motion/up on the app's surface → GTK → ATL's `MotionEvent`s. No uinput,
+no kernel driver. The device keyboard (`/sockets/keyboard`, ours) bridges Wayland text-input-v3 to
+the car page; Settings > Keyboard switches between it and the app's on-screen keyboard.
 
-### 3.4 Audio
+### 4.4 GPS
 
-Waydroid's audio HAL is a PulseAudio client. The host runs **PipeWire + pipewire-pulse** with a null
-sink `android`; `services/audio` reads `android.monitor` and encodes **FLAC in fragmented MP4** (upstream
-contract: `movflags empty_moov+separate_moof+default_base_moof+frag_discont`, ~40 ms fragments, init
-segment re-sent on connect) to `/sockets/audio` on :8080. Phase 1 implements this as an `ffmpeg`
-wrapper; later as a libavformat daemon.
+Browser `navigator.geolocation` → `/sockets/gps` JSON (upstream format) → `services/gps/gps.py`
+(WebSocket 9998) → one line per fix on `127.0.0.1:9997` → ATL's `android.location.LocationManager`
+(`ATL_LOCATION_SOURCE=tesla:127.0.0.1:9997`), which hands the fixes to the app as GPS locations.
 
-### 3.5 Config API
+### 4.5 Audio
 
-`services/api` re-implements upstream's `/api/*` (health, displayState, gpsState, browserAudioState,
-softAp*, offlineMode*) on :8081 so `web/` (the forked frontend) runs unchanged.
+ATL's `AudioTrack` plays through ALSA's default device, which `/etc/asound.conf` points at PipeWire.
+PipeWire, WirePlumber and pipewire-pulse run as system units for the `tesla` user with a single null
+sink `android` (no hardware sinks). `services/audio` reads `android.monitor` and encodes **FLAC in
+fragmented MP4** (upstream contract: `movflags empty_moov+separate_moof+default_base_moof+frag_discont`,
+~40 ms fragments, init segment re-sent on connect) to `/sockets/audio` on :8080, running ffmpeg only
+while someone listens.
 
-## 4. Boot-time budget (cold boot, Pi 4B)
+### 4.6 Config API
 
-Honest numbers. The 5-second target is reachable for "car sees a page", not for "Waze on screen".
+`services/api` re-implements upstream's `/api/*` (configuration, health, displayState, deviceInfo,
+softAp*, offlineMode*, …) on :8081 so `web/` runs unchanged, plus our own routes (certificate status,
+app state and restart, app updates, locale, keyboard, network, status, system update). Privileged changes go through one sudoers rule
+per helper (`teslalinux-apply-display`, `teslalinux-restart-app`, …).
 
-| Stage | Phase 1 (Pi OS) | Phase 2 (Buildroot) | Floor / why |
-|---|---|---|---|
-| EEPROM + `start4.elf` firmware | 1.6 s | 1.5 s | Closed firmware, not tunable. `boot_delay=0`, `disable_splash=1`. `start4cd.elf` is smaller but drops the VPU codec we need. |
-| Kernel to rootfs mounted | 2.5 s | 1.0 s | Phase 2: no initramfs, LZ4, built-in drivers, `quiet`, no USB enumeration wait. |
-| Userspace to AP beaconing | 4.0 s | 1.5 s | `brcmfmac` firmware load (~0.6 s) is the floor; hostapd ~0.3 s. Phase 2: static IP, no udev, no NM for `wlan0`. |
-| nginx + launcher page | +0.2 s | +0.1 s | |
-| **Car can load the page** | **~8 s** | **~4-5 s** | Plus the car's own Wi-Fi association time (2-6 s, outside our control). |
-| Waydroid container to `sys.boot_completed` | 20-30 s | 15-20 s | zygote preload + system_server on 4x A72 at 1.5-1.8 GHz. Pre-baked `/data`, package trim, no bootanimation. |
-| Waze cold start | +5-8 s | +4-6 s | |
-| **Waze on screen** | **~35 s** | **~22-25 s** | Phase 3 custom image (Lepton-style service removal): **~15 s**. |
+## 5. Certificate
 
-The big lever is therefore **not booting**: section 5.
+Every car serves `car.alexahub.dev` with one shared, publicly trusted certificate (two slots, current
+and standby), renewed by `.github/workflows/tls-certs.yml` and fetched by each Pi with
+`teslalinux-tls` (a DNS version pointer first, downloads only on change, every pair checked before
+nginx serves it; a release carries the pairs of its build day, so a new install works offline).
+Design, threat model and setup: `docs/CAR-STACK-READINESS.md`, section 4.
 
-## 5. Warm standby (the real 5-second experience)
+## 6. App updates
 
-The Pi 4 has no suspend-to-RAM and the Android container cannot be CRIU-snapshotted (binder fds). So:
+The Pi keeps Waze current by itself (`tools/appupdate/`): a daily check (APKPure's public API by
+default, manual uploads from the car page always possible), downloads only on unmetered uplinks, the
+same signature verification as `install-app.sh`, installation only while the car is not connected or
+at boot, a health check of the new version and automatic rollback. `docs/APP-UPDATES.md`.
 
-1. Power the Pi from an **always-on 12 V** (fuse tap) through a buck converter, or from a UPS HAT with
-   a few hours of hold, instead of the car's USB port.
-2. Sense the car's state on a GPIO (the center-console USB port's 5 V goes away when the car sleeps).
-3. On sleep: `lxc-freeze` the container (Waydroid `suspend_action=freeze`), stop tacomp's encoder,
-   `ip link set wlan0 down`, cpufreq to powersave. Idle draw is about 1.5 W.
-4. On wake: `wlan0 up` + hostapd (~1 s), `lxc-unfreeze`, encoder on. The car's browser reconnects its
-   WebSocket (`ReconnectingWebSocket`, 150 ms-1 s) and the picture is back in **~2-3 s**.
-5. Safety: hard power-off after N hours asleep or when the 12 V rail drops below 12.2 V, so a parked car
-   never drains its LV battery.
+## 7. Install and releases
 
-Phase 1 ships the freeze/unfreeze hooks as a systemd unit driven by a GPIO; the hardware side is a
-3-wire harness (12 V, GND, USB-5V sense).
+Pushing a `v*` tag runs `.github/workflows/release.yml`: on an arm64 runner inside `debian:trixie`,
+`tools/debvm/build-dist.sh` builds the ATL stack, tacomp and tlplay, and `tools/debvm/pack-dist.sh`
+packs them with the configs, scripts, frontend and the current certificate pairs into
+`teslalinux-dist-<ver>-arm64.tar.zst` (with `MANIFEST`, `SHA256SUMS` and `install.sh`). The Pi never
+compiles: `tools/pios/install.sh` (the one-liner in `README.md`) downloads and verifies the dist,
+installs the runtime packages, units and configs, optionally fetches Waze, and keeps backups for
+`teslalinux rollback` and `teslalinux uninstall`. It is idempotent: each step is redone only when its
+inputs changed. The same Debian build runs locally in the build VM (`tools/debvm/README.md`).
 
-## 6. What we keep from upstream, verbatim
+## 8. Boot and start time
 
-* `frontend/` → `web/` (renderers, touch, audio, GPS JS; only the hostname changes).
+What the car needs first (hotspot, DNS, nginx, the launcher page) does not depend on the app:
+
+* hostapd, dnsmasq and nginx have no dependency on the app, tacomp, ModemManager or the network
+  being online; `NetworkManager-wait-online`, udev settle and the other units the car does not need
+  are disabled (`--no-trim` keeps them), journald is volatile, and the CPU runs the performance
+  governor.
+* ModemManager is ordered after hostapd and nginx; the certificate fetch is never ordered before
+  nginx (the installed pair is served at once).
+* tacomp starts without waiting for the network; the page shows the stream as soon as the app draws
+  its first frame. An app restart (crash, density change, update) leaves tacomp and the page
+  connected; the next frames come from the new process.
+* ART builds its boot image on the app's first start; `install.sh` builds it at install time unless
+  `--no-prewarm` is given, so the first start in the car does not pay for it.
+
+No boot time has been measured on Pi hardware yet: `systemd-analyze` and
+`systemd-analyze critical-chain hostapd.service` on the Pi, and `tools/debian/app-starttime.sh`
+(seconds from an app restart to the first frame and to Waze's "map ready") are the measurements to
+take there. Times measured in the VMs are software rendering (llvmpipe), not the Pi.
+
+## 9. What we keep from upstream, verbatim
+
+* `frontend/` → `web/` (renderers, touch, audio, GPS JS; endpoints derived from the page's host,
+  changes listed in `web/README.teslalinux.md`).
 * `encode/m2m.c` + `encode/m2m.h` from `android-external-tesla-android-virtual-display` (V4L2 M2M).
 * `services/usb_modeswitch/*.conf` and the modem quirk list from `usb-networking-initialiser`.
 * The lighttpd proxy map, headers and DNS/DNAT scheme, re-expressed for nginx + dnsmasq + nftables.
-* Display defaults (1088x832@30, density 200), the touch text protocol, the GPS JSON, the audio fMP4
+* Display defaults (1088x832, density 200), the touch text protocol, the GPS JSON, the audio fMP4
   framing, so the browser side needs no re-testing in the car.
 
-## 7. Open items
+## 10. Open items
 
-* Pick a hostname + certificate strategy (Let's Encrypt DNS-01 over the LTE link, renew weekly).
-* Confirm Mesa v3d works inside the aarch64 Waydroid image on trixie (community reports yes; needs a
-  real test on the Pi with `MESA_GL_VERSION_OVERRIDE` fallback ready).
+* First boot on real Pi hardware: GTK's GL renderer on V3D, the V4L2 M2M encoders, LTE, the RTC,
+  the GPS/audio/API daemons (`docs/CAR-STACK-READINESS.md`, sections 7 and 8).
 * Verify the Tesla browser's current WebCodecs H.264 state on your MCU; otherwise MJPEG.
-* GApps + Play certification: register the GSF ID once (upstream uses `ih8sn` prop spoofing).
+* ATL: the remaining framework gaps (`tools/atl-vm/patches/atl-waze/TODO-real.md`).

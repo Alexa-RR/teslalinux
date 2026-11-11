@@ -248,7 +248,7 @@ def main():
             wpa.ensure(cfg, wifi_if)
         dhcp, ours = routes()
         ap = ap_iface()
-        cands = {i: v for i, v in dhcp.items() if i not in (ap, "lo") and not i.startswith(("waydroid", "docker", "veth"))}
+        cands = {i: v for i, v in dhcp.items() if i not in (ap, "lo") and not i.startswith(("docker", "veth"))}
         # the backup Wi-Fi switched off: never route through it
         if wifi_if and not cfg.get("enabled", True):
             cands.pop(wifi_if, None)

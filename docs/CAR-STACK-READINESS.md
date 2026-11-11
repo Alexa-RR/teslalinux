@@ -90,7 +90,7 @@ manager `upstream/android-external-tesla-android-configuration-manager/tesla-and
 | connman probes got 204 with only one header | 200 + both headers + upstream's `online/` files | 49cadd0 |
 | hostapd: fixed `HT40+` and centre index 42, so channels 36/149/157 or 2.4 GHz from the frontend would break the AP | computed per band/channel/width | 49cadd0 |
 | ATL's audio went to the Pi's own ALSA device; WirePlumber picked hardware sinks over the null sink | `pipewire-alsa` + `/etc/asound.conf` default -> PipeWire, hardware monitors off, sink priority | 49cadd0, bbf5288 |
-| Pi OS units used `/run/user/%U` (in system units `%U` is root's uid): PipeWire paths of ATL, audio and Waydroid all pointed at `/run/user/0` | PipeWire, WirePlumber, pipewire-pulse as system units for tesla in `/run/tesla` | bbf5288 |
+| Pi OS units used `/run/user/%U` (in system units `%U` is root's uid): PipeWire paths of ATL and audio both pointed at `/run/user/0` | PipeWire, WirePlumber, pipewire-pulse as system units for tesla in `/run/tesla` | bbf5288 |
 | Pi OS trim disabled `systemd-timesyncd` with no replacement: no NTP at all without an RTC | timesyncd kept | bbf5288 |
 | Pi OS installed `nginx-light` (gone in trixie) and `libwlroots-0.18` (tacomp needs 0.20) | `nginx`; the wlroots question is a blocker below | bbf5288 |
 | Alpine: `mdev` and `udev` both enabled; no `render` group (tacomp's GLES2 renderer cannot open the render node); `dhcpcd` never enabled (no LTE uplink) | eudev only (+ udev-settle so wlan0 exists before hostapd), render group, dhcpcd on uplinks with `denyinterfaces wlan0` | 49cadd0 |
