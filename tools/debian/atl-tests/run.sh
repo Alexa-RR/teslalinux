@@ -5,7 +5,13 @@
 #
 # It checks ATL's service lifecycle (ATLActiveServices), Binder's calling identity between the app
 # and the platform, the framework package ("android": system uid, platform signature) and virtual
-# displays. Prints PASS/FAIL per check and "RESULT passed/total"; exits non-zero on a failure.
+# displays, SurfaceControl layers, SurfacePackage and Surface through Parcels, and system apps
+# (per-package uids, install-time permission grants, calling identity between the app, the platform
+# and a system app). The system-app checks need the car Templates Host installed as a privileged
+# system app: ATL's system directory (next to api-impl.jar, or $ATL_SYSTEM_DIR) holding
+# priv-app/CarTemplatesHost/CarTemplatesHost.apk (platform-signed, tools/carhost) and
+# etc/permissions/privapp-permissions-car-templates-host.xml. Prints PASS/FAIL per check and
+# "RESULT passed/total"; exits non-zero on a failure.
 #
 #   ATL_BUILDDIR  the meson build directory whose src/api-impl/hax.jar (api-impl's classes) the test
 #                 compiles against (default ~/merge-test/builddir)

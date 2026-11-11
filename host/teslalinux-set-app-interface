@@ -1,0 +1,26 @@
+#!/bin/sh
+# teslalinux: choose the app's interface, from the settings page. Called by services/api/api.py
+# (POST /api/appInterface) through one sudoers rule, like teslalinux-set-keyboard.
+#   teslalinux-set-app-interface phone   the app's own phone screens, streamed as the display (the default)
+#   teslalinux-set-app-interface car     the app's car interface (Car App Library): ATL's car-app host
+#                                        gives the app the display as its map surface and the car page
+#                                        draws the app's templates over it (/sockets/carapp)
+# Writes /etc/teslalinux/interface.env (TESLALINUX_APP_INTERFACE, read by teslalinux-atl.service and
+# the launcher) and restarts only the app, only when the choice changed: the interface is chosen
+# when the app starts.
+set -eu
+[ $# -eq 1 ] || { echo "usage: teslalinux-set-app-interface phone|car" >&2; exit 2; }
+case "$1" in
+	phone|car) MODE=$1 ;;
+	*) echo "teslalinux-set-app-interface: unknown interface '$1' (phone or car)" >&2; exit 2 ;;
+esac
+F=/etc/teslalinux/interface.env
+NEW=$(printf '# teslalinux app interface (teslalinux-set-app-interface, from the settings page)\nTESLALINUX_APP_INTERFACE=%s\n' "$MODE")
+[ -r "$F" ] && [ "$(cat "$F")" = "$NEW" ] && exit 0
+printf '%s\n' "$NEW" >"$F.tmp" && chmod 0644 "$F.tmp" && mv -f "$F.tmp" "$F"
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+	systemctl is-active -q teslalinux-atl.service && systemctl restart teslalinux-atl.service
+elif command -v rc-service >/dev/null 2>&1; then
+	rc-service teslalinux-atl status >/dev/null 2>&1 && rc-service teslalinux-atl restart
+fi
+exit 0

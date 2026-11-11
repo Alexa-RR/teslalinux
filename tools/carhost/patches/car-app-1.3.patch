@@ -1,0 +1,71 @@
+--- a/Host/app/apphost/src/main/java/com/android/car/libraries/apphost/template/AppHost.java
++++ b/Host/app/apphost/src/main/java/com/android/car/libraries/apphost/template/AppHost.java
+@@ -631,5 +631,39 @@
+                               mTemplateContext.getAppHostService(LocationMediator.class))
+                           .setAppLocation(location)));
+     }
++
++    // Car API level 5 (androidx car-app 1.3). This host has no alert UI: an alert is cancelled
++    // at once with AlertCallback.REASON_NOT_SUPPORTED, as the library defines for such a host.
++    @Override
++    public void showAlert(Bundleable alertBundleable) {
++      final androidx.car.app.model.Alert alert;
++      try {
++        alert = (androidx.car.app.model.Alert) alertBundleable.get();
++      } catch (BundlerException e) {
++        L.e(LogTags.TEMPLATE, e, "Could not read the alert");
++        return;
++      }
++      L.i(LogTags.TEMPLATE, "Alert %d: not supported by this host", alert.getId());
++      alert
++          .getCallbackDelegate()
++          .sendCancel(
++              androidx.car.app.model.AlertCallback.REASON_NOT_SUPPORTED,
++              new androidx.car.app.OnDoneCallback() {});
++    }
++
++    // No alert is ever shown (see showAlert), so there is none to dismiss.
++    @Override
++    public void dismissAlert(int alertId) {
++      L.d(LogTags.TEMPLATE, "dismissAlert %d: no alert is shown", alertId);
++    }
++
++    // This host offers no microphone to apps: no response (the library reports that the
++    // microphone could not be opened).
++    @Override
++    @androidx.annotation.Nullable
++    public Bundleable openMicrophone(Bundleable openMicrophoneRequest) {
++      L.w(LogTags.TEMPLATE, "openMicrophone: this host has no microphone for apps");
++      return null;
++    }
+   }
+ }
+--- a/Host/app/apphost/src/main/java/com/android/car/libraries/apphost/template/ConstraintHost.java
++++ b/Host/app/apphost/src/main/java/com/android/car/libraries/apphost/template/ConstraintHost.java
+@@ -67,5 +67,12 @@
+                       ContentLimitQuery.getContentLimitQuery(contentType, contentValue)));
+       return contentValue;
+     }
++
++    // Car API level 6 (androidx car-app 1.3): this host refreshes templates only under its own
++    // template step rules, never because the app asks.
++    @Override
++    public boolean isAppDrivenRefreshEnabled() {
++      return false;
++    }
+   }
+ }
+--- a/Host/app/renderer/src/main/java/com/android/car/libraries/templates/host/internal/InsetsListener.kt
++++ b/Host/app/renderer/src/main/java/com/android/car/libraries/templates/host/internal/InsetsListener.kt
+@@ -39,4 +39,11 @@
+       }
+     }
+   }
++
++  // androidx car-app 1.3: the window insets with the display cutout's safe insets. This host
++  // lays templates out within the window insets (as onInsetsChanged) and draws nothing into a
++  // cutout area of its own.
++  override fun onWindowInsetsChanged(insets: Insets, safeInsets: Insets) {
++    onInsetsChanged(insets)
++  }
+ }

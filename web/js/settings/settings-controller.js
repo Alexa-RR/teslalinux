@@ -30,6 +30,8 @@
         { id: "locale", title: "Language & region", icon: "language" },
         // teslalinux: the app's built-in keyboard or this device's own (GET/POST /api/keyboard)
         { id: "keyboard", title: "Keyboard", icon: "keyboard" },
+        // teslalinux: the app's phone screens or its car interface (GET/POST /api/appInterface)
+        { id: "interface", title: "Waze interface", icon: "directions_car" },
         // teslalinux: automatic Waze updates from Google Play (GET/POST /api/appUpdate*)
         { id: "updates", title: "App updates", icon: "system_update" },
         // teslalinux: the operating system's own updates (GET/POST /api/systemUpdate)
@@ -96,6 +98,10 @@
       }
       if (this.activeSectionId === "keyboard") {
         await this._renderKeyboardSection(token);
+        return;
+      }
+      if (this.activeSectionId === "interface") {
+        await this._renderInterfaceSection(token);
         return;
       }
       if (this.activeSectionId === "updates") {
@@ -222,6 +228,58 @@
       this.content.appendChild(notice);
       this._appendDescription(
         "When a text field in the app is tapped, this page opens your device's keyboard and sends what you type to the app. Some browsers (Safari on iPhone) open the keyboard only from a tap: tap the keyboard button that appears in the corner.",
+      );
+    }
+
+    // teslalinux: Waze's phone screens, or its car interface (the screens Waze shows on car
+    // displays, drawn by js/carapp from /sockets/carapp over Waze's map). The app restarts once.
+    async _renderInterfaceSection(token) {
+      this._appendLoadingState();
+      let state;
+      try {
+        state = await this.apiClient.fetchAppInterface();
+      } catch (_error) {
+        this._renderErrorState("Service error");
+        return;
+      }
+      if (token !== this._renderToken || this.activeSectionId !== "interface") {
+        return;
+      }
+      this.content.innerHTML = "";
+      const notice = utils.createElement("div", "settings-description", "");
+      notice.hidden = true;
+      const options = [
+        { value: "phone", label: "Phone" },
+        { value: "car", label: "Car" },
+      ];
+      this._appendTile({
+        icon: "directions_car",
+        title: "Waze interface",
+        subtitle: "Phone: Waze as on a phone. Car: Waze's screens for car displays, with large buttons",
+        trailing: this._createSelect(options, state.interface, async (value) => {
+          try {
+            await this.apiClient.setAppInterface(value);
+            notice.textContent = "Saved. Waze restarts with the " + (value === "car" ? "car" : "phone") + " interface.";
+            notice.hidden = false;
+            // this page follows as soon as the device reports the new interface
+            for (let i = 0; i < 20; i += 1) {
+              await new Promise((r) => global.setTimeout(r, 500));
+              try {
+                if ((await this.apiClient.fetchAppInterface()).interface === value) break;
+              } catch (_e) {
+                // the API restarting with the app: try again
+              }
+            }
+            global.location.reload();
+          } catch (_error) {
+            this._renderErrorState("Service error");
+          }
+        }),
+        dense: false,
+      });
+      this.content.appendChild(notice);
+      this._appendDescription(
+        "The car interface is the one Waze shows on car screens: the map fills the display, with turn cards, a search screen and large buttons on top. Your saved places and settings are the same in both.",
       );
     }
 

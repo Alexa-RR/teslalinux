@@ -1,0 +1,7 @@
+# sha256 pins for tools/carhost/build-templates-host.sh: "<sha256> <name>".
+# An entry without a hash stops the build and prints the hash of the download; check the
+# download, then record it here. Never change a recorded hash without knowing why it changed.
+b586e04868a22fd817c8971330fec37e298f3242eb85c374181b12d637f80302 gradle-7.3.3-bin.zip
+30e4d17ba092951e74facaad9fe5eda1d62122357e524718963c0ccadd5a4cbf android.car-system-stubs-31.jar
+ commandlinetools-mac-11076708
+ commandlinetools-linux-11076708

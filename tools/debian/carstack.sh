@@ -130,7 +130,7 @@ guest_install() {
   log "1/7 packages"
   export DEBIAN_FRONTEND=noninteractive
   local pkgs="nginx python3 python3-websockets openssl curl bind9-dnsutils rsync ffmpeg ca-certificates dbus
-    pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd"
+    pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd webp-pixbuf-loader"
   [[ $radio == 1 ]] && pkgs="$pkgs hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data"
   local missing="" p
   for p in $pkgs; do dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || missing="$missing $p"; done
@@ -166,11 +166,12 @@ guest_install() {
   install -m 0644 "$REPO/tools/atl-vm/mk-android-tzdata.py" $LIB/mk-android-tzdata.py
   install -m 0755 "$REPO/host/teslalinux-set-locale" /usr/local/bin/teslalinux-set-locale
   install -m 0755 "$REPO/host/teslalinux-set-keyboard" /usr/local/bin/teslalinux-set-keyboard
+  install -m 0755 "$REPO/host/teslalinux-set-app-interface" /usr/local/bin/teslalinux-set-app-interface
   install -m 0755 "$REPO/host/teslalinux-network" /usr/local/bin/teslalinux-network
   install -m 0755 "$REPO/host/teslalinux-system-update" /usr/local/bin/teslalinux-system-update
   install -m 0755 "$REPO/host/teslalinux-uplink" /usr/local/bin/teslalinux-uplink
   install -m 0755 "$REPO/host/teslalinux-dexopt" /usr/local/bin/teslalinux-dexopt
-  echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update' > /etc/sudoers.d/teslalinux
+  echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update' > /etc/sudoers.d/teslalinux
   chmod 0440 /etc/sudoers.d/teslalinux
   # the binaries built by build-dist.sh, where the units look for them
   [[ -x $PREFIX/tacomp/bin/tacomp ]] && ln -sfn $PREFIX/tacomp/bin/tacomp /usr/local/bin/tacomp

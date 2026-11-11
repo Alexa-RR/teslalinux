@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Car app renderer test</title>
+<!-- teslalinux: renders test-templates.json with carapp-renderer.js over a stand-in map, at the
+     car display's size (1472x768) scaled to the window. Clicks are listed below the display.
+     Open through a web server (fetch of the JSON files): python3 -m http.server in web/. -->
+<style>
+  @font-face { font-family: "Roboto"; src: url("../../fonts/Roboto-Regular.ttf"); }
+  @font-face { font-family: "Material Icons"; src: url("../../fonts/MaterialIcons-Regular.otf"); }
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #111; color: #ddd; font: 14px "Roboto", sans-serif; }
+  #bar { display: flex; gap: 8px; padding: 8px 16px; flex-wrap: wrap; }
+  #bar button { font: inherit; padding: 4px 10px; }
+  #stage { position: relative; margin: 0 16px; }
+  #display {
+    position: absolute; left: 0; top: 0; width: 1472px; height: 768px; transform-origin: 0 0;
+    /* stand-in for the app's map stream */
+    background: repeating-linear-gradient(35deg, #2b3440 0 60px, #26303a 60px 120px);
+  }
+  #log { margin: 8px 16px; font-family: monospace; white-space: pre-wrap; max-height: 20vh; overflow: auto; }
+</style>
+<link rel="stylesheet" href="carapp.css">
+</head>
+<body>
+<div id="bar"></div>
+<div id="stage"><div id="display"></div></div>
+<div id="log"></div>
+<script src="carapp-renderer.js"></script>
+<script>
+  "use strict";
+  // icons 0-6 of the test templates (0: the app icon): simple shapes drawn here (the real ones
+  // are the app's PNGs)
+  function iconUrl(id) {
+    const shapes = {
+      1: '<circle cx="12" cy="12" r="8" fill="#fff"/>',
+      2: '<path d="M4 12 12 4 20 12v8h-5v-5H9v5H4z" fill="#fff"/>',
+      3: '<rect x="4" y="7" width="16" height="12" rx="2" fill="#fff"/>',
+      0: '<rect x="2" y="2" width="20" height="20" rx="6" fill="#33ccff"/><circle cx="12" cy="12" r="5" fill="#fff"/>',
+      4: '<path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" fill="#fff"/>',
+      5: '<path d="M5 11h14v2H5z" fill="#fff"/>',
+      6: '<path d="M6 20V10h8V6l6 6-6 6v-4H9v6z" fill="#fff"/>',
+    };
+    if (!shapes[id]) return null;
+    return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' + shapes[id] + "</svg>");
+  }
+  const log = (m) => { const l = document.getElementById("log"); l.textContent = JSON.stringify(m) + "\n" + l.textContent; };
+  function fit() {
+    const d = document.getElementById("display");
+    const scale = Math.min((window.innerWidth - 32) / 1472, (window.innerHeight * 0.75) / 768);
+    d.style.transform = "scale(" + scale + ")";
+    document.getElementById("stage").style.height = 768 * scale + "px";
+  }
+  window.addEventListener("resize", fit);
+  Promise.all([fetch("host-style.json").then((r) => r.json()), fetch("test-templates.json").then((r) => r.json())]).then(([style, data]) => {
+    const r = new TLCarAppRenderer(document.getElementById("display"), style, { send: log, icon: iconUrl, density: data.density });
+    const bar = document.getElementById("bar");
+    for (const name of Object.keys(data.templates)) {
+      const b = document.createElement("button");
+      b.textContent = name;
+      b.onclick = () => r.render(data.templates[name]);
+      bar.appendChild(b);
+    }
+    const first = new URLSearchParams(location.search).get("t") || Object.keys(data.templates)[0];
+    r.render(data.templates[first]);
+    fit();
+  });
+</script>
+</body>
+</html>

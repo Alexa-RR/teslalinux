@@ -14,6 +14,8 @@ frontend in `web/` works unchanged.
 | `/sockets/gps` | 127.0.0.1:9998 | GPS WebSocket, JSON text |
 | `/sockets/audio` | 127.0.0.1:8080 | audio WebSocket, binary fMP4 |
 | `/stream` | 9090 | dead upstream endpoint, drop |
+| `/sockets/keyboard` | 127.0.0.1:9996 | teslalinux only: device keyboard (tacomp) |
+| `/sockets/carapp` | 127.0.0.1:9995 | teslalinux only: the app's car templates, JSON text (ATL's car-app host) |
 
 Headers upstream sends: `Cross-Origin-Embedder-Policy: credentialless`,
 `Cross-Origin-Opener-Policy: same-origin` (SharedArrayBuffer/wasm for Broadway), `Cache-Control: no-store`
@@ -67,6 +69,58 @@ Binary fMP4, `audio/mp4; codecs="flac"`, 48 kHz stereo, FLAC compression level 0
 Server caches the init segment (`ftyp`+`moov`) and re-sends it to every new client before the next
 `moof`+`mdat`. Frontend: MSE `SourceBuffer` in `sequence` mode, keeps a 0.2 s tail, jumps to live edge
 if >1 s buffered, playback must be primed from a user gesture.
+
+## Car app templates (`/sockets/carapp`, port 9995; teslalinux only, no upstream counterpart)
+
+Added next to the upstream channels, which are unchanged; only used in Car mode (Settings > Waze
+interface: Car, `GET/POST /api/appInterface`, `TESLALINUX_APP_INTERFACE=car` in
+`/etc/teslalinux/interface.env`, which makes the launcher set `ATL_CAR_HOST=1`). ATL's car-app host
+(`android/atl/carhost` in the ATL fork) binds the app's `CarAppService` as a car head unit's host
+would (Car App Library handshake, API level up to 9), gives the app the whole display as its map
+surface (the map is then the normal `/sockets/display` stream, touches on it the normal
+`/sockets/touchscreen` ones, turned into the library's surface gestures), and serves the templates
+here. The page (`web/js/carapp`) draws them over the display. JSON text frames, one message each:
+
+Host to page:
+- `{"type":"surface","width":W,"height":H,"dpi":D}`: the map surface (display pixels and density) the
+  templates are laid out on. Sent first, again when the display changes.
+- `{"type":"icon","id":N,"png":"<base64>"}`: an image the templates refer to by `icon` id (the app's
+  drawables rendered to PNG; id 0 is the app's own icon). Sent before the first template using it,
+  and to every new page.
+- `{"type":"template","seq":N,"template":T}`: the current template (`TemplateWrapper`), as the
+  library's model objects: `{"$":"ClassName", property: value, ...}` from their public getters;
+  text as strings, colours as `CarColor` (`type`, `color`/`colorDark` signed ARGB), icons as
+  `{"$":"IconCompat","icon":N}`, callbacks as `{"$":"OnClickDelegateImpl","$cb":ID}`. Callback ids
+  are valid until the next template. A `CarText` with spans is `{"$":"CarText","text":S,"spans":
+  [{"start":A,"end":B,"span":{"$":"ForegroundCarColorSpan"|"CarIconSpan"|"DurationSpan"|"DistanceSpan",...}}]}`.
+- `{"type":"navigation","active":B}`: whether the app navigates (`NavigationManager.navigationStarted`
+  / `navigationEnded`); state, sent to every new page. While it does, the page offers the end-drive
+  control and keeps the next step in view as a pill over side panels.
+- `{"type":"restrictions","active":B,"noKeyboard":B,"maxItems":N,"maxString":N}`: the car's UX
+  restrictions (driving state from the GPS speed, AOSP's default restriction map); state, sent to
+  every new page. While they apply the page caps lists at the host's content limits and turns the
+  search field off when `noKeyboard`.
+- `{"type":"toast","text":S,"long":B}`: `CarToast` (2 s, or 3.5 s when long).
+- `{"type":"alert","alert":A}`: an `Alert` (car API 5), its callbacks valid until the next alert;
+  `{"type":"alertDismiss","id":N}`: the app took it back (`AppManager.dismissAlert`).
+
+Page to host:
+- `{"type":"click","cb":ID}`: an action, row or item tapped (`OnClickDelegate`).
+- `{"type":"selected","cb":ID,"index":I}`: an item of a selectable list chosen (`OnSelectedDelegate`).
+- `{"type":"checked","cb":ID,"checked":B}`: a toggle switched (`OnCheckedChangeDelegate`).
+- `{"type":"search","cb":ID,"text":T,"submit":B}`: search text typed or submitted (`SearchCallbackDelegate`).
+- `{"type":"pan","cb":ID,"on":B}`: pan mode on or off (the map action strip's PAN action;
+  `PanModeDelegate`).
+- `{"type":"back"}`: back (`AppManager.onBackPressed`).
+- `{"type":"visibleArea","left":L,"top":T,"right":R,"bottom":B}`: the part of the map the panels leave
+  free, inside their margins (display pixels), passed to the app as its visible and stable areas
+  (the app keeps its car, route and speedometer in it).
+- `{"type":"stopNavigation"}`: the end-drive control (`NavigationManagerCallback.onStopNavigation`).
+- `{"type":"alertCancel","cb":ID,"reason":R}` / `{"type":"alertDismiss","cb":ID}`: an alert timed out
+  (R 1) or was closed (R 2), or went away after one of its actions (`AlertCallback`).
+- `{"type":"dayNight","mode":"day"|"night"|"auto"}`: the driver's day or night choice; "auto" (the
+  default, or `ATL_CAR_DAY_NIGHT`) follows the sun at the car's position. The app hears it as the
+  configuration's night mode (`CarContext.isDarkMode`).
 
 ## Config API (`/api`, port 8081)
 

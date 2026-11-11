@@ -40,6 +40,9 @@ location /sockets/audio       { proxy_pass http://127.0.0.1:8080; include @NGINX
 location /sockets/display     { proxy_pass http://127.0.0.1:9091; include @NGINX_DIR@/teslalinux-ws.inc; include @NGINX_DIR@/teslalinux-nocache.inc; }
 # teslalinux: the device keyboard (tacomp TACOMP_IME_PORT; Settings > Keyboard, README.teslalinux.md)
 location /sockets/keyboard    { proxy_pass http://127.0.0.1:9996; include @NGINX_DIR@/teslalinux-ws.inc; include @NGINX_DIR@/teslalinux-nocache.inc; }
+# teslalinux: the car app interface (Car mode): the app's car templates as JSON, interactions back
+# (ATL's car-app host, ATL_CAR_APP_CHANNEL_PORT; docs/UPSTREAM-NOTES.md "Car app templates")
+location /sockets/carapp      { proxy_pass http://127.0.0.1:9995; include @NGINX_DIR@/teslalinux-ws.inc; include @NGINX_DIR@/teslalinux-nocache.inc; }
 
 # lighttpd.conf:116-118 proxies /stream to 127.0.0.1:9090. Not carried over: nothing in the frontend
 # (web/js, upstream's frontend and beta/ copy) requests /stream and no upstream daemon listens on 9090

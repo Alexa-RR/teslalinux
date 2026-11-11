@@ -1,0 +1,106 @@
+{
+  "note": "Templates for carapp/test.html. 'navigation' follows a NavigationTemplate the car-app host received from the app (field names and values as CarModelJson writes them); 'mapWithList', 'list' and 'routePreview' (a default action with the host's countdown) are made-up examples of the same JSON shape. Icons 1-6 are drawn by test.html.",
+  "density": 213,
+  "templates": {
+    "navigation": {
+      "$": "TemplateWrapper", "currentTaskStep": 0, "id": "nav-1",
+      "template": {
+        "$": "NavigationTemplate",
+        "actionStrip": {"$": "ActionStrip", "actions": [
+          {"$": "Action", "flags": 2, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 1, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 101}},
+          {"$": "Action", "flags": 2, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 2, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 102}},
+          {"$": "Action", "flags": 2, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 3, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 103}}
+        ]},
+        "mapActionStrip": {"$": "ActionStrip", "actions": [
+          {"$": "Action", "flags": 0, "type": 65540, "enabled": true},
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 4, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 104}},
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 5, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 105}}
+        ]},
+        "backgroundColor": {"$": "CarColor", "color": -16777216, "colorDark": -16777216, "type": 0},
+        "navigationInfo": {
+          "$": "RoutingInfo",
+          "currentDistance": {"$": "Distance", "displayDistance": 300.0, "displayUnit": 1},
+          "currentStep": {"$": "Step", "cue": "Turn right onto Dizengoff St", "maneuver": {"$": "Maneuver", "type": 10, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 6, "type": 2}}}},
+          "nextStep": {"$": "Step", "cue": "Keep left", "maneuver": {"$": "Maneuver", "type": 15}}
+        },
+        "destinationTravelEstimate": {
+          "$": "TravelEstimate",
+          "arrivalTimeAtDestination": {"$": "DateTimeWithZone", "timeSinceEpochMillis": 1794413495000, "zoneOffsetSeconds": 7200, "zoneShortName": "Asia/Jerusalem"},
+          "remainingDistance": {"$": "Distance", "displayDistance": 10.0, "displayUnit": 1},
+          "remainingDistanceColor": {"$": "CarColor", "color": 0, "colorDark": 0, "type": 1},
+          "remainingTimeColor": {"$": "CarColor", "color": 0, "colorDark": 0, "type": 5},
+          "remainingTimeSeconds": 60
+        }
+      }
+    },
+    "mapWithList": {
+      "$": "TemplateWrapper", "id": "map-1",
+      "template": {
+        "$": "MapWithContentTemplate",
+        "actionStrip": {"$": "ActionStrip", "actions": [
+          {"$": "Action", "flags": 2, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 1, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 201}}
+        ]},
+        "mapController": {"$": "MapController", "mapActionStrip": {"$": "ActionStrip", "actions": [
+          {"$": "Action", "flags": 0, "type": 65540, "enabled": true},
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 4, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 204}}
+        ]}},
+        "contentTemplate": {
+          "$": "ListTemplate",
+          "header": {"$": "Header", "title": "Where to?", "startHeaderAction": {"$": "Action", "type": 65538, "enabled": true}},
+          "singleList": {"$": "ItemList", "items": [
+            {"$": "Row", "title": "Home", "texts": ["4 Example St"], "image": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 2, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 211}, "isBrowsable": true},
+            {"$": "Row", "title": "Work", "texts": ["Begin Rd, Tel Aviv"], "image": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 3, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 212}},
+            {"$": "Row", "title": "Dizengoff Square", "texts": ["Tel Aviv-Yafo", "12 min"], "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 213}},
+            {"$": "Row", "title": "Avoid tolls", "toggle": {"$": "Toggle", "isChecked": true, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 214}}}
+          ]}
+        }
+      }
+    },
+    "list": {
+      "$": "TemplateWrapper", "id": "list-1",
+      "template": {
+        "$": "ListTemplate",
+        "title": "Settings",
+        "headerAction": {"$": "Action", "type": 65539, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 301}},
+        "sectionedLists": [
+          {"$": "SectionedItemList", "header": "Sound", "itemList": {"$": "ItemList", "items": [
+            {"$": "Row", "title": "Voice guidance", "texts": ["On"], "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 311}, "isBrowsable": true},
+            {"$": "Row", "title": "Alerts", "toggle": {"$": "Toggle", "isChecked": false, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 312}}}
+          ]}},
+          {"$": "SectionedItemList", "header": "Map", "itemList": {"$": "ItemList", "items": [
+            {"$": "Row", "title": "Map color", "texts": ["Automatic"], "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 321}, "isBrowsable": true}
+          ]}}
+        ]
+      }
+    },
+    "routePreview": {
+      "$": "TemplateWrapper", "currentTaskStep": 0, "id": "preview-1",
+      "template": {
+        "$": "MapWithContentTemplate",
+        "actionStrip": {"$": "ActionStrip", "actions": [
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "title": "Avoid", "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 401}}
+        ]},
+        "contentTemplate": {
+          "$": "PaneTemplate",
+          "header": {"$": "Header", "title": "Central Station", "startHeaderAction": {"$": "Action", "flags": 0, "type": 65539, "enabled": true}},
+          "pane": {"$": "Pane",
+            "rows": [
+              {"$": "Row", "title": {"$": "CarText", "text": "E • D\nTypical traffic", "spans": [
+                {"start": 0, "end": 1, "span": {"$": "DurationSpan", "durationSeconds": 420}},
+                {"start": 4, "end": 5, "span": {"$": "DistanceSpan", "distance": {"$": "Distance", "displayDistance": 3.2, "displayUnit": 3}}}
+              ]}, "texts": [""]}
+            ],
+            "actions": [
+              {"$": "Action", "flags": 5, "type": 1, "enabled": true, "title": "Go now", "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 402}},
+              {"$": "Action", "flags": 0, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 6, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 403}}
+            ]
+          }
+        },
+        "mapController": {"$": "MapController", "mapActionStrip": {"$": "ActionStrip", "actions": [
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 4, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 404}},
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 5, "type": 2}}, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 405}}
+        ]}}
+      }
+    }
+  }
+}

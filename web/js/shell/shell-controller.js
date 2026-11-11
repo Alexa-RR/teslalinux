@@ -140,8 +140,10 @@
 
       this._connectivityCheckInFlight = true;
       try {
-        await this.apiClient.fetchHealthCheck();
+        const response = await this.apiClient.fetchHealthCheck();
         this._onConnectivitySuccess();
+        // teslalinux: the app interface (Phone/Car) the device runs now, for js/carapp
+        global.dispatchEvent(new CustomEvent("teslalinux-app-interface", { detail: response.headers.get("X-Teslalinux-App-Interface") }));
       } catch (_error) {
         this._onConnectivityFailure();
       } finally {

@@ -94,6 +94,32 @@ Changes from upstream:
   changes (one guard): the keyboard shrinks the viewport, and resizing the display for it would
   restart tacomp and close the keyboard. A field that turns text input off and on again within 600 ms
   (a tap on it) keeps the keyboard.
+* Settings, **Waze interface**: Phone (default) or Car (`_renderInterfaceSection`,
+  `fetchAppInterface` / `setAppInterface` in `js/core/api-client.js`, `GET/POST /api/appInterface`;
+  the root helper `host/teslalinux-set-app-interface` writes `/etc/teslalinux/interface.env` and
+  restarts the app; the page reloads once the API reports the new interface, and a page left open
+  elsewhere follows through the `X-Teslalinux-App-Interface` header of its health checks, without
+  polling of its own). In Car mode the app runs its Car App Library
+  interface through ATL's car-app host: its map is the display stream, and `js/carapp/` (new: one
+  stylesheet and two `<script defer>` lines in `index.html`) draws its templates over it from
+  `/sockets/carapp` (docs/UPSTREAM-NOTES.md, "Car app templates"). `carapp-controller.js` does
+  nothing unless the API says "car"; it adds `#carapp-overlay` inside `#display-root`, above the
+  touch layer, where only the panels take touches (map touches reach `/sockets/touchscreen` as
+  before). `carapp-renderer.js` places the panels where the AOSP car Templates Host places them,
+  with its spacing and text sizes from `host-style.json` (extracted from the host APK by
+  `tools/carhost/host-style.py`); colours and shapes are our own (`carapp.css`). What a car host
+  adds by itself is drawn here too: coloured and image text spans, the default action's countdown,
+  the map buttons folded into ± over the bare map, the next step as a pill over side panels, paging
+  arrows on full-screen lists, the end-drive control, toasts and alerts, and the driving
+  restrictions (lists capped, search typing off while moving). `test.html` +
+  `test-templates.json` render sample templates without a device (serve `web/` over HTTP).
+* `fonts/MaterialSymbolsRounded-car.woff2` (new): the maneuver and control glyphs of the car panels,
+  a subset of Google's Material Symbols Rounded (Apache License 2.0,
+  github.com/google/material-design-icons, `variablefont/MaterialSymbolsRounded*.ttf` at commit
+  10ecc14790612ca8fd164e3f4ffe9c16fc50d5b7), instanced at FILL 0, GRAD 0, opsz 24, wght 400 and
+  cut to the code points U+E570 E57B E5C4 E5CC E5CD E89F EB95 EB96 EB98 EB99 EB9A EB9C EBA0-EBA4
+  EBA6 EBA7 EBAA EBAB EBAC EFF5 F06E F0C6 with fontTools
+  (`fonttools varLib.instancer` then `pyftsubset --flavor=woff2`).
 * `404.html` (new): the page nginx serves for unknown paths (upstream's lighttpd names
   `/404.html` as its 404 handler but ships none).
 * `online/status.html`, `online/connectivity_check.txt`: byte-for-byte copies of upstream's

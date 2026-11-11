@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The privileged permissions the AOSP car Templates Host (installed as a privileged system app,
+  system/priv-app/CarTemplatesHost) is allowed to hold: AOSP's privapp-permissions allowlist format
+  (SystemConfig, etc/permissions/*.xml). Its manifest requests exactly these privileged ones.
+-->
+<permissions>
+    <privapp-permissions package="com.android.car.templates.host">
+        <permission name="android.car.permission.TEMPLATE_RENDERER"/>
+        <permission name="android.car.permission.CAR_DISPLAY_IN_CLUSTER"/>
+        <permission name="android.car.permission.CAR_NAVIGATION_MANAGER"/>
+    </privapp-permissions>
+</permissions>

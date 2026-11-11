@@ -41,6 +41,12 @@ The keyboard (new routes only):
 * POST /api/keyboard   JSON {"mode": ...}: `teslalinux-set-keyboard` (one sudoers rule) writes
                        /etc/teslalinux/keyboard.env and restarts the app if the choice changed
 
+The app's interface (new routes only):
+* GET  /api/appInterface  {"interface": "phone" | "car"}: the app's phone screens, or its car interface
+                          (the page then draws the app's car templates from /sockets/carapp)
+* POST /api/appInterface  JSON {"interface": ...}: `teslalinux-set-app-interface` (one sudoers rule)
+                          writes /etc/teslalinux/interface.env and restarts the app if the choice changed
+
 The settings page's Status, Network and System update sections (new routes only):
 * GET  /api/status        what the device is connected to now: the hotspot (SSID, channel, the car and
                           other clients with signal and DHCP name), the internet uplink (interface, LTE /
@@ -87,6 +93,9 @@ SET_LOCALE = os.environ.get("TESLALINUX_SET_LOCALE", "/usr/local/bin/teslalinux-
 SET_KEYBOARD = os.environ.get("TESLALINUX_SET_KEYBOARD", "/usr/local/bin/teslalinux-set-keyboard")
 KEYBOARD_ENV = os.environ.get("TESLALINUX_KEYBOARD_ENV", "/etc/teslalinux/keyboard.env")
 KEYBOARD_MODES = ("builtin", "device")
+SET_APP_INTERFACE = os.environ.get("TESLALINUX_SET_APP_INTERFACE", "/usr/local/bin/teslalinux-set-app-interface")
+INTERFACE_ENV = os.environ.get("TESLALINUX_INTERFACE_ENV", "/etc/teslalinux/interface.env")
+APP_INTERFACES = ("phone", "car")
 LOCALE_ENV = os.environ.get("TESLALINUX_LOCALE_ENV", "/etc/teslalinux/locale.env")
 # the helper restarts services as root: through one sudoers rule (host setup), off for tests
 APPLY_SUDO = os.environ.get("TESLALINUX_APPLY_SUDO", "1") != "0"
@@ -126,9 +135,9 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
                   ("quality", tp.VD_QUALITY), ("isRearDisplayEnabled", tp.VD_REAR),
                   ("isRearDisplayPrioritised", tp.VD_REAR_PRIO))
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
-              "appUpdate", "locale", "keyboard", "status", "network", "systemUpdate", "wifiScan"}
+              "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
-                                  "locale", "keyboard", "network", "systemUpdate"}
+                                  "locale", "keyboard", "appInterface", "network", "systemUpdate"}
 
 
 def props():
@@ -556,6 +565,28 @@ def set_keyboard(mode):
                 subprocess.run(cmd + [mode], check=False, timeout=120)
             except (OSError, subprocess.SubprocessError) as e:
                 print("teslalinux-api: %s failed: %s" % (SET_KEYBOARD, e), flush=True)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------- app interface
+
+def app_interface_state():
+    """GET /api/appInterface: {"interface": "phone"|"car"} (teslalinux-set-app-interface)"""
+    mode = _env_file(INTERFACE_ENV).get("TESLALINUX_APP_INTERFACE", "phone")
+    return {"interface": mode if mode in APP_INTERFACES else "phone"}
+
+
+def set_app_interface(mode):
+    """POST /api/appInterface: the root helper writes interface.env and restarts the app if it changed"""
+    cmd = ["sudo", "-n", SET_APP_INTERFACE] if APPLY_SUDO and os.geteuid() != 0 else [SET_APP_INTERFACE]
+
+    def run():
+        with _apply_lock:
+            try:
+                subprocess.run(cmd + [mode], check=False, timeout=120)
+            except (OSError, subprocess.SubprocessError) as e:
+                print("teslalinux-api: %s failed: %s" % (SET_APP_INTERFACE, e), flush=True)
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -1251,7 +1282,9 @@ class Handler(BaseHTTPRequestHandler):
         route = self._route()
         p = props()
         if route == "health":
-            return self._send(200)
+            # the body stays empty as upstream's; the app interface rides along as a header, so the
+            # page's existing health checks notice a switch made from another device
+            return self._send(200, extra=(("X-Teslalinux-App-Interface", app_interface_state()["interface"]),))
         if route == "configuration":
             return self._json({k: tp.atoi(p.get(k)) for k in CONFIGURATION_KEYS})
         if route == "displayState":
@@ -1268,6 +1301,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(locale_state())
         if route == "keyboard":
             return self._json(keyboard_state())
+        if route == "appInterface":
+            return self._json(app_interface_state())
         if route == "appUpdate":
             return self._json(appupdate_state())
         if route == "status":
@@ -1336,6 +1371,15 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(req, dict) or req.get("mode") not in KEYBOARD_MODES:
                 return self._error()
             set_keyboard(req["mode"])
+            return self._ok()
+        if route == "appInterface":
+            try:
+                req = json.loads(body.decode("utf-8") or "null")
+            except (ValueError, UnicodeDecodeError):
+                return self._error()
+            if not isinstance(req, dict) or req.get("interface") not in APP_INTERFACES:
+                return self._error()
+            set_app_interface(req["interface"])
             return self._ok()
         if route == "appUpdateSettings":
             try:

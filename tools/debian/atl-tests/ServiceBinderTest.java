@@ -356,6 +356,211 @@ public class ServiceBinderTest {
 		check("release removes it", !d.isValid() && dm.getDisplay(id) == null && displayEvents.contains("removed:" + id), "events " + displayEvents);
 	}
 
+	/** an object written to a Parcel and read back, as a binder transaction in this process does
+	 * (Binder.transact rewinds the same Parcel; binder objects never leave the process) */
+	static <T> T roundTrip(android.os.Parcelable value, android.os.Parcelable.Creator<T> creator) {
+		Parcel p = Parcel.obtain();
+		try {
+			value.writeToParcel(p, 0);
+			p.setDataPosition(0);
+			return creator.createFromParcel(p);
+		} finally {
+			p.recycle();
+		}
+	}
+
+	/** SurfaceControl layers, SurfaceControlViewHost's SurfacePackage and Surface through Parcels */
+	static void surfaceTests() throws Exception {
+		android.view.SurfaceControl sc = new android.view.SurfaceControl.Builder().setName("test").setContainerLayer().build();
+		android.view.SurfaceControl copy = roundTrip(sc, android.view.SurfaceControl.CREATOR);
+		check("a SurfaceControl read from a Parcel is a valid reference", copy.isValid(), "" + copy);
+		sc.release();
+		check("the layer lives while a reference is left", copy.isValid() && !sc.isValid(), sc.isValid() + " " + copy.isValid());
+		android.view.SurfaceControl parent = new android.view.SurfaceControl.Builder().setName("parent").setContainerLayer().build();
+		new android.view.SurfaceControl.Transaction().reparent(copy, parent).apply();
+		android.view.SurfaceControl again = roundTrip(copy, android.view.SurfaceControl.CREATOR);
+		copy.release();
+		again.release();
+		boolean cycle = false;
+		android.view.SurfaceControl child = new android.view.SurfaceControl.Builder().setName("child").setContainerLayer().setParent(parent).build();
+		try {
+			new android.view.SurfaceControl.Transaction().reparent(parent, child).apply();
+		} catch (IllegalArgumentException e) {
+			cycle = true;
+		}
+		check("a layer cannot become its own child's child", cycle, "no exception");
+		parent.release();
+		check("a child with a reference outlives its released parent", child.isValid(), "child " + child.isValid());
+		child.release();
+		check("a released layer without parent is gone", !child.isValid(), "still valid");
+
+		Context base = new android.app.ContextImpl(Resources.getSystem(), ATLLoadedApp.getSystemApplication(), 0);
+		final android.view.SurfaceControlViewHost[] host = new android.view.SurfaceControlViewHost[1];
+		final CountDownLatch made = new CountDownLatch(1);
+		main.post(new Runnable() {
+			public void run() {
+				host[0] = new android.view.SurfaceControlViewHost(base, null, new Binder());
+				made.countDown();
+			}
+		});
+		made.await(5, TimeUnit.SECONDS);
+		android.view.SurfaceControlViewHost.SurfacePackage pkg = host[0].getSurfacePackage();
+		android.view.SurfaceControlViewHost.SurfacePackage remote = roundTrip(pkg, android.view.SurfaceControlViewHost.SurfacePackage.CREATOR);
+		pkg.release();
+		check("a SurfacePackage passes through a Parcel with its layer", remote.getSurfaceControl() != null && remote.getSurfaceControl().isValid(), "" + remote.getSurfaceControl());
+		check("and with the embedded window's input token", remote.getInputToken() != null && remote.getInputToken() == host[0].getSurfacePackage().getInputToken(), "" + remote.getInputToken());
+		android.view.SurfaceControlViewHost.SurfacePackage dup = new android.view.SurfaceControlViewHost.SurfacePackage(remote);
+		remote.release();
+		check("a copied package has its own reference", dup.getSurfaceControl().isValid() && remote.getSurfaceControl() == null, "");
+		dup.release();
+
+		android.view.Surface s = new android.view.Surface();
+		android.view.Surface invalid = roundTrip(s, android.view.Surface.CREATOR);
+		check("an invalid Surface stays invalid through a Parcel", !invalid.isValid(), "");
+		s.widget = 0x1234;
+		android.view.Surface valid = roundTrip(s, android.view.Surface.CREATOR);
+		check("a Surface read from a Parcel draws into the same surface", valid.isValid() && valid.widget == 0x1234, "widget " + valid.widget);
+	}
+
+	static final String HOST = "com.android.car.templates.host";
+	static final String TEMPLATE_RENDERER = "android.car.permission.TEMPLATE_RENDERER";
+
+	/** runs r on a new thread acting for uid and waits for it */
+	static void runAs(final int uid, final Runnable r) throws InterruptedException {
+		Thread t = new Thread(new Runnable() {
+			public void run() {
+				Binder.tlEnterParty(uid);
+				r.run();
+			}
+		});
+		t.start();
+		t.join(10000);
+	}
+
+	/**
+	 * System apps (ATL's system directory, priv-app), per-package uids, install-time permission
+	 * grants and calling identity between three parties: the app, the platform and a system app.
+	 * Needs the car Templates Host installed as a privileged system app (run.sh says how).
+	 */
+	static void systemAppTests() throws Exception {
+		final PackageManager pm = new PackageManager();
+		PackageInfo info;
+		try {
+			info = pm.getPackageInfo(HOST, PackageManager.GET_PERMISSIONS);
+		} catch (PackageManager.NameNotFoundException e) {
+			check("the privileged system app " + HOST + " is installed in " + ATLPaths.system_dir, false, e.toString());
+			return;
+		}
+		final int hostUid = info.applicationInfo.uid;
+		check("a system app gets an app uid of its own", hostUid >= Process.FIRST_APPLICATION_UID && hostUid != Process.myUid(), "uid " + hostUid);
+		check("a priv-app is a privileged system app", (info.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0 && (info.applicationInfo.flags & ApplicationInfo.FLAG_PRIVILEGED) != 0, "flags 0x" + Integer.toHexString(info.applicationInfo.flags));
+		String[] pkgs = pm.getPackagesForUid(hostUid);
+		check("getPackagesForUid names the system app", pkgs != null && pkgs.length == 1 && HOST.equals(pkgs[0]), pkgs == null ? "null" : java.util.Arrays.toString(pkgs));
+		check("getNameForUid of its uid is its package", HOST.equals(pm.getNameForUid(hostUid)), pm.getNameForUid(hostUid));
+		java.io.File list = new java.io.File(ATLPaths.app_data_dir_base, "packages.list");
+		String listed = list.isFile() ? new String(java.nio.file.Files.readAllBytes(list.toPath())) : "";
+		check("the uid is kept in packages.list", listed.contains(HOST + " " + hostUid), listed);
+		int granted = -1, foreground = -1;
+		for (int i = 0; info.requestedPermissions != null && i < info.requestedPermissions.length; i++) {
+			if (TEMPLATE_RENDERER.equals(info.requestedPermissions[i]))
+				granted = info.requestedPermissionsFlags[i];
+			if ("android.permission.FOREGROUND_SERVICE".equals(info.requestedPermissions[i]))
+				foreground = info.requestedPermissionsFlags[i];
+		}
+		check("PackageInfo shows the privileged permission granted (platform-signed priv-app)", granted >= 0 && (granted & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0, "flags " + granted);
+		check("and the normal permission granted", foreground >= 0 && (foreground & PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0, "flags " + foreground);
+		check("checkPermission: granted to the system app", pm.checkPermission(TEMPLATE_RENDERER, HOST) == PackageManager.PERMISSION_GRANTED, "");
+		check("checkPermission: a permission it did not request is denied", pm.checkPermission("android.car.permission.CAR_SPEED", HOST) == PackageManager.PERMISSION_DENIED, "");
+		check("checkPermission: an unknown package holds nothing", pm.checkPermission(TEMPLATE_RENDERER, "org.example.none") == PackageManager.PERMISSION_DENIED, "");
+		check("checkUidPermission: by the uid's packages", pm.checkUidPermission(TEMPLATE_RENDERER, hostUid) == PackageManager.PERMISSION_GRANTED && pm.checkUidPermission(TEMPLATE_RENDERER, 12345) == PackageManager.PERMISSION_DENIED, "");
+		check("checkUidPermission: the system uid holds everything", pm.checkUidPermission(TEMPLATE_RENDERER, Process.SYSTEM_UID) == PackageManager.PERMISSION_GRANTED, "");
+		/* the system app's code loads in a class loader of its own */
+		ATLLoadedApp hostApp = ATLLoadedAppManager.getAppFromPackageName(HOST);
+		check("the system app loads with its own class loader", hostApp != null && hostApp.class_loader != ATLLoadedApp.class.getClassLoader(), "" + hostApp);
+		check("its loaded package has the same uid", hostApp != null && hostApp.pkg.applicationInfo.uid == hostUid, "");
+
+		/* three parties */
+		final Binder appBinder = new Binder("app") {
+			@Override
+			protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
+				reply.writeInt(Binder.getCallingUid());
+				reply.writeInt(Binder.getThreadActingUid());
+				return true;
+			}
+		};
+		final Binder[] hostBinder = new Binder[1];
+		final int[] seen = new int[4];
+		final Context ctx = new android.app.ContextImpl(Resources.getSystem(), ATLLoadedApp.getSystemApplication(), 0);
+		runAs(hostUid, new Runnable() {
+			public void run() {
+				hostBinder[0] = new Binder("host") {
+					@Override
+					protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
+						reply.writeInt(Binder.getCallingUid());
+						reply.writeInt(ctx.checkCallingPermission(TEMPLATE_RENDERER));
+						return true;
+					}
+				};
+				Parcel d = Parcel.obtain(), r = Parcel.obtain();
+				try {
+					appBinder.transact(1, d, r, 0);
+					seen[0] = r.readInt();
+					seen[1] = r.readInt();
+				} catch (android.os.RemoteException e) {
+				}
+				d.recycle();
+				r.recycle();
+				final int[] child = new int[1];
+				Thread t = new Thread(new Runnable() {
+					public void run() {
+						child[0] = Binder.getThreadActingUid();
+					}
+				});
+				t.start();
+				try {
+					t.join();
+				} catch (InterruptedException e) {
+				}
+				seen[2] = child[0];
+			}
+		});
+		check("a call from the system app to the app's binder carries the system app's uid", seen[0] == hostUid, "calling uid " + seen[0]);
+		check("and runs for the app", seen[1] == Process.myUid(), "acting " + seen[1]);
+		check("a thread started by the system app acts for it", seen[2] == hostUid, "acting " + seen[2]);
+		Parcel d = Parcel.obtain(), r = Parcel.obtain();
+		hostBinder[0].transact(1, d, r, 0);
+		int callerSeen = r.readInt();
+		int permSeen = r.readInt();
+		d.recycle();
+		r.recycle();
+		check("a call from the app to the system app's binder carries the app's uid", callerSeen == Process.myUid(), "calling uid " + callerSeen);
+		check("checkCallingPermission checks the caller's uid", permSeen == ctx.checkPermission(TEMPLATE_RENDERER, Process.myPid(), Process.myUid()), "" + permSeen);
+		check("checkCallingPermission outside an incoming call is denied", ctx.checkCallingPermission(TEMPLATE_RENDERER) == PackageManager.PERMISSION_DENIED, "");
+		check("checkPermission for the system app's uid", ctx.checkPermission(TEMPLATE_RENDERER, Process.myPid(), hostUid) == PackageManager.PERMISSION_GRANTED, "");
+		final int[] handled = new int[2];
+		final CountDownLatch ran = new CountDownLatch(1);
+		runAs(hostUid, new Runnable() {
+			public void run() {
+				main.post(new Runnable() {
+					public void run() {
+						handled[0] = Binder.getThreadActingUid();
+						handled[1] = Binder.getCallingUid();
+						ran.countDown();
+					}
+				});
+			}
+		});
+		ran.await(5, TimeUnit.SECONDS);
+		check("a message the system app posts runs for it on the shared looper", handled[0] == hostUid && handled[1] == hostUid, "acting " + handled[0] + " calling " + handled[1]);
+		boolean refused = false;
+		try {
+			Binder.setThreadActingUid(23456);
+		} catch (IllegalArgumentException e) {
+			refused = true;
+		}
+		check("a uid that is no party of this process cannot act", refused, "");
+	}
+
 	public static void main(String[] args) throws Exception {
 		/* api-impl's natives; android-translation-layer has them linked in */
 		System.loadLibrary("translation_layer_main");
@@ -368,6 +573,8 @@ public class ServiceBinderTest {
 					frameworkPackageTests();
 					serviceTests();
 					virtualDisplayTests();
+					surfaceTests();
+					systemAppTests();
 				} catch (Throwable t) {
 					t.printStackTrace();
 					check("tests ran to the end", false, t.toString());

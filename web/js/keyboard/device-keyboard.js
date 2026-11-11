@@ -271,6 +271,17 @@
 
   async function init() {
     try {
+      // Car mode (Settings > Waze interface): the car interface's text fields are this page's own
+      // (js/carapp), typed into with the device keyboard directly; the app's phone screens, whose
+      // fields this bridge serves, are not shown, so it stays off
+      const iface = await fetch(apiBase() + "/appInterface", { cache: "no-store" });
+      if (iface.ok && (await iface.json()).interface === "car") {
+        return;
+      }
+    } catch (_error) {
+      // no route: the phone interface
+    }
+    try {
       const response = await fetch(apiBase() + "/keyboard", { cache: "no-store" });
       if (!response.ok) {
         return; // an API without the route: the built-in keyboard, as upstream

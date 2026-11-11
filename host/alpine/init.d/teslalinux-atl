@@ -29,6 +29,8 @@ start_pre() {
 	[ -r /etc/teslalinux/locale.env ] && . /etc/teslalinux/locale.env && export TESLALINUX_LOCALE TESLALINUX_TIMEZONE
 	# which keyboard types into the app (teslalinux-set-keyboard, from the settings page)
 	[ -r /etc/teslalinux/keyboard.env ] && . /etc/teslalinux/keyboard.env && export TESLALINUX_KEYBOARD
+	# the app's interface, phone or car (teslalinux-set-app-interface, from the settings page)
+	[ -r /etc/teslalinux/interface.env ] && . /etc/teslalinux/interface.env && export TESLALINUX_APP_INTERFACE
 	export HOME=/var/lib/tesla XDG_RUNTIME_DIR=/run/tesla WAYLAND_DISPLAY=tesla-0
 	# ALSA "default" -> pipewire-alsa -> the "android" sink in this runtime dir
 	export PIPEWIRE_RUNTIME_DIR=/run/tesla

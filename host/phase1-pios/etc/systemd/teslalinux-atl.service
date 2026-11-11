@@ -35,6 +35,8 @@ EnvironmentFile=-/etc/teslalinux/atl.env
 EnvironmentFile=-/etc/teslalinux/locale.env
 # which keyboard types into the app (teslalinux-set-keyboard, from the settings page)
 EnvironmentFile=-/etc/teslalinux/keyboard.env
+# the app's interface, phone or car (teslalinux-set-app-interface, from the settings page)
+EnvironmentFile=-/etc/teslalinux/interface.env
 # the first launch after an app update logs the health marker (teslalinux-appupdate, docs/APP-UPDATES.md)
 EnvironmentFile=-/run/teslalinux/appupdate-health.env
 ExecStart=/usr/local/bin/teslalinux-atl

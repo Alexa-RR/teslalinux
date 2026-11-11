@@ -74,6 +74,8 @@ libdrm
 libinput
 # app runtime: GTK and the ATL stack (the patched prefix in /opt/atl overlays the binaries)
 gtk4.0
+# WebP images (app resources, Bitmap.compress WEBP): ATL decodes and encodes through gdk-pixbuf
+webp-pixbuf-loader
 android-translation-layer
 art_standalone
 bionic_translation

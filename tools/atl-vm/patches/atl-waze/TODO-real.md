@@ -28,6 +28,10 @@ replaced; each is removed from this list only when the real behavior is in.
   without recording anything; the spec does not carry them.
 - `Paint.getFillPath` (upstream, came in through a clean merge) returns false. It should build the
   stroked or filled outline.
+- `ATLCarService.saveUxRestrictionsConfigurationForNextBoot` (car interface, added 2026-11-12)
+  returns false: there is no persistent staging file. AOSP's CarUxRestrictionsManagerService
+  writes a staged JSON config that it promotes at the next boot; do the same under the app data
+  directory.
 - Keystore backend: the fork's KeyStoreStorage is kept. Upstream's libsecret natives
   (`android_security_keystore_AndroidKeyStore.c`) are compiled but unused; using them is a decision
   for the user.

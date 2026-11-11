@@ -72,7 +72,7 @@ APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.servic
 RUNTIME_PKGS=(nginx python3 python3-websockets openssl curl ca-certificates bind9-dnsutils rsync ffmpeg dbus
   pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd
   hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data uhubctl iw rfkill iproute2
-  libgl1-mesa-dri libegl-mesa0 libgbm1 libgles2 v4l-utils
+  libgl1-mesa-dri libegl-mesa0 libgbm1 libgles2 v4l-utils webp-pixbuf-loader
   fonts-roboto fonts-noto-core i2c-tools util-linux-extra unzip sudo zstd xz-utils)
 
 # ---------------------------------------------------------------- output
@@ -473,7 +473,7 @@ step_files() {
   rm -rf /usr/share/teslalinux/templates; install -d /usr/share/teslalinux/templates
   cp -r "$P/host/phase1-pios/etc/." /usr/share/teslalinux/templates/
   install -m 0644 "$P/host/phase1-pios/env" /usr/share/teslalinux/env.template
-  for f in teslalinux-render teslalinux-restart-app teslalinux-set-locale teslalinux-set-keyboard teslalinux-network \
+  for f in teslalinux-render teslalinux-restart-app teslalinux-set-locale teslalinux-set-keyboard teslalinux-set-app-interface teslalinux-network \
            teslalinux-system-update teslalinux-uplink teslalinux-dexopt; do
     put_file "$P/host/$f" "/usr/local/bin/$f" 0755
   done
@@ -485,7 +485,7 @@ step_files() {
   install -m 0755 "$P/tools/apps/install-app.sh" "$P/tools/apps/apk-info.py" "$LIB/apps/"
   install -m 0644 "$P/tools/apps/apk_verify.py" "$LIB/apps/"
   install -m 0644 "$P/host/local/check.py" "$P/services/display/test/ws-client.py" "$LIB/check/"
-  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update\n'
+  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update\n'
   visudo -cq -f /etc/sudoers.d/teslalinux || die "sudoers check failed for /etc/sudoers.d/teslalinux"
   for f in "${UNITS[@]}" teslalinux-tls-fetch.service teslalinux-tls-fetch.timer; do
     put_file "$P/host/phase1-pios/etc/systemd/$f" "/etc/systemd/system/$f" 0644

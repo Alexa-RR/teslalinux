@@ -1,0 +1,628 @@
+/* teslalinux: the car app templates (carapp-renderer.js). Placement follows the AOSP Templates
+   Host's layouts (steps card top left, travel estimate bottom left, floating strips on the right,
+   content card over the map, full-screen lists), with its spacing and text sizes from its
+   resources (host-style.json, set as custom properties by the renderer). Surfaces and shapes are
+   our own: soft graphite cards with large radii, pill buttons, dark round map buttons, so the
+   panels sit quietly on a night map; the next turn's blue tile is the one accent. */
+
+/* the layer over the display stream (carapp-controller.js): above the touch layer, but only the
+   panels take touches; the surface element has the map surface's size in display pixels */
+#carapp-overlay { position: absolute; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; }
+#carapp-overlay .carapp-surface { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+
+.carapp-root {
+  /* surfaces and shape (ours) */
+  --surface: #1e2125;
+  --surface-raised: #2a2e33;
+  --surface-pressed: #353a40;
+  --on-surface: #f1f3f4;
+  --on-surface-dim: #a8adb4;
+  --accent: #8ab4f8;
+  --on-accent: #0b1d3a;
+  --radius-card: calc(var(--pad-5) * 0.875);   /* 28dp */
+  --radius-row: calc(var(--pad-4) * 0.833);    /* 20dp */
+  --lift: 0 calc(var(--pad-1) * 0.75) calc(var(--pad-4)) rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
+
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none; /* the map under the panels takes the touches (to the display) */
+  font-family: "Roboto", Arial, sans-serif;
+  color: var(--on-surface);
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.carapp-layer { position: absolute; inset: 0; }
+.carapp-layer.fullscreen {
+  background: #15171a;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pad-1);
+  padding: var(--pad-3) var(--pad-6);
+  overflow: hidden;
+}
+/* the host's maximum row list width, centred on the wide car display; the header stays, the
+   body under it scrolls (and pages with the arrows) */
+.carapp-layer.fullscreen > .carapp-content { width: 100%; max-width: var(--row-list-max); margin: 0 auto; flex: 1; min-height: 0; }
+.carapp-content { display: flex; flex-direction: column; min-height: 0; }
+.carapp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; }
+.carapp-body::-webkit-scrollbar { display: none; }
+
+/* ---- cards (BleedingCardView: content and routing containers) ---- */
+.carapp-card {
+  position: absolute;
+  left: var(--card-start);
+  top: var(--card-top);
+  width: var(--card-width);
+  max-height: calc(100% - var(--card-top) - var(--card-bottom));
+  overflow-y: auto;
+  scrollbar-width: none;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--lift);
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+.carapp-card::-webkit-scrollbar { display: none; }
+.carapp-card.content { min-height: var(--card-min-height); padding: var(--pad-2); display: flex; flex-direction: column; overflow: hidden; }
+.carapp-card.content > .carapp-content { flex: 1 1 auto; }
+.carapp-card.steps { width: var(--routing-card-width); padding: var(--pad-3); }
+.carapp-card.travel {
+  top: auto;
+  bottom: var(--card-bottom);
+  width: auto;
+  min-width: calc(var(--routing-card-width) * 0.6);
+  padding: var(--pad-2) var(--pad-4);
+  border-radius: 999px;
+}
+
+/* ---- floating action strips (top right row, bottom right column) ---- */
+.carapp-strip { position: absolute; display: flex; gap: var(--pad-2); padding: var(--strip-pad); pointer-events: auto; }
+.carapp-strip.top { top: 0; right: 0; flex-direction: row; }
+.carapp-strip.map { bottom: 0; right: 0; flex-direction: column; }
+.carapp-strip:empty { display: none; }
+
+.carapp-fab {
+  min-width: var(--touch-target);
+  height: var(--touch-target);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--on-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--lift);
+  box-sizing: border-box;
+}
+.carapp-fab.with-title { padding: 0 var(--pad-4); gap: var(--pad-2); font-size: var(--body3); font-weight: 500; }
+.carapp-fab.primary { background: var(--accent); color: var(--on-accent); }
+
+/* ---- action buttons (action_button_view) ---- */
+.carapp-action {
+  min-height: var(--action-height);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--on-surface);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pad-1);
+  padding: 0 var(--action-text-pad);
+  box-sizing: border-box;
+  font-size: var(--body3);
+  font-weight: 500;
+}
+.carapp-action.with-title { min-width: var(--action-min-width); }
+.carapp-action.primary { background: var(--accent); color: var(--on-accent); }
+.carapp-action.back, .carapp-action.pan, .carapp-action.app-icon {
+  background: transparent;
+  padding: 0;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
+}
+.carapp-action.back { background: var(--surface-raised); }
+.carapp-actions { display: flex; gap: var(--pad-2); padding: var(--pad-3) var(--pad-2) var(--pad-1); flex-wrap: wrap; }
+.carapp-actions .carapp-action { flex: 1 1 auto; }
+.carapp-header .header-end { background: var(--surface-raised); min-width: var(--touch-target); padding: 0; }
+.carapp-header .header-end .carapp-icon, .carapp-header .header-action .carapp-icon { --icon-size: var(--action-icon); }
+.disabled { opacity: 0.38; }
+
+/* ---- icons ---- */
+.carapp-icon {
+  display: inline-block;
+  flex: none;
+  width: var(--icon-size, var(--action-icon));
+  height: var(--icon-size, var(--action-icon));
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+.carapp-action.app-icon .carapp-icon { border-radius: 30%; }
+@font-face {
+  /* Material Symbols Rounded (Apache-2.0), the glyphs the car panels use (README.teslalinux.md) */
+  font-family: "Material Symbols Car";
+  src: url("../../fonts/MaterialSymbolsRounded-car.woff2") format("woff2");
+  font-display: block;
+}
+.carapp-glyph {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  font-family: "Material Symbols Car";
+  font-size: var(--icon-size);
+  line-height: 1;
+  color: inherit;
+}
+.carapp-maneuver .carapp-glyph { color: #fff; }
+.carapp-glyph-badge {
+  position: absolute;
+  right: -12%;
+  bottom: -8%;
+  min-width: 42%;
+  padding: 0 6%;
+  border-radius: 999px;
+  background: #fff;
+  color: #1a73e8;
+  font-family: "Roboto", Arial, sans-serif;
+  font-size: calc(var(--icon-size) * 0.32);
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+}
+.carapp-std-icon {
+  font-family: "Material Symbols Car";
+  font-size: var(--action-icon);
+  line-height: 1;
+}
+.carapp-std-icon.back::before { content: "\e5c4"; }
+.carapp-std-icon.pan::before { content: "\e89f"; }
+
+/* ---- header (header_view) ---- */
+.carapp-header { display: flex; align-items: center; gap: var(--pad-3); min-height: var(--touch-target); padding: var(--pad-1) var(--pad-1) var(--pad-2); }
+.carapp-header-title { flex: 1; font-size: var(--body1); font-weight: 500; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- rows (full_list_row_view / half_list_row_view) ---- */
+.carapp-list { display: flex; flex-direction: column; gap: calc(var(--pad-0) * 1.5); }
+/* grids: as many columns as fit (two in a panel, four on a full screen) */
+.carapp-list.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--row-image-large) * 2.3), 1fr));
+  gap: var(--pad-2);
+  padding: var(--pad-2);
+}
+.carapp-list.grid .carapp-grid-item { width: auto; min-width: 0; }
+.carapp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-3);
+  min-height: var(--row-min-height);
+  padding: var(--pad-2) var(--pad-3);
+  border-radius: var(--radius-row);
+  box-sizing: border-box;
+}
+.carapp-layer.fullscreen .carapp-row { background: var(--surface); }
+.carapp-row .row-image {
+  box-sizing: content-box;
+  padding: calc(var(--pad-1) * 1.25);
+  border-radius: calc(var(--radius-row) * 0.8);
+  background-color: var(--surface-raised);
+  background-origin: content-box;
+  background-clip: content-box;
+}
+.carapp-row .row-image.tinted { padding: 0; background-clip: border-box; }
+.carapp-row-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.carapp-row-body > * { align-self: stretch; text-align: start; }
+.carapp-row-title { font-size: var(--body2); font-weight: 500; line-height: 1.2; letter-spacing: -0.005em; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-line; }
+.carapp-row-text { font-size: var(--body3); color: var(--on-surface-dim); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-line; font-variant-numeric: tabular-nums; }
+/* an image inside a text (CarIconSpan): the text's height, in its colour when it is a glyph */
+.carapp-icon.inline { width: 1.15em; height: 1.15em; margin: 0 0.12em; }
+.carapp-section-header { font-size: var(--body3); font-weight: 500; color: var(--accent); padding: var(--pad-4) var(--pad-3) var(--pad-1); }
+.carapp-chevron::before { font-family: "Material Symbols Car"; content: "\e5cc"; font-size: var(--row-icon); color: var(--on-surface-dim); }
+
+.carapp-toggle {
+  width: calc(var(--row-icon) * 1.6);
+  height: calc(var(--row-icon) * 0.9);
+  border-radius: 999px;
+  background: var(--surface-pressed);
+  position: relative;
+  flex: none;
+  transition: background-color 160ms ease;
+}
+.carapp-toggle::after {
+  content: "";
+  position: absolute;
+  top: 12%;
+  left: 7%;
+  height: 76%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--on-surface-dim);
+  transition: left 160ms ease, background-color 160ms ease;
+}
+.carapp-toggle.on { background: var(--accent); }
+.carapp-toggle.on::after { left: 50%; background: var(--on-accent); }
+
+.carapp-grid-item {
+  width: calc(var(--row-image-large) * 2.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--pad-1);
+  padding: var(--pad-2);
+  border-radius: var(--radius-row);
+  text-align: center;
+}
+.carapp-grid-item .carapp-icon { padding: var(--pad-2); border-radius: 30%; background-color: var(--surface-raised); background-origin: content-box; background-clip: content-box; box-sizing: content-box; }
+.selectable.selected { background: var(--surface-raised); }
+.carapp-radio {
+  flex: none;
+  width: calc(var(--row-icon) * 0.7);
+  height: calc(var(--row-icon) * 0.7);
+  border-radius: 50%;
+  box-sizing: border-box;
+  border: 3px solid var(--on-surface-dim);
+}
+.selected > .carapp-radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 42%, transparent 46%); }
+.carapp-empty, .carapp-message-text { font-size: var(--body2); line-height: 1.35; padding: var(--pad-2) var(--pad-3); text-align: center; }
+.carapp-message { display: flex; flex-direction: column; align-items: center; gap: var(--pad-3); padding: var(--pad-4) var(--pad-3) var(--pad-2); }
+
+.carapp-clickable { cursor: pointer; transition: background-color 120ms ease, transform 120ms ease; }
+.carapp-clickable:active { background-color: var(--surface-pressed); }
+.carapp-fab.carapp-clickable:active { background-color: var(--surface-raised); }
+.carapp-action.primary.carapp-clickable:active, .carapp-fab.primary.carapp-clickable:active { filter: brightness(0.9); }
+
+/* the search field in the header: a pill with a magnifier (typed with the device's keyboard) */
+.carapp-search-box {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  height: var(--touch-target);
+  padding: 0 var(--pad-4);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  box-sizing: border-box;
+  pointer-events: auto;
+  transition: box-shadow 120ms ease, opacity 160ms ease;
+}
+.carapp-search-box:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
+.carapp-search-glyph { flex: none; width: var(--action-icon); height: var(--action-icon); color: var(--on-surface-dim); }
+.carapp-search {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--on-surface);
+  font: inherit;
+  font-size: var(--body2);
+  padding: 0;
+}
+.carapp-search::placeholder { color: var(--on-surface-dim); }
+.carapp-search::-webkit-search-cancel-button { -webkit-appearance: none; }
+/* typing is off while the car moves (UX restriction NO_KEYBOARD) */
+.carapp-search-box.off { opacity: 0.7; }
+.carapp-search-box.off .carapp-search { cursor: not-allowed; }
+
+/* ---- navigation (detailed_step_view, compact_step_view, travel_estimate_view) ---- */
+.carapp-step.detailed { display: flex; align-items: center; gap: var(--pad-3); }
+.carapp-maneuver {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--nav-large-image) * 1.5);
+  height: calc(var(--nav-large-image) * 1.5);
+  border-radius: calc(var(--radius-card) * 0.85);
+  background: #1a73e8;
+  color: #fff;
+}
+.carapp-maneuver .carapp-icon { width: var(--nav-large-image); height: var(--nav-large-image); }
+.carapp-step-text { min-width: 0; display: flex; flex-direction: column; gap: var(--pad-0); }
+.carapp-nav-title { font-size: calc(var(--body1) * 1.25); font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.carapp-step-cue { font-size: var(--body2); line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.carapp-step.compact {
+  display: flex;
+  align-items: center;
+  gap: var(--pad-2);
+  margin-top: var(--pad-2);
+  padding: var(--pad-1) var(--pad-3);
+  border-radius: 999px;
+  background: var(--surface-raised);
+}
+.carapp-step.compact .carapp-icon { --icon-size: var(--nav-small-image) !important; }
+.carapp-divider { display: none; }
+.carapp-icon.lanes { width: 100%; height: var(--nav-large-image); margin-top: var(--pad-2); }
+.carapp-icon.junction { width: 100%; height: calc(var(--routing-card-width) * 0.6); margin-top: var(--pad-2); border-radius: var(--radius-row); }
+.carapp-travel { display: flex; align-items: baseline; gap: var(--pad-3); white-space: nowrap; }
+.carapp-travel .carapp-nav-title { font-size: var(--body1); }
+.carapp-travel .carapp-row-text { font-size: var(--body2); }
+.carapp-nav-message { display: flex; flex-direction: column; gap: var(--pad-1); }
+
+.carapp-progress {
+  width: var(--action-icon);
+  height: var(--action-icon);
+  margin: var(--pad-4) auto;
+  border: 3px solid var(--surface-raised);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: carapp-spin 1s linear infinite;
+}
+@keyframes carapp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .carapp-progress { animation-duration: 3s; }
+  .carapp-toggle, .carapp-toggle::after, .carapp-clickable { transition: none; }
+}
+
+/* ---- toasts and alerts (carapp-popups, above the templates) ---- */
+#carapp-overlay .carapp-popups { pointer-events: none; }
+.carapp-toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--card-bottom) + var(--pad-5));
+  transform: translateX(-50%);
+  max-width: 60%;
+  padding: var(--pad-2) var(--pad-5);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--on-surface);
+  box-shadow: var(--lift);
+  font-size: var(--body3);
+  text-align: center;
+  animation: carapp-fade-in 160ms ease-out;
+}
+.carapp-alert {
+  position: absolute;
+  top: var(--card-top);
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(var(--card-width) * 1.3);
+  box-sizing: border-box;
+  padding: var(--pad-3);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--lift);
+  pointer-events: auto;
+  overflow: hidden;
+  animation: carapp-fade-in 160ms ease-out;
+}
+.carapp-alert-top { display: flex; align-items: center; gap: var(--pad-3); }
+.carapp-alert-timer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 4px;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  animation-name: carapp-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes carapp-countdown { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes carapp-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .carapp-toast, .carapp-alert { animation: none; }
+}
+
+/* ---- motion ----
+   A new screen comes in once: cards slide from the left edge they are anchored to, full-screen
+   lists rise a little, the floating buttons fade in. A press answers under the finger. Updates
+   of the same screen (distances, results) do not move. */
+.carapp-clickable:active { transform: scale(0.96); }
+.carapp-row.carapp-clickable:active, .carapp-grid-item.carapp-clickable:active { transform: scale(0.985); }
+
+.carapp-layer.enter .carapp-card {
+  animation: carapp-card-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.carapp-layer.enter .carapp-card.travel { animation-name: carapp-card-up; animation-delay: 40ms; }
+.carapp-layer.enter.fullscreen > .carapp-content {
+  animation: carapp-screen-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.carapp-layer.enter .carapp-strip {
+  animation: carapp-fade-in 200ms ease-out 60ms both;
+}
+.carapp-layer.enter .carapp-row {
+  animation: carapp-row-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.carapp-layer.enter .carapp-row:nth-child(2) { animation-delay: 25ms; }
+.carapp-layer.enter .carapp-row:nth-child(3) { animation-delay: 50ms; }
+.carapp-layer.enter .carapp-row:nth-child(4) { animation-delay: 75ms; }
+.carapp-layer.enter .carapp-row:nth-child(n+5) { animation-delay: 100ms; }
+.carapp-maneuver { transition: background-color 200ms ease; }
+.carapp-maneuver .carapp-icon, .carapp-maneuver .carapp-glyph { animation: carapp-pop 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.carapp-alert { animation: carapp-alert-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.carapp-toast { animation: carapp-toast-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+@keyframes carapp-card-in { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+@keyframes carapp-card-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes carapp-screen-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes carapp-row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes carapp-pop { from { transform: scale(0.85); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@keyframes carapp-alert-in { from { opacity: 0; transform: translate(-50%, -16px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes carapp-toast-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .carapp-layer.enter .carapp-card, .carapp-layer.enter.fullscreen > .carapp-content,
+  .carapp-layer.enter .carapp-strip, .carapp-layer.enter .carapp-row,
+  .carapp-maneuver .carapp-icon, .carapp-maneuver .carapp-glyph,
+  .carapp-alert, .carapp-toast { animation: none; }
+  .carapp-clickable:active { transform: none; }
+}
+
+/* the host's end-drive control on the arrival card (only while the app navigates) */
+.carapp-travel { align-items: center; }
+.carapp-travel-text { display: flex; flex-direction: column; gap: 2px; }
+.carapp-travel-text .carapp-row-text { display: block; white-space: nowrap; }
+.carapp-end {
+  margin-left: calc(-1 * var(--pad-2));
+  width: calc(var(--touch-target) * 0.8);
+  height: calc(var(--touch-target) * 0.8);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #c5221f;
+  color: #fff;
+  flex: none;
+}
+
+/* ---- panes (pane_view): a details page, not a list ---- */
+.carapp-root { --message-image: calc(var(--nav-large-image) * 1.1); --pane-image: calc(var(--row-image-large) * 2); }
+.carapp-pane-rows { display: flex; flex-direction: column; gap: var(--pad-3); padding: var(--pad-1) var(--pad-3) var(--pad-2); }
+.carapp-pane-rows .carapp-row { padding: 0; min-height: 0; align-items: flex-start; background: none !important; }
+.carapp-pane-rows .carapp-row-title { -webkit-line-clamp: 3; }
+.carapp-pane-rows .carapp-row-text { -webkit-line-clamp: 6; line-height: 1.4; }
+/* the first row is the subject: larger */
+.carapp-pane-rows .carapp-row:first-child .carapp-row-title { font-size: var(--body1); line-height: 1.15; }
+.carapp-icon.pane-image { width: 100%; height: var(--pane-image); border-radius: var(--radius-row); margin-bottom: var(--pad-2); }
+
+/* actions under a pane or a message: titled ones share the width, icon-only ones are round */
+.carapp-actions { align-items: center; }
+.carapp-actions .carapp-action.with-title { flex: 1 1 0; }
+.carapp-actions .carapp-action.round {
+  flex: none;
+  padding: 0;
+  width: var(--action-height);
+  min-width: var(--action-height);
+  min-height: var(--action-height);
+}
+
+/* button labels stay on one line (car hosts ellipsize them) */
+.carapp-action-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* a message's title may take two lines */
+.carapp-content.message .carapp-header-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
+
+/* a message: title at the top, the icon, text and buttons centred */
+.carapp-content.message > .carapp-body { display: flex; align-items: center; justify-content: center; }
+.carapp-content.message .carapp-message { width: 100%; max-width: calc(var(--row-list-max) * 0.85); }
+.carapp-content.message .carapp-actions { width: 100%; padding: var(--pad-3) 0 0; }
+
+/* the default action (Action.FLAG_DEFAULT): filled like the primary action; while the host's
+   countdown runs, it fills from the start to the end, then the host runs it */
+.carapp-action.default-action { position: relative; overflow: hidden; isolation: isolate; background: var(--fill, var(--accent)); color: var(--on-accent); }
+.carapp-action.default-action.counting { background: var(--surface-raised); color: var(--on-surface); }
+.carapp-action.default-action.counting::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--fill, var(--accent));
+  opacity: 0.5;
+  transform-origin: left center;
+  animation: carapp-fill var(--countdown-ms, 10s) linear var(--countdown-delay, 0ms) both;
+}
+[dir="rtl"] .carapp-action.default-action.counting::before { transform-origin: right center; }
+@keyframes carapp-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* a row's own actions (Row.addAction): an icon in a round button, or a coloured text action */
+.carapp-row > .row-action { flex: none; align-self: center; }
+.carapp-row > .row-action:not(.with-title) { min-width: calc(var(--touch-target) * 0.85); min-height: calc(var(--touch-target) * 0.85); padding: 0; }
+.carapp-row > .row-action.with-title:not(.primary) { background: transparent; color: var(--accent); min-width: 0; padding: 0 var(--pad-2); }
+
+/* route lists: the chosen route lit, with its start action as blue text under its lines */
+.carapp-list.routes .carapp-row.selected { background: var(--surface-raised); }
+.carapp-list.routes .carapp-row:not(.selected) .carapp-row-title { color: var(--on-surface-dim); }
+.carapp-action.route-go {
+  align-self: flex-start;
+  min-height: 0;
+  min-width: 0;
+  margin-top: var(--pad-1);
+  padding: var(--pad-0) var(--pad-3);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* a number on a row's image (Row.setNumericDecoration) */
+.carapp-decorated { position: relative; display: inline-flex; flex: none; }
+.carapp-decoration {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  min-width: 1.5em;
+  padding: 0 0.3em;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: calc(var(--body3) * 0.8);
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ---- the map actions folded into ± over the bare map ---- */
+.carapp-zoom-glyph { width: var(--action-icon); height: var(--action-icon); }
+.carapp-strip.map.open .carapp-fab:not(.persistent) { animation: carapp-pop 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.carapp-strip.map.open .carapp-fab:nth-child(2) { animation-delay: 30ms; }
+.carapp-strip.map.open .carapp-fab:nth-child(3) { animation-delay: 60ms; }
+
+/* ---- the next step as a pill while a panel covers the steps card ---- */
+.carapp-pill {
+  position: absolute;
+  top: var(--card-top);
+  left: calc(var(--card-start) * 2 + var(--card-width));
+  max-width: calc(100% - var(--card-start) * 3 - var(--card-width) - var(--touch-target) * 3);
+  display: flex;
+  align-items: baseline;
+  gap: var(--pad-2);
+  padding: var(--pad-2) var(--pad-4);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--lift);
+  font-size: var(--body2);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+  animation: carapp-fade-in 200ms ease-out both;
+}
+.carapp-pill b { font-weight: 700; font-variant-numeric: tabular-nums; }
+.carapp-pill .dot { color: var(--on-surface-dim); }
+.carapp-pill span:last-child { overflow: hidden; text-overflow: ellipsis; color: var(--on-surface-dim); }
+
+/* ---- paging arrows of a full-screen list (the host's paged list) ---- */
+.carapp-pager {
+  position: absolute;
+  left: var(--pad-3);
+  top: calc(var(--pad-3) + var(--touch-target) + var(--pad-4));
+  bottom: var(--pad-4);
+  display: none;
+  flex-direction: column;
+  justify-content: space-between;
+  z-index: 1;
+}
+.carapp-pager.shown { display: flex; }
+.carapp-page {
+  width: var(--touch-target);
+  height: var(--touch-target);
+  border-radius: 50%;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.carapp-page::before { font-family: "Material Symbols Car"; content: "\e5cc"; font-size: var(--action-icon); color: var(--on-surface); }
+.carapp-page.up::before { transform: rotate(-90deg); }
+.carapp-page.down::before { transform: rotate(90deg); }
+.carapp-page.disabled { opacity: 0.3; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .carapp-action.default-action.counting::before { animation-duration: var(--countdown-ms, 10s); }
+  .carapp-strip.map.open .carapp-fab, .carapp-pill { animation: none; }
+}

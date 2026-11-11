@@ -52,7 +52,8 @@ inst \
   libicu-dev libssl-dev libexpat1-dev liblz4-dev liblzma-dev zlib1g-dev libpng-dev libselinux1-dev \
   valgrind python-is-python3 \
   libsndfile1-dev libsdl2-dev \
-  libasm-java libgetopt-java
+  libasm-java libgetopt-java \
+  webp-pixbuf-loader
 
 log "tacomp private stack deps (wayland, libdrm, xkbcommon, wlroots 0.20 built from source)"
 inst \

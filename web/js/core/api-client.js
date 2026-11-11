@@ -51,6 +51,15 @@
       return this._postJson(this.apiBaseUrl + "/keyboard", { mode });
     }
 
+    // teslalinux: the app's interface ("phone" | "car"; services/api/api.py)
+    fetchAppInterface() {
+      return this._fetchJson(this.apiBaseUrl + "/appInterface");
+    }
+
+    setAppInterface(value) {
+      return this._postJson(this.apiBaseUrl + "/appInterface", { interface: value });
+    }
+
     // teslalinux: what the device is connected to right now (services/api/api.py)
     fetchStatus() {
       return this._fetchJson(this.apiBaseUrl + "/status");

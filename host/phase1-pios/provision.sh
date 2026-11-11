@@ -31,7 +31,7 @@ apt-get install -y -q --no-install-recommends \
   modemmanager network-manager usb-modeswitch usb-modeswitch-data uhubctl \
   mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 libgbm1 \
   seatd \
-  v4l-utils i2c-tools rtc-tools \
+  v4l-utils i2c-tools rtc-tools webp-pixbuf-loader \
   git curl ca-certificates
 # Packages pulled in only for development that we don't want: none of the desktop stack.
 apt-get autoremove -y -q
@@ -131,12 +131,13 @@ install -m 0755 "$HERE/teslalinux-atl" /usr/local/bin/teslalinux-atl
 install -m 0755 "$REPO/host/teslalinux-restart-app" /usr/local/bin/teslalinux-restart-app
 install -m 0755 "$REPO/host/teslalinux-set-locale" /usr/local/bin/teslalinux-set-locale
 install -m 0755 "$REPO/host/teslalinux-set-keyboard" /usr/local/bin/teslalinux-set-keyboard
+install -m 0755 "$REPO/host/teslalinux-set-app-interface" /usr/local/bin/teslalinux-set-app-interface
 install -m 0755 "$REPO/host/teslalinux-network" /usr/local/bin/teslalinux-network
 install -m 0755 "$REPO/host/teslalinux-system-update" /usr/local/bin/teslalinux-system-update
 install -m 0755 "$REPO/host/teslalinux-uplink" /usr/local/bin/teslalinux-uplink
 install -m 0755 "$REPO/host/teslalinux-dexopt" /usr/local/bin/teslalinux-dexopt
 install -m 0644 "$REPO/tools/atl-vm/mk-android-tzdata.py" /usr/local/lib/teslalinux/mk-android-tzdata.py
-echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update' > /etc/sudoers.d/teslalinux
+echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update' > /etc/sudoers.d/teslalinux
 chmod 0440 /etc/sudoers.d/teslalinux
 # tacomp is written against wlroots 0.20; Debian trixie ships 0.18 (see docs/CAR-STACK-READINESS.md,
 # "Pi OS blockers"): a binary built for this system is installed when one exists
