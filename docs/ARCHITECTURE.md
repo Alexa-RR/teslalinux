@@ -175,6 +175,20 @@ softAp*, offlineMode*, …) on :8081 so `web/` runs unchanged, plus our own rout
 app state and restart, app updates, locale, keyboard, network, status, system update). Privileged changes go through one sudoers rule
 per helper (`teslalinux-apply-display`, `teslalinux-restart-app`, …).
 
+### 4.7 Car app host (opt-in, in progress)
+
+Waze ships a car UI built on the Car App Library (`androidx.car.app`, `WazeCarAppService`): the app
+sends templates (navigation, maneuvers, ETA, lists) to a host that draws them on a car screen. ATL
+runs such a host in the app's process (`ATL_CAR_HOST=1` in `/etc/teslalinux/atl.env`, off by
+default). The host is part of the platform, as Android Auto's host is a privileged app: it calls the
+app with the system uid as its Binder identity and presents itself as the framework package
+`android`, signed with ATL's own platform key (made at ATL's build time). Waze's host validator
+accepts that as a system binding without any change to Waze or its configuration (Waze's own
+"validate host connections" setting stays on). The host also answers the library's car connection
+query (`androidx.car.app.connection`) with "projection". Today it only logs the session and every
+template Waze returns (`ATLCarHost` in the app's log, with `ANDROID_LOG_TAGS='*:w ATLCarHost:i'`);
+rendering the templates on the car page is the next step.
+
 ## 5. Certificate
 
 Every car serves `car.alexahub.dev` with one shared, publicly trusted certificate (two slots, current
