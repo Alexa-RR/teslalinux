@@ -16,7 +16,6 @@
 #   --apk PATH           install Waze from this split-APK bundle (.apkm/.xapk/.apks/zip) or directory
 #   --waze apkpure|none  apkpure: download Waze now (verified against Waze's signing certificate; it
 #                        installs at the reboot); none: leave it to the car page's upload screen
-#   --tls-key FILE       use this TLS private key (reinstalling a car whose certificate is issued)
 #   --payload DIR        take configs and scripts from this repo checkout instead of the dist's copy
 #   --no-trim            leave the boot-time trimming out
 #   --no-prewarm         do not build ART's boot image now (the first app start does it)
@@ -30,7 +29,7 @@
 #                                  last install run that changed them
 #   teslalinux uninstall [--keep-data] [--yes]
 #                                  every file and unit setting back to before the first install;
-#                                  --keep-data keeps the app, its data, settings and the TLS key
+#                                  --keep-data keeps the app, its data, settings and certificates
 #
 # Idempotent: every step records a hash of its inputs (and of its own code) in
 # /var/lib/teslalinux/install.state and is skipped while they are unchanged. Every system file it
@@ -188,7 +187,7 @@ inputs() {
     files) hash_paths "$PAYLOAD/host" "$PAYLOAD/services" "$PAYLOAD/tools" ;;
     config) echo "$(hash_paths "$PAYLOAD/host/phase1-pios/env" "$ENVF" "${CONFIG:-/nonexistent}") ${SETS[*]:-}" ;;
     network) hash_paths "$ENVF" "$PAYLOAD/host/phase1-pios/etc" "$PAYLOAD/host/teslalinux-render" ;;
-    tls) echo "$(hash_paths "$ENVF" "${TLS_KEY_FILE:-/nonexistent}" /usr/local/bin/teslalinux-tls)" ;;
+    tls) hash_paths "$ENVF" "$PAYLOAD/tls" /usr/local/bin/teslalinux-tls ;;
     web) hash_paths "$ENVF" "$PAYLOAD/web" "$PAYLOAD/host/phase1-pios/etc" /etc/teslalinux/tls ;;
     audio) echo "-" ;;
     display) model ;;
@@ -197,7 +196,7 @@ inputs() {
     prewarm) echo "$PREWARM $(readlink -f "$PREFIX") $(ls "$TESLA_HOME"/.cache/art/*/*boot*.art 2>/dev/null | head -1)" ;;
     trim) echo "-" ;;
     boot) echo "$(model) $(rtc_detect) $(hash_paths "$PAYLOAD/host/rpi4")" ;;
-    enable) echo "$(hash_paths /etc/systemd/system) $(tls_fetch_url) $TRIM" ;;
+    enable) echo "$(hash_paths /etc/systemd/system) $(tls_base_url) $TRIM" ;;
   esac
 }
 
@@ -210,7 +209,8 @@ env_get() { # FILE KEY: the value with shell semantics (the env file is a source
 env_has() { [[ -r "$1" ]] && env -i sh -c 'set -a; . "$1" >/dev/null 2>&1; eval "[ -n \"\${$2+x}\" ]"' sh "$1" "$2"; }
 env_keys() { [[ -r "$1" ]] && sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Z_][A-Z0-9_]*\)=.*/\2/p' "$1" | awk '!seen[$0]++' || true; }
 cfg() { env_get "$ENVF" "$1"; }
-tls_fetch_url() { cfg TLS_FETCH_URL; }
+# where the shared car certificate is fetched from (empty: fetching is off)
+tls_base_url() { cfg TLS_BASE_URL; }
 manifest_get() { [[ -f "$PREFIX/MANIFEST" ]] && sed -n "s/^$1=//p" "$PREFIX/MANIFEST" | head -1 || true; }
 boot_dir() { if [[ -f /boot/firmware/config.txt ]]; then echo /boot/firmware; else echo /boot; fi; }
 rtc_detect() { # yes | no | unknown (i2c not enabled yet: known after the reboot)
@@ -242,7 +242,7 @@ usage() {
 }
 
 parse_install_args() {
-  DIST=latest DIST_SHA_WANT="" CONFIG="" APK="" WAZE_MODE="" TLS_KEY_FILE="" PAYLOAD_OVERRIDE=""
+  DIST=latest DIST_SHA_WANT="" CONFIG="" APK="" WAZE_MODE="" PAYLOAD_OVERRIDE=""
   TRIM=1 PREWARM=1 FORCE=0 YES=0 REBOOT=ask
   SETS=()
   while [[ $# -gt 0 ]]; do
@@ -253,7 +253,6 @@ parse_install_args() {
       --set) [[ "${2:-}" =~ ^[A-Z_][A-Z0-9_]*= ]] || die "--set KEY=VALUE"; SETS+=("$2"); shift ;;
       --apk) APK=${2:?}; WAZE_MODE=apk; shift ;;
       --waze) WAZE_MODE=${2:?}; shift; [[ $WAZE_MODE == apkpure || $WAZE_MODE == none ]] || die "--waze apkpure|none" ;;
-      --tls-key) TLS_KEY_FILE=${2:?}; shift ;;
       --payload) PAYLOAD_OVERRIDE=${2:?}; shift ;;
       --no-trim) TRIM=0 ;;
       --no-prewarm) PREWARM=0 ;;
@@ -268,12 +267,10 @@ parse_install_args() {
   done
   [[ -z "$APK" || -e "$APK" ]] || die "--apk: no such file or directory: $APK"
   [[ -z "$CONFIG" || -r "$CONFIG" ]] || die "--config: cannot read $CONFIG"
-  [[ -z "$TLS_KEY_FILE" || -r "$TLS_KEY_FILE" ]] || die "--tls-key: cannot read $TLS_KEY_FILE"
   [[ -z "$DIST_SHA_WANT" || "$DIST_SHA_WANT" =~ ^[0-9a-fA-F]{64}$ ]] || die "--sha256 needs 64 hex digits"
   DIST_SHA_WANT=${DIST_SHA_WANT,,}
   [[ -n "$APK" ]] && APK=$(readlink -f "$APK")
   [[ -n "$CONFIG" ]] && CONFIG=$(readlink -f "$CONFIG")
-  [[ -n "$TLS_KEY_FILE" ]] && TLS_KEY_FILE=$(readlink -f "$TLS_KEY_FILE")
   return 0
 }
 
@@ -600,16 +597,21 @@ EOF
 }
 
 step_tls() {
-  local key; key=$(cfg TLS_KEY); key=${key:-/etc/teslalinux/tls/privkey.pem}
+  local b=/usr/share/teslalinux/tls
   install -d -m 0755 "$STATE_DIR/tls-state"
-  if [[ -n "$TLS_KEY_FILE" ]]; then
-    openssl pkey -in "$TLS_KEY_FILE" -noout 2>/dev/null || die "--tls-key $TLS_KEY_FILE is not a private key"
-    install -d -m 0700 "$(dirname "$key")"
-    track "$key"
-    install -m 0600 "$TLS_KEY_FILE" "$key"
+  # the shared car certificate as published when this release was built (pack-dist.sh), so the car
+  # page works before the Pi's first uplink; teslalinux-tls init installs a pair only if it passes
+  # every check and is newer than the one installed, and teslalinux-tls-fetch.timer keeps it current
+  rm -rf "$b"
+  if [[ -s "$PAYLOAD/tls/current/fullchain.pem" || -s "$PAYLOAD/tls/standby/fullchain.pem" ]]; then
+    install -d -m 0700 "$b"
+    cp -r "$PAYLOAD/tls/." "$b/"
+    chmod -R go-rwx "$b"
+  else
+    warn "this release carries no certificate pairs: the Pi fetches them on its first uplink (self-signed until then)"
   fi
-  # key + CSR made here (never leaving the Pi), self-signed placeholder until the issued chain is fetched
-  /usr/local/bin/teslalinux-tls init
+  # no nginx test/reload here: step_web renders the site, tests it and restarts nginx next
+  TLS_NO_RELOAD=1 /usr/local/bin/teslalinux-tls init
 }
 
 step_web() {
@@ -877,7 +879,7 @@ step_enable() {
     teslalinux-appupdate.timer teslalinux-appupdate-boot.service teslalinux-appupdate-health.service)
   [[ $TRIM == 1 ]] && en+=(teslalinux-cpufreq.service)
   unit_set enable "${en[@]}"
-  if [[ -n "$(tls_fetch_url)" ]]; then unit_set enable teslalinux-tls-fetch.timer; fi
+  if [[ -n "$(tls_base_url)" ]]; then unit_set enable teslalinux-tls-fetch.timer; fi
   # an earlier provisioning's certificate daemon unit; the timer replaces it
   if [[ -f /etc/systemd/system/teslalinux-tls.service ]]; then
     unit_set disable teslalinux-tls.service; track /etc/systemd/system/teslalinux-tls.service; rm -f /etc/systemd/system/teslalinux-tls.service
@@ -898,9 +900,12 @@ summary() {
   fi
   log "car page: https://$host/ (in the car's browser, on the hotspot)"
   log "Waze: ${WAZE_STATUS:-unchanged}"
-  log "certificate: a self-signed placeholder until the issued chain arrives. The device's CSR:"
-  log "  sudo teslalinux-tls export-csr > device.csr.pem   (commit it as host/tls/device.csr.pem in your"
-  log "  copy of the repo and run its tls-renew workflow; see docs/CAR-STACK-READINESS.md, Certificate)"
+  local served; served=$(cat /etc/teslalinux/tls/served 2>/dev/null || echo none)
+  if [[ "$served" == current || "$served" == standby ]]; then
+    log "certificate: the shared $host certificate ($served slot), kept current from $(tls_base_url)"
+  else
+    log "certificate: self-signed until the Pi fetches the shared one from $(tls_base_url) (first uplink)"
+  fi
   log "log: $LOG"
   log "after the reboot: sudo teslalinux doctor"
 }
@@ -1117,9 +1122,9 @@ cmd_uninstall() {
   done
   [[ $EUID -eq 0 ]] || die "run as root"
   if [[ $keep == 1 ]]; then
-    log "uninstall: system files and units back to before the first install; the app, its data, the settings and the TLS key stay"
+    log "uninstall: system files and units back to before the first install; the app, its data, the settings and the certificates stay"
   else
-    log "uninstall: everything, including the app, its data, the settings, the TLS key and the tesla user"
+    log "uninstall: everything, including the app, its data, the settings, the certificates and the tesla user"
   fi
   ask "Uninstall teslalinux?" || die "stopped"
   local pk; pk=$(manifest_get packages)

@@ -111,12 +111,12 @@ guest_install() {
 }
 
 guest_setup() {
-  mkdir -p "$G"/{logs,run,state,tmp,tls-public,config/pipewire/pipewire.conf.d,config/wireplumber/wireplumber.conf.d}
+  mkdir -p "$G"/{logs,run,state,tmp,config/pipewire/pipewire.conf.d,config/wireplumber/wireplumber.conf.d}
   { cat "$SRC/host/phase1-pios/env"
-    printf '\n# carstack overrides\nTLS_CERT=%s\nTLS_KEY=%s\nTLS_FETCH_URL=\n' "$G/tls/fullchain.pem" "$G/tls/privkey.pem"
+    printf '\n# carstack overrides\nTLS_CERT=%s\nTLS_KEY=%s\nTLS_BASE_URL=\n' "$G/tls/fullchain.pem" "$G/tls/privkey.pem"
   } >"$G/env"
-  TESLALINUX_ENV="$G/env" TLS_PUBLIC_DIR="$G/tls-public" TLS_STATE="$G/state/tls.json" TLS_BUILD_TIME_FILE=/nonexistent \
-    TLS_BAKED_CHAIN=/nonexistent TLS_NO_RELOAD=1 TLS_PIDFILE="$RUN/tls.pid" sh "$SRC/host/tls/teslalinux-tls" init 2>>"$G/logs/tls.log"
+  TESLALINUX_ENV="$G/env" TLS_STATE="$G/state/tls.json" TLS_BUILD_TIME_FILE=/nonexistent \
+    TLS_BUNDLE_DIR=/nonexistent TLS_NO_RELOAD=1 TLS_PIDFILE="$RUN/tls.pid" sh "$SRC/host/tls/teslalinux-tls" init 2>>"$G/logs/tls.log"
   python3 "$SRC/host/teslalinux-render" --root "$ROOT" --live --layout alpine --only web \
     --templates "$SRC/host/phase1-pios/etc" --env "$G/env" --state "$G/state/props.json" \
     --web-root "$SRC/web" --http-port "$GUEST_HTTP" --https-port "$GUEST_HTTPS"
@@ -177,7 +177,7 @@ guest_start() {
   fi
   export TESLALINUX_ENV="$G/env" TESLALINUX_STATE="$G/state/props.json" TESLALINUX_APPLY_SUDO=0 \
     TESLALINUX_APPLY_DISPLAY="$SRC/host/alpine/teslalinux-apply-display" TESLALINUX_DISPLAY_ENV="$G/state/display.env" \
-    TESLALINUX_CERT_STATE="$G/state/tls.json" TESLALINUX_CSR="$G/tls-public/device.csr.pem" \
+    TESLALINUX_CERT_STATE="$G/state/tls.json" \
     PULSE_SERVER="unix:$XDG/pulse/native"
   start_daemon api python3 "$SRC/services/api/api.py"
   start_daemon gps python3 "$SRC/services/gps/gps.py"

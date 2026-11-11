@@ -1,9 +1,9 @@
 #!/sbin/openrc-run
-# teslalinux: keep the car's certificate current. teslalinux-tls daemon fetches the public chain the
-# cloud renewer publishes (TLS_FETCH_URL), installs it only when it matches our key and passes every
-# check, at start (jittered), every 6 h, with exponential backoff, and at once when an uplink comes up
-# (dhcpcd's exit hook sends SIGUSR1). It never blocks boot or nginx: nginx starts with whatever chain
-# (or self-signed placeholder) is already there, and this only ever reloads it.
+# teslalinux: keep the shared car certificate current. teslalinux-tls daemon fetches both slots and
+# active.json from TLS_BASE_URL, installs a pair only when it passes every check, serves the active
+# slot (or the other valid one), at start (jittered), every 6 h, with exponential backoff, and at
+# once when an uplink comes up (dhcpcd's exit hook sends SIGUSR1). It never blocks boot or nginx:
+# nginx starts with whatever pair (or self-signed fallback) is already there, and this only reloads it.
 description="teslalinux certificate fetcher"
 command=/usr/local/bin/teslalinux-tls
 command_args="daemon"

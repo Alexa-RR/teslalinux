@@ -22,8 +22,8 @@
 # --vm        the VM has no GPU, no V4L2 encoder and no IPv6 route: tacomp on pixman (its m2m mode
 #             falls back to CPU JPEG by itself), ATL on GTK's cairo renderer with Mesa llvmpipe for the
 #             app's GLES, IPv6 off (Java resolves AAAA first and gRPC/okhttp fail with ENETUNREACH)
-# --self-signed  keep teslalinux-tls's self-signed certificate (no cloud-renewer fetch timer): the
-#             cloud chain belongs to the car's key, not to a test machine's
+# --self-signed  keep teslalinux-tls's self-signed fallback (no fetch timer); without it the machine
+#             fetches the shared car certificate like a car does (--cert-fetch)
 # guest-install defaults to all three when run in a VM (systemd-detect-virt), to none otherwise.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

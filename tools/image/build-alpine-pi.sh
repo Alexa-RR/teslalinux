@@ -3,12 +3,11 @@
 #
 #   build-alpine-pi.sh --atl-prefix atl-prefix.tar.gz --apps apps.tar.gz [--env env] [--out teslalinux.img]
 #                      [--size 6G] [--rootfs-only DIR]
-#   env TLS_CHAIN_SRC=fullchain.pem bakes the current public certificate chain into the image
-#   (/usr/share/teslalinux/tls/fullchain.pem). It is installed at first boot only if it passes the
-#   same checks as a fetched chain, above all that it belongs to this Pi's key; a freshly flashed card
-#   makes a new key, so a baked chain only helps when the key directory survives (see
-#   docs/CAR-STACK-READINESS.md "Certificate"). No key and no DNS/ACME credential ever goes into the
-#   image.
+#   env TLS_BUNDLE_SRC=DIR bakes the shared car certificate into the image (/usr/share/teslalinux/tls):
+#   DIR holds active.json and current/ and standby/ with fullchain.pem + privkey.pem each, as published
+#   at TLS_BASE_URL (or as pack-dist.sh bundles them). First boot installs a pair only if it passes the
+#   same checks as a fetched one (docs/CAR-STACK-READINESS.md "Certificate"); without it the Pi serves a
+#   self-signed fallback until its first fetch. No DNS/ACME credential ever goes into the image.
 #
 # Runs as root on an Alpine aarch64 host (the tools/atl-vm VM is one: `doas sh build-alpine-pi.sh`).
 # Steps: a rootfs with apk --root (packages.txt), the repo's services, web, configs rendered from
@@ -80,10 +79,18 @@ install -d -m 0755 "$ROOT/etc/teslalinux"
 cp "$ENVFILE" "$ROOT/etc/teslalinux/env"
 # teslalinux-tls treats a clock before this as "not set yet" (no RTC, no NTP yet)
 date +%s > "$ROOT/etc/teslalinux/build-time"
-if [ -s "${TLS_CHAIN_SRC:-/nonexistent}" ]; then
-	install -d -m 0755 "$ROOT/usr/share/teslalinux/tls"
-	install -m 0644 "$TLS_CHAIN_SRC" "$ROOT/usr/share/teslalinux/tls/fullchain.pem"
-	log "   baked public chain $TLS_CHAIN_SRC (used only if it matches the Pi's key)"
+if [ -d "${TLS_BUNDLE_SRC:-/nonexistent}" ]; then
+	install -d -m 0700 "$ROOT/usr/share/teslalinux/tls"
+	for s in current standby; do
+		[ -s "$TLS_BUNDLE_SRC/$s/fullchain.pem" ] && [ -s "$TLS_BUNDLE_SRC/$s/privkey.pem" ] || continue
+		install -d -m 0700 "$ROOT/usr/share/teslalinux/tls/$s"
+		install -m 0644 "$TLS_BUNDLE_SRC/$s/fullchain.pem" "$ROOT/usr/share/teslalinux/tls/$s/fullchain.pem"
+		install -m 0600 "$TLS_BUNDLE_SRC/$s/privkey.pem" "$ROOT/usr/share/teslalinux/tls/$s/privkey.pem"
+		log "   baked the $s pair of the shared car certificate (installed at first boot if it passes the checks)"
+	done
+	if [ -s "$TLS_BUNDLE_SRC/active.json" ]; then
+		install -m 0644 "$TLS_BUNDLE_SRC/active.json" "$ROOT/usr/share/teslalinux/tls/active.json"
+	fi
 fi
 # networking: the hotspot address on wlan0, DHCP on every uplink (LTE stick, Ethernet, tether) but not
 # the hotspot, and the uplink-up hook for the certificate fetcher

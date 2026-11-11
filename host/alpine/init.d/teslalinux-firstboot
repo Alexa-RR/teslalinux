@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
-# teslalinux: one-shot first boot: grow the root filesystem to the card, the device TLS key + CSR
-# (teslalinux-tls init: ECDSA P-256 made here, never leaves the Pi) and the self-signed placeholder
+# teslalinux: one-shot first boot: grow the root filesystem to the card and install the bundled car
+# certificate pairs (teslalinux-tls init; a self-signed fallback when none passes the checks)
 description="teslalinux first boot"
 
 depend() {

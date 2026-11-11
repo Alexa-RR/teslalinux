@@ -2,8 +2,9 @@
 # install this file and render every host config from it with host/teslalinux-render). Edit before
 # building or provisioning.
 
-# Hostname the car's browser will open. Must have a public DNS A record pointing at HIJACK_IP and a
-# real certificate (Let's Encrypt). The upstream project's device.teslaandroid.com cannot be reused.
+# Hostname the car's browser will open: the same for every teslalinux car, with a shared publicly
+# trusted certificate (see TLS_BASE_URL below). Its public DNS A record points at HIJACK_IP. Change it
+# only together with TLS_BASE_URL when you run your own certificate issuer.
 DEVICE_HOST=car.alexahub.dev
 # Public IP that dnsmasq hands out for DEVICE_HOST on the hotspot; nftables DNATs it to the Pi.
 # It only needs to be non-RFC1918 (the car blocks private IPs); 192.0.2.1 is TEST-NET-1, never routed,
@@ -33,11 +34,13 @@ WAYDROID_SYSTEM_TYPE=GAPPS
 OFFLINE_MODE=1
 OFFLINE_MODE_TELEMETRY=1
 OFFLINE_MODE_FIRMWARE_DOWNLOADS=1
-# Certificate. The key is generated on the Pi at first boot and never leaves it
-# (/etc/teslalinux/tls, root only); the cloud renewer (.github/workflows/tls-renew.yml) signs its CSR
-# (host/tls/device.csr.pem) through Let's Encrypt and publishes the public chain at
-# TLS_FETCH_URL; teslalinux-tls fetches it, checks that it is ours and installs it. No DNS or ACME
-# credentials on the Pi. See docs/CAR-STACK-READINESS.md "Certificate".
+# Certificate. Every car shares one publicly trusted certificate for DEVICE_HOST and its www./
+# fullscreen. names, issued and renewed by .github/workflows/tls-certs.yml and published (chain and
+# key, in two slots, current and standby, plus active.json) at TLS_BASE_URL. teslalinux-tls fetches
+# both slots, checks them (trusted chain, exact names, key matches, current, newer) and makes nginx
+# serve TLS_CERT/TLS_KEY from the slot active.json names. A release carries the pairs of its build
+# day, so a new install works offline. Self-hosting: your own DEVICE_HOST and your own issuer's
+# TLS_BASE_URL. No DNS or ACME credentials on the Pi. See docs/CAR-STACK-READINESS.md "Certificate".
 TLS_CERT=/etc/teslalinux/tls/fullchain.pem
 TLS_KEY=/etc/teslalinux/tls/privkey.pem
-TLS_FETCH_URL=https://certs.alexahub.dev/car/current/fullchain.pem
+TLS_BASE_URL=https://certs.alexahub.dev/car

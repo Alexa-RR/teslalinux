@@ -20,10 +20,8 @@ APPLY_LOG = os.path.join(TMP, "apply.log")
 with open(os.path.join(TMP, "apply"), "w") as f:
     f.write('#!/bin/sh\necho "$@" >> "%s"\n' % APPLY_LOG)
 os.chmod(os.path.join(TMP, "apply"), 0o755)
-with open(os.path.join(TMP, "csr.pem"), "w") as f:
-    f.write("-----BEGIN CERTIFICATE REQUEST-----\nMIIB\n-----END CERTIFICATE REQUEST-----\n")
 with open(os.path.join(TMP, "tls.json"), "w") as f:
-    json.dump({"notAfter": time.time() + 10 * 86400, "lastResult": "failed"}, f)
+    json.dump({"notAfter": time.time() + 10 * 86400, "lastResult": "failed", "slot": "current"}, f)
 KICK_LOG = os.path.join(TMP, "kick.log")
 UPLOADED = os.path.join(TMP, "uploaded.bin")
 with open(os.path.join(TMP, "appupdate"), "w") as f:
@@ -60,7 +58,6 @@ os.environ.update({
     "TESLALINUX_APPLY_DISPLAY": os.path.join(TMP, "apply"),
     "TESLALINUX_APPLY_SUDO": "0",
     "TESLALINUX_CERT_STATE": os.path.join(TMP, "tls.json"),
-    "TESLALINUX_CSR": os.path.join(TMP, "csr.pem"),
 })
 sys.path.insert(0, os.path.join(REPO, "services", "api"))
 import api  # noqa: E402
@@ -144,13 +141,12 @@ class Upstream(unittest.TestCase):
                                      "is_carplay_detected", "release_type", "ota_url"})
         self.assertEqual(len(info["serial_number"]), 8)
 
-    def test_certificate_and_csr(self):
+    def test_certificate(self):
         st = json.loads(call("certificate")[2])
         self.assertTrue(9.0 < st["daysLeft"] < 10.1)
-        code, _, body = call("tls/csr")
-        self.assertEqual(code, 200)
-        self.assertTrue(body.startswith(b"-----BEGIN CERTIFICATE REQUEST-----"))
-        self.assertEqual(call("tls/csr", "POST", "x")[0], 404)  # no write route
+        self.assertEqual(st["slot"], "current")
+        self.assertEqual(call("certificate", "POST", "x")[0], 404)  # no write route
+        self.assertEqual(call("tls/csr")[0], 404)  # the per-device CSR route is gone
 
     def test_updater_absent(self):
         self.assertEqual(call("openUpdater")[0], 501)

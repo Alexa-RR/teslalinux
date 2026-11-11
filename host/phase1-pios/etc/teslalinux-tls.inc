@@ -1,7 +1,8 @@
 # teslalinux TLS (lighttpd.conf:53-59). One certificate covers DEVICE_HOST, www., fullscreen. and
 # www.fullscreen. (upstream used a second certificate for the fullscreen names, lighttpd.conf:65-68;
-# one SAN certificate serves the same names with one key). The key is made on the Pi and never leaves
-# it (host/tls/teslalinux-tls); the cloud renewer signs its CSR.
+# one SAN certificate serves the same names with one key). The pair is the shared car certificate:
+# host/tls/teslalinux-tls copies the slot active.json names (current or standby) to these two paths
+# after checking it, and reloads nginx.
 ssl_certificate     @TLS_CERT@;
 ssl_certificate_key @TLS_KEY@;
 ssl_protocols TLSv1.2 TLSv1.3;

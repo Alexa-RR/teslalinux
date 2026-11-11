@@ -36,16 +36,16 @@ compiled on the Pi: the runtime comes prebuilt from this repository's
 ```sh
 curl -fsSL https://github.com/Alexa-RR/teslalinux/releases/latest/download/install.sh | sudo bash -s -- \
   --set AP_PSK='your-hotspot-password' \
-  --set DEVICE_HOST=car.example.com \
   --waze apkpure
 ```
 
 - `AP_PSK`: the password of the Pi's Wi-Fi hotspot (`AP_SSID`, default `Teslalinux`). Leave it out
   and the installer generates one and prints it at the end.
-- `DEVICE_HOST`: the hostname the car opens, under a domain you control. The Tesla browser only
-  opens pages over HTTPS with a publicly trusted certificate, so it needs a real certificate:
-  `docs/CAR-STACK-READINESS.md`, section "Certificate" (the key stays on the Pi; issuance runs
-  elsewhere).
+- The certificate works out of the box: every car uses `https://car.alexahub.dev/`, with one shared,
+  publicly trusted certificate that this project renews automatically (the Tesla browser only opens
+  pages over HTTPS with such a certificate). The release carries the current one and the Pi keeps it
+  up to date by itself. Self-hosting your own name and issuer is optional (`DEVICE_HOST`,
+  `TLS_BASE_URL`); design and threat model: `docs/CAR-STACK-READINESS.md`, section "Certificate".
 - Waze: `--waze apkpure` downloads it (checked against Waze's own signing certificate), or
   `--apk /path/to/waze.apkm` installs a bundle you downloaded yourself, or `--waze none` leaves it
   to the upload screen of the car page.
@@ -63,7 +63,7 @@ sudo teslalinux rollback    # back to the previous release and system files
 sudo teslalinux uninstall   # remove everything (--keep-data keeps the app and settings)
 ```
 
-In the car: join the Pi's Wi-Fi, then open `https://<DEVICE_HOST>/` in the browser.
+In the car: join the Pi's Wi-Fi, then open `https://car.alexahub.dev/` in the browser.
 
 No app is included. The Pi downloads Waze itself and keeps it updated (APKPure's public API by
 default; every APK must carry the app's original signature), or you upload an app bundle from the

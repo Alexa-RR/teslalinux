@@ -17,12 +17,10 @@ so the vendored frontend in web/ runs unchanged:
 * OPTIONS on every route    204 preflight (cpp:160-165); every response carries the CORS headers of
                             the post-routing handler (cpp:673-678)
 
-Two additions that change no upstream shape (new routes, read-only, public data):
+An addition that changes no upstream shape (a new route, read-only, public data):
 * GET /api/certificate  the state of the car's TLS certificate as written by host/tls/teslalinux-tls
-                        (expiry, last fetch result) plus daysLeft; the launcher warns from it
-* GET /api/tls/csr      the device's certificate signing request (PEM), to be committed as
-                        host/tls/device.csr.pem for the cloud renewer. There is no write route
-                        for anything TLS: the key never leaves the Pi and nothing here can change it.
+                        (served slot, expiry, per-slot status, last fetch result) plus daysLeft; the
+                        launcher warns from it. There is no write route for anything TLS.
 
 The app updater (tools/appupdate/teslalinux-appupdate, docs/APP-UPDATES.md), new routes only:
 * GET  /api/appUpdate          settings + state: installed/latest/pending version, last check and result,
@@ -92,7 +90,6 @@ LOCALE_ENV = os.environ.get("TESLALINUX_LOCALE_ENV", "/etc/teslalinux/locale.env
 # the helper restarts services as root: through one sudoers rule (host setup), off for tests
 APPLY_SUDO = os.environ.get("TESLALINUX_APPLY_SUDO", "1") != "0"
 CERT_STATE = os.environ.get("TESLALINUX_CERT_STATE", "/var/lib/teslalinux/tls-state/tls.json")
-CSR_PATH = os.environ.get("TESLALINUX_CSR", "/etc/teslalinux/tls-public/device.csr.pem")
 APPUPDATE = os.environ.get("TESLALINUX_APPUPDATE", "/usr/local/bin/teslalinux-appupdate")
 APPUPDATE_STATE = os.environ.get("TESLALINUX_APPUPDATE_STATE", "/var/lib/teslalinux/appupdate/state.json")
 APPUPDATE_SETTINGS = os.environ.get("TESLALINUX_APPUPDATE_SETTINGS", "/var/lib/teslalinux/state/appupdate.json")
@@ -127,7 +124,7 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
                   ("isResponsive", tp.VD_RESPONSIVE), ("isH264", tp.VD_H264), ("refreshRate", tp.VD_REFRESH),
                   ("quality", tp.VD_QUALITY), ("isRearDisplayEnabled", tp.VD_REAR),
                   ("isRearDisplayPrioritised", tp.VD_REAR_PRIO))
-ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "tls/csr", "appState",
+ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
               "appUpdate", "locale", "keyboard", "status", "network", "systemUpdate", "wifiScan"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
                                   "locale", "keyboard", "network", "systemUpdate"}
@@ -1291,15 +1288,6 @@ class Handler(BaseHTTPRequestHandler):
         if route == "certificate":
             st = certificate_state()
             return self._json(st) if st is not None else self._send(404)
-        if route == "tls/csr":
-            try:
-                with open(CSR_PATH, "rb") as f:
-                    csr = f.read(16384)
-            except OSError:
-                return self._send(404)
-            if not csr.startswith(b"-----BEGIN CERTIFICATE REQUEST-----"):
-                return self._send(404)
-            return self._send(200, csr, "text/plain; charset=us-ascii")
         self._send(404)
 
     def do_POST(self):

@@ -17,7 +17,7 @@ platform. Both render their host configuration from the same templates with the 
 |---|---|---|
 | Web stack on the Mac (nginx + api + gps + audio, the car's rendered site) | `host/local/web-local.sh start`, then `host/local/web-local.sh check` | 63/63 checks pass |
 | Config API against upstream's contract (in-process) | `python3 services/api/test/test_api.py` | 7/7 pass |
-| Certificate acceptance on the Pi (throwaway CA; every accept/reject case) | `sh host/tls/test/run.sh` (also `TLS_TEST_SH=dash dash host/tls/test/run.sh`) | 36/36 pass under sh and dash |
+| Shared certificate: acceptance per slot, install, fetch, active.json switching and fallback, rollback, CRL, issuer decisions (throwaway CA, local HTTPS) | `sh host/tls/test/run.sh` (also `TLS_TEST_SH=dash dash host/tls/test/run.sh`) | 66/66 pass under sh and dash |
 | Whole chain with Waze in the test VM | `ATL_VM_FWD_CAR=1 tools/atl-vm/vm-mac.sh start` (fresh start), then `tools/atl-vm/carstack.sh up`, `carstack.sh check` | written, **not run yet** (shared VM) |
 | Syntax | `sh -n`/`bash -n` on every script, `python3 -m py_compile`, workflow YAML parsed | clean |
 
@@ -102,114 +102,142 @@ manager `upstream/android-external-tesla-android-configuration-manager/tesla-and
 
 ### Design
 
-* **The key never leaves the Pi.** `teslalinux-tls init` (first boot / provisioning) creates an ECDSA
-  P-256 key in `/etc/teslalinux/tls/privkey.pem` (root, dir 0700, file 0600; nginx's master process
-  reads it as root) and a CSR with exactly `car.alexahub.dev`, `www.car.alexahub.dev`,
-  `fullscreen.car.alexahub.dev`, `www.fullscreen.car.alexahub.dev`. Until a real chain arrives,
-  nginx serves a self-signed certificate for the same key (the browser warns; the launcher says so).
-* **No DNS or ACME credential on the Pi or in any image.** acme.sh, `acme.env` and `teslalinux-cert`
-  are gone from the Pi side.
-* **Issuance in the cloud.** `.github/workflows/tls-renew.yml` + `host/tls/renew.sh` sign the
-  committed CSR (`host/tls/device.csr.pem`) with Let's Encrypt over DNS-01 on Cloudflare: daily check,
-  renew when less than 1/3 of the lifetime is left or when the CA's ARI window has opened (lifetimes
-  are shrinking: 90 -> 45 days, CA/B Forum caps toward 47 days by 2029; the rule follows the
-  certificate, not a day count). Only public material is published: `current/fullchain.pem` and
-  `current/meta.json` (notBefore/notAfter, chain sha256, SPKI sha256), the previous pair under
-  `previous/` for rollback.
-* **The Pi accepts a chain only if it is ours.** `teslalinux-tls fetch`: HTTPS with the system CAs,
-  64 KiB limit, timeouts; then PEM certificates only, leaf public key == our key (or the pending
-  rotation key), `openssl verify -purpose sslserver -x509_strict` against the system store, SANs
-  exactly the four names, digitalSignature + serverAuth, notBefore <= now + 10 min, notAfter > now and
-  later than the installed trusted chain's; a clock earlier than the install time defers instead of
-  judging. Then temp file, fsync, rename, `nginx -t`, reload; on failure the previous files return.
-  Every decision is logged (`/var/log/teslalinux/tls.log`) and written to
-  `/var/lib/teslalinux/tls-state/tls.json`. The workflow runs **the same checks** (`teslalinux-tls
-  verify` with `TLS_EXPECTED_SPKI` = the CSR's key) before it publishes.
+* **One certificate for every car.** Every teslalinux car serves `car.alexahub.dev`,
+  `www.car.alexahub.dev`, `fullscreen.car.alexahub.dev` and `www.fullscreen.car.alexahub.dev`. The
+  Tesla browser only opens the page with a publicly trusted certificate, and TLS ends on each Pi, so
+  every Pi holds the same certificate **and private key**. Tesla Android does the same (its images
+  ship `device.teslaandroid.com`'s `fullchain.pem` and `privkey.pem`); teslalinux adds automatic
+  renewal, a standby certificate and checks on the Pi. Per-car names and per-user domains were
+  rejected: every user would need a domain, a DNS token and an issuer before the first start.
+* **Two slots.** `current` holds the four names; `standby` the four names plus
+  `standby.car.alexahub.dev`. A different name set means Let's Encrypt's duplicate-certificate limit
+  (5 per week per exact set) counts each slot on its own, and revoking one leaves the other.
+  `active.json` names the slot the Pis serve.
+* **Issuer: `.github/workflows/tls-certs.yml` + `host/tls/renew.sh`** in this repository: a
+  GitHub-hosted runner, environment `tls`, only on `main`, every 3 hours and on demand (`check`,
+  `issue-current`, `issue-standby`, `issue-both`; `staging` runs the whole flow against Let's Encrypt
+  staging and publishes nothing). Each run, per slot, it reads what is published (R2), runs the Pi's
+  checks on it, looks for the leaf's serial in its CRL (the CRL Distribution Points URL; the CRL must
+  verify against the chain's issuer; Let's Encrypt ended OCSP in 2025), and asks the CA's ARI endpoint
+  (RFC 9773) for the suggested renewal window. A slot is re-issued when it is missing, fails a check,
+  is revoked, has less than a third of its lifetime left, or its ARI window has opened (a window in
+  the past is how a CA asks for an early renewal). When `current` is unusable and `standby` is fine,
+  `active.json` moves to `standby` first, `current` is re-issued, then `active.json` moves back; the
+  unusable slots are always issued first, so both are never left invalid when it can be avoided.
+  Every decision is written to the job summary; a failed issuance fails the run (GitHub mails the
+  maintainer).
+* **A fresh key per issuance**, ECDSA P-256, generated on the runner and never reused (the key is
+  public in effect, and Let's Encrypt refuses keys that were reported compromised). Then the CSR,
+  DNS-01 on Cloudflare through acme.sh (pinned by commit and sha256), and **the Pi's own acceptance
+  checks** (`teslalinux-tls verify`: key matches the leaf, exact names, chain to the runner's system
+  roots with `-purpose sslserver -x509_strict`, validity, newer than the published pair) before
+  anything is published.
+* **Published** (R2 bucket `teslalinux-certs`, custom domain `certs.alexahub.dev`, prefix `car`):
+  `car/<slot>/fullchain.pem`, `privkey.pem`, `meta.json` (slot, names, serial, issuer,
+  notBefore/notAfter, chain and SPKI sha256, issuedAt); the pair before under `car/<slot>-previous/`;
+  `car/active.json` = `{"slot": "current" | "standby", "reason": ..., "updated": ...}`.
+* **On the Pi: `teslalinux-tls`.** `fetch` downloads `active.json` and both slots over HTTPS (system
+  CAs, 64 KiB limit, timeouts) and installs a slot's pair only if: PEM only (1 to 5 certificates;
+  exactly one private key), the key matches the leaf, the SANs are exactly the slot's set,
+  digitalSignature + serverAuth, the chain verifies against the system store (`-purpose sslserver
+  -x509_strict`), notBefore <= now + 10 min, notAfter > now, and notBefore later than the installed
+  pair of that slot. A clock before the image build time defers instead of judging. Slots live in
+  `/etc/teslalinux/tls/slots/<slot>/` (root, directories 0700, keys 0600). nginx serves
+  `/etc/teslalinux/tls/fullchain.pem` + `privkey.pem`: a copy of the slot `active.json` names, or of
+  the other slot when that one is missing, expired or invalid on this Pi, and a self-signed
+  certificate only when there is no trusted pair at all. Every swap: temp files, fsync, rename,
+  `nginx -t`, reload; on failure the previous files and the slot come back. Decisions go to
+  `/var/log/teslalinux/tls.log` and `/var/lib/teslalinux/tls-state/tls.json`.
+* **Works offline from the first start.** `tools/debvm/pack-dist.sh` downloads both pairs and
+  `active.json` when a release is built, checks them with `teslalinux-tls verify` and bundles them
+  (`share/teslalinux/tls/`); the installer copies them to `/usr/share/teslalinux/tls` and
+  `teslalinux-tls init` installs them. If that download fails the release still builds (with a
+  warning) and the Pi fetches at its first uplink. The Alpine image takes the same directory as
+  `TLS_BUNDLE_SRC`.
 * **When it runs (Pi OS):** `teslalinux-tls-fetch.timer` (1 min after boot, then every 6 h, 15 min
   random delay), the NetworkManager dispatcher hook `90-teslalinux-tls` when an uplink comes up (not
   within 10 min of a success), and `teslalinux-tls-fetch.service`'s `Restart=on-failure` with
   `RestartSteps`/`RestartMaxDelaySec` as exponential backoff from 1 min to 6 h. Never ordered before
   nginx or anything on the boot path. (Alpine: the same tool as an OpenRC daemon, dhcpcd exit hook.)
-* **Visibility:** `GET /api/certificate` (expiry, days left, last result, self-signed or trusted);
-  the launcher shows a small dismissable notice when fewer than 14 days are left, the last update
-  failed or was rejected, or the certificate is the placeholder (`web/js/core/cert-warning.js`).
-  `GET /api/tls/csr` serves the CSR read-only (public data); there is no write route for anything TLS.
+* **Visibility:** `GET /api/certificate` (served slot, active slot, expiry, days left, per-slot
+  status, last result, self-signed or trusted); the launcher shows a small dismissable notice when
+  fewer than 14 days are left, the last update failed or was rejected, or the certificate is the
+  self-signed fallback (`web/js/core/cert-warning.js`). There is no write route for anything TLS.
+* **Self-hosting** is optional: run the same workflow in your own fork with your own environment,
+  then set `DEVICE_HOST` and `TLS_BASE_URL` (installer: `--set`; release builds: `pack-dist.sh
+  --cert-url`). Defaults: `car.alexahub.dev`, `https://certs.alexahub.dev/car`.
 
 ### Threat model
 
-| Event | What the attacker gets | What limits it / what to do |
+The private key is effectively public: it is in every release and on every Pi. The certificate is
+what the Tesla browser requires to open the page, not proof of whose Pi it is.
+
+| Event | Impact | What limits it / what to do |
 |---|---|---|
-| Stolen Pi | the key and the current certificate (valid until expiry, at most ~90 days, 45 later) | they cannot get a new one: issuance needs the DNS token in GitHub, and the workflow only signs the committed CSR. Revoke: on the replacement Pi `teslalinux-tls rotate` (or a fresh install), commit its CSR, run the workflow with `action: revoke` (it refuses if the CSR still uses the stolen key). Reason `superseded`: Let's Encrypt accepts `keyCompromise` only when signed by the certificate's own key, which the thief has, not you |
-| Leaked Actions secret: ACME account key | an account that can request certificates | DNS-01 still needs the DNS token; rotate the account key (new key -> new account URI -> update CAA) |
-| Leaked Actions secret: Cloudflare DNS token | DNS edits in the scoped zone until the token expires | CAA `accounturi` pins issuance to our ACME account, so another account cannot get a certificate for the car names; in hardened mode the token cannot touch alexahub.dev at all; the token has an expiry date; CT monitoring reports any issuance |
-| Both of the above | certificates for the car names | CT monitoring alert; revoke, rotate both secrets, rotate the Pi key |
-| Leaked R2 token, or the download URL / CDN compromised | the ability to publish any file | substitution fails on the Pi: the chain must match the Pi's key, chain to a trusted root, carry exactly our names and be newer. The worst case is withholding renewals: the Pi keeps its certificate, the launcher warns at 14 days |
-| Push access to `main` | can change the workflow to exfiltrate secrets | the trust boundary is the repo: 2FA, no other collaborators, branch protection (no force pushes), Actions limited to GitHub-authored actions pinned by SHA |
+| Someone takes the key (from a release or a Pi) | They can present a valid certificate for the car names. | The names resolve publicly to `192.0.2.1` (TEST-NET-1, never routed) and reach a Pi only inside its own hotspot. Misusing the key needs control of the victim's network and DNS as well (for example a rogue hotspot the car joins), and then it impersonates only the car page (launcher, app stream, the browser's GPS position), no other site. Tesla Android's shared certificate has the same exposure. |
+| Revocation griefing: a key holder revokes the certificate through ACME (key possession is enough; reason keyCompromise also blocks that key) | `current` becomes revoked. | The `standby` slot keeps a valid certificate; the issuer sees the revocation within 3 h (CRL, ARI), moves `active.json` to `standby`, re-issues `current` with a fresh key and moves back. Pis follow at their next fetch (6 h, or the next uplink). Chromium-based browsers check revocation of ordinary certificates only through CRLSets, so a revoked certificate often keeps working in the car meanwhile. |
+| Sustained griefing (revoking each new certificate) | Each slot can be re-issued 5 times per week (duplicate-certificate limit per name set). | The two slots double that; a Pi keeps serving its last good pair while nothing newer validates. If it ever becomes real: add more standby name sets, shorten the check interval, report the abuse to Let's Encrypt. |
+| Leaked Actions secret: ACME account key | An account that can request certificates. | DNS-01 still needs the DNS token; rotate the account key (new key -> new account URI -> update the CAA record). |
+| Leaked Actions secret: Cloudflare DNS token | DNS edits in the scoped zone until the token expires. | The CAA `accounturi` pins issuance to our ACME account; in hardened mode the token cannot touch alexahub.dev at all; the token expires; CT monitoring reports any issuance. |
+| Leaked R2 token, or the download URL / CDN compromised | Can publish any file. | The Pi accepts only a trusted, exactly named, current pair whose key matches and that is newer than its own. The worst case is withholding renewals (the Pi keeps its pair; the launcher warns at 14 days) or flipping `active.json` between two valid slots (harmless). |
+| Push access to `main` | Can change the workflow to exfiltrate secrets. | The trust boundary is the repository: 2FA, branch protection (no force pushes), the `tls` environment limited to `main`, GitHub-authored actions pinned by SHA, approval required for workflows from outside contributors. Pull requests from forks never get the environment's secrets. |
 
-### Setup (once; exact steps)
+### Setup (maintainer, once; exact steps)
 
-1. **CSR from the Pi** (after provisioning): `sudo teslalinux-tls export-csr > device.csr.pem` (or from
-   a laptop on the hotspot: `https://car.alexahub.dev/api/tls/csr`). Commit it as
-   `host/tls/device.csr.pem` in this repo and push.
-2. **ACME account key** (on your own computer, not the Pi):
+1. **ACME account key** (on your own computer, not a Pi):
    `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out acme-account.key`; paste the
    whole file into the secret below, then keep the file offline (password manager) or delete it.
-3. **Cloudflare DNS token** (default mode): Cloudflare dashboard -> My Profile -> API Tokens -> Create
+2. **Cloudflare DNS token** (default mode): Cloudflare dashboard -> My Profile -> API Tokens -> Create
    Token -> Custom token: Permissions `Zone` / `DNS` / `Edit`; Zone Resources `Include` / `Specific
    zone` / `alexahub.dev`; TTL: an end date (e.g. one year; put a reminder in the calendar); no IP
    filter (GitHub runners have no fixed IPs). Zone ID: the alexahub.dev overview page, right column.
    **Hardened mode** (the token cannot edit alexahub.dev at all): put a separate validation zone on
-   Cloudflare (e.g. a second cheap domain, `<validation-zone>`), create the token for that zone only,
-   and add in alexahub.dev four CNAMEs:
-   `_acme-challenge.car.alexahub.dev`, `_acme-challenge.www.car.alexahub.dev`,
+   Cloudflare (`<validation-zone>`), create the token for that zone only, and add in alexahub.dev
+   five CNAMEs, DNS only: `_acme-challenge.car.alexahub.dev`, `_acme-challenge.www.car.alexahub.dev`,
    `_acme-challenge.fullscreen.car.alexahub.dev`, `_acme-challenge.www.fullscreen.car.alexahub.dev`
-   -> `_acme-challenge.<validation-zone>` (DNS only). Then set `CHALLENGE_ALIAS=<validation-zone>` and
-   `CF_ZONE_ID` = the validation zone's ID.
-4. **R2 bucket**: R2 -> Create bucket `teslalinux-certs` -> Settings -> Custom Domains -> Connect
+   and `_acme-challenge.standby.car.alexahub.dev` -> `_acme-challenge.<validation-zone>`. Then set
+   `CHALLENGE_ALIAS=<validation-zone>` and `CF_ZONE_ID` = the validation zone's ID.
+3. **R2 bucket**: R2 -> Create bucket `teslalinux-certs` -> Settings -> Custom Domains -> Connect
    `certs.alexahub.dev` (keep the r2.dev URL disabled). R2 -> Manage R2 API Tokens -> Create API
    token: `Object Read & Write`, "Apply to specific buckets only" = `teslalinux-certs`, TTL as above
-   -> note Access Key ID and Secret Access Key (R2 has no write-only permission; reading public
-   certificates exposes nothing). Account ID: R2 overview page.
-5. **GitHub Environment** (repo -> Settings -> Environments -> New environment `tls`):
+   -> note Access Key ID and Secret Access Key. Account ID: R2 overview page.
+4. **GitHub Environment** in this repository (Settings -> Environments -> New environment `tls`):
    Deployment branches and tags: "Selected branches and tags", rule `main`. Required reviewers: **off**
-   (a reviewer gate would hold every scheduled run until someone approves it).
-   Secrets: `ACME_ACCOUNT_KEY` (step 2, whole PEM), `CF_DNS_API_TOKEN` (step 3), `R2_ACCESS_KEY_ID`,
-   `R2_SECRET_ACCESS_KEY` (step 4).
+   (a reviewer gate would hold every scheduled run).
+   Secrets: `ACME_ACCOUNT_KEY` (step 1, whole PEM), `CF_DNS_API_TOKEN` (step 2), `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY` (step 3).
    Variables: `DEVICE_HOST=car.alexahub.dev`, `CF_ZONE_ID=<zone id>`, `R2_ACCOUNT_ID=<account id>`,
    `R2_BUCKET=teslalinux-certs`, `CERT_PATH_PREFIX=car`, `PUBLIC_BASE_URL=https://certs.alexahub.dev/car`;
    optional `CHALLENGE_ALIAS`, `ACME_EMAIL`, `CF_ACCOUNT_ID`.
-6. **Repo Actions policy** (Settings -> Actions -> General): allow only actions created by GitHub,
-   require actions to be pinned to a full-length commit SHA, default workflow permissions read-only.
-   Branch protection on `main`: block force pushes and deletion.
-7. **First runs**: Actions -> tls-renew -> Run workflow with `staging: true` (whole flow, nothing
-   published), then with `action: issue`. The job summary and the log line `ACME account: ...` show the
-   **account URI** for the CAA record.
-8. **DNS hardening** (Cloudflare DNS for alexahub.dev):
+5. **Repository settings**: Settings -> Actions -> General: allow only actions created by GitHub,
+   require actions to be pinned to a full-length commit SHA, default workflow permissions read-only,
+   require approval for workflows from outside collaborators. Branch protection on `main`: block force
+   pushes and deletion.
+6. **First runs**: Actions -> tls-certs -> Run workflow with `staging: true` (the whole flow, nothing
+   published), then with `action: issue-both`. Check `https://certs.alexahub.dev/car/active.json`. The
+   job summary shows the **ACME account URI** for the CAA record.
+7. **DNS** (Cloudflare DNS for alexahub.dev):
    * A records, **DNS only** (grey cloud): `car`, `www.car`, `fullscreen.car`, `www.fullscreen.car`
-     -> `192.0.2.1`.
-   * CAA, after step 7, on the **`car.alexahub.dev`** node (CAA lookups climb from each name, so this
-     covers all four names and leaves the apex and `certs.alexahub.dev` to Cloudflare's own edge
-     certificates, which a pin at the apex would block):
-     `car.alexahub.dev CAA 0 issue "letsencrypt.org; accounturi=<ACME account URI>; validationmethods=dns-01"`,
-     `car.alexahub.dev CAA 0 issuewild ";"`,
+     -> `192.0.2.1` (`standby.car` needs none: it is only a name in the standby certificate).
+   * CAA, after step 6, on the **`car.alexahub.dev`** node (CAA lookups climb from each name, so this
+     covers all five names and leaves the apex and `certs.alexahub.dev` to Cloudflare's own edge
+     certificates): `car.alexahub.dev CAA 0 issue "letsencrypt.org; accounturi=<ACME account URI>;
+     validationmethods=dns-01"`, `car.alexahub.dev CAA 0 issuewild ";"`,
      `car.alexahub.dev CAA 0 iodef "mailto:<your address>"`.
-     (At the apex instead only if nothing else under alexahub.dev needs certificates from other CAs or
-     accounts.)
-   * DNSSEC: DNS -> Settings -> Enable DNSSEC, then add the DS record at the registrar (automatic with
-     Cloudflare Registrar).
+   * DNSSEC: DNS -> Settings -> Enable DNSSEC, then the DS record at the registrar.
    * Certificate Transparency monitoring: SSL/TLS -> Edge Certificates -> "Certificate Transparency
-     Monitoring" on (Cloudflare mails new certificates for the domain), and/or Cert Spotter
-     (sslmate.com/certspotter) watching `alexahub.dev` with subdomains, or the crt.sh feed
-     `https://crt.sh/atom?q=%25.alexahub.dev`.
-9. **Pi**: `TLS_FETCH_URL=https://certs.alexahub.dev/car/current/fullchain.pem` is already in
-   `/etc/teslalinux/env`; after step 7, `sudo systemctl start teslalinux-tls-fetch.service` (or wait
-   for the timer) and `teslalinux-tls status`.
+     Monitoring", and/or Cert Spotter watching `alexahub.dev` with subdomains.
+8. **Keep the schedule alive**: GitHub disables scheduled workflows of a public repository after 60
+   days without repository activity. The Actions page then shows a banner with "Enable workflow";
+   re-enable it (or keep committing). The 3-hourly runs stop silently otherwise, and the certificates
+   expire about 30 days after the last renewal.
+9. **Pi**: nothing to set up. `TLS_BASE_URL` is in `/etc/teslalinux/env`; `sudo teslalinux-tls fetch`
+   tries at once, `teslalinux-tls status` shows the result.
 
-Operations: **rotate** the key with `sudo teslalinux-tls rotate` (the old pair keeps serving), commit
-the printed CSR, run the workflow with `action: issue`; the Pi swaps key and certificate together
-when the new chain arrives. **Reflash** = a new key: same as rotation (commit the new CSR, `issue`).
-**Rollback**: copy `previous/` over `current/` in the bucket (the Pi only accepts it if it is newer
-than what it has, so this matters only for a Pi that never got the bad one).
+Operations: a revoked or broken slot needs nothing (the next run, at most 3 h later, handles it; run
+the workflow with `check` to do it now, or `issue-current` / `issue-standby` to force a new
+certificate). **Rollback**: copy `<slot>-previous/` over `<slot>/` in the bucket (the Pi only accepts
+a pair newer than its own, so this matters only for Pis that never got the bad one).
 
 Pinned in `host/tls/renew.sh`: acme.sh 3.1.6, commit `807da6498377ee5e0cf43a78091f46f12dc59a89`,
 sha256 `acme.sh` `c7d68b021cfd6380ea83a82962abde5b484779fee0b97d38681dfa1396bbc8d7`, `dnsapi/dns_cf.sh`
@@ -251,14 +279,14 @@ sha256 `acme.sh` `c7d68b021cfd6380ea83a82962abde5b484779fee0b97d38681dfa1396bbc8
 * LTE uplink, NetworkManager dispatcher kick, timesyncd, the DS3231 RTC.
 * `teslalinux-tls-fetch.service` sandbox (`nginx -t` and the reload under `ProtectSystem=strict`).
 * deviceInfo: CPU temperature, serial, modem and CarPlay detection.
-* Boot time: `teslalinux-netconfig` (Python only when settings changed), first boot key generation.
+* Boot time: `teslalinux-netconfig` (Python only when settings changed), first boot certificate install.
 * Alpine image only: firmware boot with `vmlinuz-rpi`/`initramfs-rpi`, DTB locations, udev-settle cost.
 
 ## 8. In-car test procedure
 
 1. Pi: provisioned, rebooted. `systemctl --failed` empty; `systemctl status hostapd dnsmasq nftables
    nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire`;
-   `teslalinux-tls status` shows `"trusted": true` (else run setup step 9 first; with the placeholder the
+   `teslalinux-tls status` shows `"trusted": true` (else `sudo teslalinux-tls fetch` with an uplink; with the self-signed fallback the
    car shows a certificate error).
 2. Car: Wi-Fi -> join `Teslalinux` (`AP_SSID`; password from `AP_PSK`), tick "Remain connected in Drive".
 3. Browser: `https://car.alexahub.dev/`. Expect the launcher, no certificate warning, the stream

@@ -40,8 +40,8 @@ wpa_supplicant
 usb-modeswitch
 dhcpcd
 dhcpcd-openrc
-# web; the certificate is fetched (curl) and checked (openssl) by teslalinux-tls. No ACME client and
-# no DNS credentials on the Pi: issuance runs in .github/workflows/tls-renew.yml
+# web; the shared certificate is fetched (curl) and checked (openssl) by teslalinux-tls. No ACME client
+# and no DNS credentials on the Pi: issuance runs in .github/workflows/tls-certs.yml
 nginx
 nginx-openrc
 curl

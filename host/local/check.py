@@ -163,10 +163,8 @@ def main():
     check("/api/health 200", request("/api/health")[0] == 200)
     code, _, body = request("/api/gpsState", method="POST", body="0", headers={"Content-Type": "text/plain"})
     check("POST /api/gpsState text/plain -> OK", (code, body) == (200, b"OK"), "%s %r" % (code, body))
-    code, _, body = request("/api/tls/csr")
-    check("/api/tls/csr serves the CSR", code == 200 and body.startswith(b"-----BEGIN CERTIFICATE REQUEST-----"), str(code))
     code, _, body = request("/api/certificate")
-    check("/api/certificate state", code == 200 and b"notAfter" in body, str(code))
+    check("/api/certificate state", code == 200 and b"notAfter" in body and b'"slot"' in body, str(code))
 
     code, h, _ = request("/README.md")
     check("url.access-deny .md -> 403", code == 403, str(code))

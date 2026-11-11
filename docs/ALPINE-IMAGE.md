@@ -32,21 +32,21 @@ The hostname is `car.alexahub.dev` (`DEVICE_HOST` in `host/phase1-pios/env`). At
 pointing at the hijack IP `192.0.2.1`, DNS-only (grey cloud: a proxied record would send the car to
 Cloudflare's edge).
 
-The certificate is split so that no secret ever sits on the Pi or in the image:
-* the Pi generates its ECDSA P-256 key at first boot and keeps it in `/etc/teslalinux/tls`
-  (root, 0700/0600); `teslalinux-tls export-csr` (or `GET /api/tls/csr`) gives the CSR, which is
-  committed once as `host/tls/device.csr.pem`;
-* a GitHub Actions workflow in this private repo signs that CSR through Let's Encrypt (DNS-01, the
-  Cloudflare token lives only in the workflow's environment secrets) and publishes the public
-  chain;
-* `teslalinux-tls` on the Pi fetches the chain, accepts it only if it belongs to our key, is
-  trusted, has exactly the four names and is newer, then swaps it in and reloads nginx. Until then
-  nginx serves a self-signed certificate for the same key (the browser warns).
+Every car shares one certificate and key for these names (like Tesla Android, whose images ship
+`device.teslaandroid.com`'s pair), with automatic renewal and a standby certificate:
+* `.github/workflows/tls-certs.yml` (`host/tls/renew.sh`) keeps two slots, `current` and `standby`
+  (the same names plus `standby.car.alexahub.dev`), valid through Let's Encrypt (DNS-01; the
+  Cloudflare token lives only in the workflow's environment secrets), with a fresh key per issuance,
+  and publishes chain + key per slot and `active.json` (which slot to serve);
+* the image can carry the pairs of its build day (`TLS_BUNDLE_SRC`, installed at first boot);
+* `teslalinux-tls` on the Pi fetches both slots, accepts a pair only if it is trusted, has exactly
+  the slot's names, matches its key, is current and newer, and serves the slot `active.json` names
+  (or the other valid one). With no trusted pair at all nginx serves a self-signed fallback (the
+  browser warns).
 
-Status: both sides are written: the Pi side (`host/tls/teslalinux-tls`, 36 tests in
-`host/tls/test/run.sh`) and the cloud renewer (`.github/workflows/tls-renew.yml`,
-`host/tls/renew.sh`). Setup steps and threat model: `docs/CAR-STACK-READINESS.md`, "Certificate". A wrong clock (no RTC, no NTP yet) only delays
-accepting a new chain; it never breaks the one in use.
+Tests: `host/tls/test/run.sh`. Setup steps and threat model: `docs/CAR-STACK-READINESS.md`,
+"Certificate". A wrong clock (no RTC, no NTP yet) only delays accepting a new pair; it never breaks
+the one in use.
 
 ### Why not upstream's name
 
@@ -54,7 +54,7 @@ The car browser needs a real certificate on a real hostname (secure-context APIs
 `device.teslaandroid.com` with a certificate that is a private Jenkins secret baked into their
 release image; it is not in any source tree, and a certificate for someone else's domain cannot be
 obtained or renewed by us. So: our own hostname with a public A record pointing at the hijack IP,
-a Let's Encrypt certificate via DNS-01 (renewed over the LTE link), configured in
+a shared Let's Encrypt certificate via DNS-01 (issued in the cloud, fetched over the LTE link), configured in
 `/etc/teslalinux/env` (`DEVICE_HOST`, `TLS_CERT`, `TLS_KEY`). Everything else of the upstream scheme
 (hijack IP + DNAT, `youtu.be` fullscreen trick, connman spoof) is reused unchanged.
 
@@ -71,7 +71,8 @@ a Let's Encrypt certificate via DNS-01 (renewed over the LTE link), configured i
    scripts, the OpenRC init scripts from `host/alpine/init.d`, `/etc/teslalinux/env`.
 3. Enable services for the default runlevel; write `/boot` (config.txt, cmdline.txt from `host/rpi4`).
 4. Assemble the image: a FAT boot partition + an ext4 root, `sfdisk` + loop mounts; first boot
-   expands the root partition and generates a self-signed placeholder certificate if none.
+   expands the root partition and installs the bundled certificate pairs (a self-signed fallback if
+   none passes the checks).
 
 The dalvik cache for the boot image and api-impl is warmed at bake time (`dex2oat` runs on first
 start otherwise, tens of seconds on the Pi).

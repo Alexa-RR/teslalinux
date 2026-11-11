@@ -2,8 +2,8 @@
 # teslalinux: before the hotspot and the web server come up, (1) render hostapd, dnsmasq, nftables,
 # nginx and the display environment again when /etc/teslalinux/env or the settings saved through the
 # frontend changed since the last render (this is how the frontend's network settings are "applied
-# during the next system startup", like upstream), and (2) make sure the TLS key and a certificate
-# for it exist so nginx can start. Fast path: two file tests, no Python.
+# during the next system startup", like upstream), and (2) make sure a served certificate and key
+# exist so nginx can start (teslalinux-tls init). Fast path: two file tests, no Python.
 description="teslalinux host configuration and TLS files"
 
 STAMP=/etc/teslalinux/.rendered

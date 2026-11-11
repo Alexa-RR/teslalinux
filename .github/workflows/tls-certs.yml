@@ -1,0 +1,66 @@
+# teslalinux: the shared car certificate (car.alexahub.dev and its www./fullscreen. names), issued and
+# renewed in the cloud. Every car serves the same certificate and key; host/tls/renew.sh keeps two
+# independent slots (current, standby) valid with Let's Encrypt over DNS-01 on Cloudflare, generates a
+# fresh key for every issuance, checks each new pair with the Pi's own acceptance checks and publishes
+# it to R2 (https://certs.alexahub.dev/car/), where host/tls/teslalinux-tls on every Pi fetches it.
+# Design, threat model and setup: docs/CAR-STACK-READINESS.md, "Certificate".
+name: tls-certs
+
+on:
+  schedule:
+    # every 3 hours: revocations (CRL), the CA's renewal window (ARI) and expiry are noticed quickly;
+    # a certificate is issued only when its slot is missing, revoked, invalid or due
+    - cron: "41 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "check = issue only what is due; issue-* = issue that slot now"
+        type: choice
+        options: [check, issue-current, issue-standby, issue-both]
+        default: check
+      staging:
+        description: "Let's Encrypt staging: run the whole flow, publish nothing"
+        type: boolean
+        default: false
+
+# no token rights by default; the one job below only reads the repository
+permissions: {}
+
+concurrency:
+  group: tls-certs
+  cancel-in-progress: false
+
+jobs:
+  certs:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # secrets and variables live in this environment (restricted to main; see the setup docs)
+    environment: tls
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the issuer scripts
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          sparse-checkout: host/tls
+
+      - name: Check both slots, issue what is due, verify with the Pi's checks, publish
+        env:
+          ACTION: ${{ inputs.action || 'check' }}
+          STAGING: ${{ inputs.staging && 'true' || 'false' }}
+          ACME_ACCOUNT_KEY: ${{ secrets.ACME_ACCOUNT_KEY }}
+          CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          DEVICE_HOST: ${{ vars.DEVICE_HOST }}
+          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          CHALLENGE_ALIAS: ${{ vars.CHALLENGE_ALIAS }}
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          CERT_PATH_PREFIX: ${{ vars.CERT_PATH_PREFIX }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+        run: bash host/tls/renew.sh

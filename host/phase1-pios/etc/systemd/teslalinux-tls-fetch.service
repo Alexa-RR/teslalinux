@@ -1,5 +1,5 @@
 [Unit]
-Description=teslalinux: fetch the car certificate the cloud renewer published and install it if it is ours
+Description=teslalinux: fetch the shared car certificate (both slots, active.json), check it and serve the active slot
 Documentation=file:///usr/local/bin/teslalinux-tls
 # never on the boot path: nginx starts with whatever chain (or placeholder) is there; this only reloads it
 After=network.target nginx.service teslalinux-netconfig.service
@@ -18,9 +18,9 @@ TimeoutStartSec=5min
 StandardOutput=append:/var/log/teslalinux/tls.log
 StandardError=append:/var/log/teslalinux/tls.log
 LogsDirectory=teslalinux
-# it writes only the key directory (swap), the public CSR copy, its state and nginx's test output
+# it writes only the TLS directory (slots, served pair), its state and nginx's test output
 ProtectSystem=strict
-ReadWritePaths=-/etc/teslalinux/tls -/etc/teslalinux/tls-public -/var/lib/teslalinux -/var/log/teslalinux -/var/log/nginx /run
+ReadWritePaths=-/etc/teslalinux/tls -/var/lib/teslalinux -/var/log/teslalinux -/var/log/nginx /run
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

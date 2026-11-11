@@ -12,6 +12,11 @@
 #                      (its TL_RELEASE_REPO default, in the payload copy and the release asset)
 #     --versions FILE  build-dist.sh's pins (default: versions.env next to this script, else ~/versions.env)
 #     --no-strip       keep the debug info (default: strip --strip-debug, symbol tables stay)
+#     --cert-url URL   where the shared car certificate is published (default: $TLS_BASE_URL, else
+#                      https://certs.alexahub.dev/car); '' = bundle none. Both slots' pairs and
+#                      active.json are bundled (share/teslalinux/tls/) when they pass teslalinux-tls
+#                      verify, so a fresh install serves a trusted certificate before its first
+#                      uplink; a failed download only warns (the Pi fetches them itself)
 #
 # Output in OUTDIR:
 #   teslalinux-dist-<ver>-arm64.tar.zst   (.tar.xz when zstd is missing) one top directory
@@ -38,6 +43,7 @@ RELEASE_REPO=""
 VERSIONS=""
 STRIP=1
 OUT=""
+CERT_URL=${TLS_BASE_URL-https://certs.alexahub.dev/car}
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix) PREFIX=${2:?}; shift ;;
@@ -47,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --release-repo) RELEASE_REPO=${2:?}; shift ;;
     --versions) VERSIONS=${2:?}; shift ;;
     --no-strip) STRIP=0 ;;
+    --cert-url) CERT_URL=${2-}; shift ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) OUT=$1 ;;
@@ -124,6 +131,42 @@ if [[ -n "$RELEASE_REPO" ]]; then
   sed -i "s|^TL_RELEASE_REPO=\"\${TL_RELEASE_REPO:-[^}]*}\"|TL_RELEASE_REPO=\"\${TL_RELEASE_REPO:-$RELEASE_REPO}\"|" "$D/share/teslalinux/tools/pios/install.sh"
   grep -qxF "TL_RELEASE_REPO=\"\${TL_RELEASE_REPO:-$RELEASE_REPO}\"" "$D/share/teslalinux/tools/pios/install.sh" || die "could not set the release repository in install.sh"
 fi
+# the shared car certificate as published now (.github/workflows/tls-certs.yml): checked with the
+# Pi's own acceptance checks; anything missing or failing is left out with a warning
+CERT_BUNDLE=""
+bundle_certs() {
+  local dst="$D/share/teslalinux/tls" t s v host
+  [[ -n "$CERT_URL" ]] || { log "  certificate bundle: off"; return 0; }
+  [[ "$CERT_URL" == https://* ]] || { log "  WARNING: --cert-url must be https; no certificate bundle"; return 0; }
+  for t in curl openssl; do
+    command -v "$t" >/dev/null || { log "  WARNING: no $t here: no certificate bundle (the Pi fetches it on its first uplink)"; return 0; }
+  done
+  host=$(env -i sh -c '. "$1" >/dev/null 2>&1; printf %s "${DEVICE_HOST:-}"' sh "$REPO/host/phase1-pios/env")
+  t=$(mktemp -d)
+  for s in current standby; do
+    if ! curl -fsS --proto '=https' --max-time 60 --max-filesize 65536 -o "$t/$s.chain" "$CERT_URL/$s/fullchain.pem" \
+       || ! curl -fsS --proto '=https' --max-time 60 --max-filesize 65536 -o "$t/$s.key" "$CERT_URL/$s/privkey.pem"; then
+      log "  WARNING: could not download the $s pair from $CERT_URL; not bundled"
+      continue
+    fi
+    if v=$(TESLALINUX_ENV=/nonexistent DEVICE_HOST="$host" TLS_SLOTS_DIR=/nonexistent TLS_BUILD_TIME_FILE=/nonexistent \
+           TLS_STATE=/nonexistent/tls.json TLS_BASE_URL="" sh "$REPO/host/tls/teslalinux-tls" verify "$s" "$t/$s.chain" "$t/$s.key" 2>/dev/null); then
+      install -d -m 0700 "$dst/$s"
+      install -m 0644 "$t/$s.chain" "$dst/$s/fullchain.pem"
+      install -m 0600 "$t/$s.key" "$dst/$s/privkey.pem"
+      CERT_BUNDLE="$CERT_BUNDLE $s:$(openssl x509 -in "$t/$s.chain" -noout -enddate | cut -d= -f2- | tr ' ' '_')"
+      log "  certificate bundle: $s for $host ($(openssl x509 -in "$t/$s.chain" -noout -enddate))"
+    else
+      log "  WARNING: the published $s pair fails the checks, not bundled: $v"
+    fi
+  done
+  if [[ -n "$CERT_BUNDLE" ]] && curl -fsS --proto '=https' --max-time 60 --max-filesize 4096 -o "$t/active.json" "$CERT_URL/active.json"; then
+    install -m 0644 "$t/active.json" "$dst/active.json"
+  fi
+  rm -rf "$t"
+  CERT_BUNDLE=${CERT_BUNDLE# }
+}
+bundle_certs
 REPO_COMMIT=""
 if command -v git >/dev/null && git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   REPO_COMMIT=$(git -C "$REPO" rev-parse HEAD)
@@ -203,6 +246,8 @@ M="$D/MANIFEST"
   echo "build_machine=$(uname -m)"
   echo "repo_commit=$REPO_COMMIT"
   echo "stripped=$STRIP"
+  echo "cert_url=$CERT_URL"
+  echo "cert_bundle=$CERT_BUNDLE"
   # every pin of versions.env, as build-dist.sh used them
   grep -oE '^[A-Z][A-Z0-9_]*=' "$VERSIONS" | tr -d '=' | sort -u | while read -r k; do
     printf 'pin.%s=%s\n' "$k" "${!k-}"

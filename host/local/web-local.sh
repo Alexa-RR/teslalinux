@@ -36,7 +36,7 @@ log() { printf '\033[1;36m[web-local]\033[0m %s\n' "$*"; }
 pidof_file() { [[ -s "$1" ]] && kill -0 "$(cat "$1")" 2>/dev/null && cat "$1"; }
 
 setup() {
-  mkdir -p "$W"/{logs,run,state,tmp,tls-public}
+  mkdir -p "$W"/{logs,run,state,tmp}
   [[ -x "$NGINX" ]] || { log "no nginx ($NGINX); on macOS: brew install nginx"; exit 1; }
   if [[ ! -x "$PY" ]] || ! "$PY" -c 'import websockets' 2>/dev/null; then
     log "python venv with websockets in $W/venv"
@@ -44,10 +44,10 @@ setup() {
   fi
   # the car's env with local TLS paths
   { cat "$REPO/host/phase1-pios/env"
-    printf '\n# web-local overrides\nTLS_CERT=%s\nTLS_KEY=%s\nTLS_FETCH_URL=\n' "$W/tls/fullchain.pem" "$W/tls/privkey.pem"
+    printf '\n# web-local overrides\nTLS_CERT=%s\nTLS_KEY=%s\nTLS_BASE_URL=\n' "$W/tls/fullchain.pem" "$W/tls/privkey.pem"
   } >"$W/env"
-  export TESLALINUX_ENV="$W/env" TLS_PUBLIC_DIR="$W/tls-public" TLS_STATE="$W/state/tls.json" \
-    TLS_BUILD_TIME_FILE=/nonexistent TLS_BAKED_CHAIN=/nonexistent TLS_NO_RELOAD=1 TLS_PIDFILE="$W/run/tls.pid"
+  export TESLALINUX_ENV="$W/env" TLS_STATE="$W/state/tls.json" \
+    TLS_BUILD_TIME_FILE=/nonexistent TLS_BUNDLE_DIR=/nonexistent TLS_NO_RELOAD=1 TLS_PIDFILE="$W/run/tls.pid"
   sh "$REPO/host/tls/teslalinux-tls" init 2>>"$W/logs/tls.log"
   python3 "$REPO/host/teslalinux-render" --root "$ROOT" --live --layout alpine --only web \
     --templates "$REPO/host/phase1-pios/etc" --env "$W/env" --state "$W/state/props.json" \
@@ -83,7 +83,7 @@ start() {
   setup
   export TESLALINUX_ENV="$W/env" TESLALINUX_STATE="$W/state/props.json" TESLALINUX_APPLY_SUDO=0 \
     TESLALINUX_APPLY_DISPLAY="$REPO/host/alpine/teslalinux-apply-display" TESLALINUX_DISPLAY_ENV="$W/state/display.env" \
-    TESLALINUX_CERT_STATE="$W/state/tls.json" TESLALINUX_CSR="$W/tls-public/device.csr.pem"
+    TESLALINUX_CERT_STATE="$W/state/tls.json"
   start_daemon api env PYTHONPATH="$REPO/services/api" "$PY" "$REPO/services/api/api.py"
   start_daemon gps "$PY" "$REPO/services/gps/gps.py"
   start_daemon audio "$PY" "$REPO/services/audio/audio.py"

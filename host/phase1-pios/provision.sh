@@ -106,14 +106,13 @@ render --only web
 render --only display
 ln -sf /etc/nginx/sites-available/teslalinux /etc/nginx/sites-enabled/teslalinux
 rm -f /etc/nginx/sites-enabled/default
-# the car certificate: key + CSR made here and kept here (root only), self-signed placeholder for the
-# same key until the cloud renewer's chain is fetched (see docs/CAR-STACK-READINESS.md "Certificate")
+# the shared car certificate: fetched now when there is an uplink, else a self-signed fallback until
+# teslalinux-tls-fetch.timer gets it (see docs/CAR-STACK-READINESS.md "Certificate")
 install -m 0755 "$REPO/host/tls/teslalinux-tls" /usr/local/bin/teslalinux-tls
 install -d -m 0755 /var/lib/teslalinux/tls-state /var/log/teslalinux
 date +%s > /etc/teslalinux/build-time
-/usr/local/bin/teslalinux-tls init
-log "  device CSR (commit as host/tls/device.csr.pem, then run the tls-renew workflow):"
-/usr/local/bin/teslalinux-tls export-csr
+TLS_NO_RELOAD=1 /usr/local/bin/teslalinux-tls init
+TLS_NO_RELOAD=1 /usr/local/bin/teslalinux-tls fetch || log "  certificate not fetched yet: the timer retries (self-signed until then)"
 # an uplink coming up (NetworkManager owns the LTE/Ethernet links here) fetches at once
 install -D -m 0755 "$HERE/etc/NetworkManager/90-teslalinux-tls" /etc/NetworkManager/dispatcher.d/90-teslalinux-tls
 render >/dev/null

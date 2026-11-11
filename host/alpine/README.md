@@ -7,9 +7,9 @@ of `host/phase1-pios/etc/systemd`. All services run as the unprivileged `tesla` 
 
 | Service | What | Depends on |
 |---|---|---|
-| `teslalinux-firstboot` | grow the root filesystem; device TLS key, CSR, placeholder (`teslalinux-tls init`) | localmount |
-| `teslalinux-netconfig` | re-render hostapd/dnsmasq/nftables/nginx/display env when env or saved settings changed; ensure key + cert | localmount; before hostapd, dnsmasq, nftables, nginx, networking, tacomp |
-| `teslalinux-tls` | fetch the public chain from the cloud renewer, check it against our key, swap + reload nginx (6 h, backoff, SIGUSR1 from `dhcpcd.exit-hook`) | after net, nginx; never blocks boot |
+| `teslalinux-firstboot` | grow the root filesystem; the bundled car certificate pairs (`teslalinux-tls init`) | localmount |
+| `teslalinux-netconfig` | re-render hostapd/dnsmasq/nftables/nginx/display env when env or saved settings changed; ensure a served cert + key | localmount; before hostapd, dnsmasq, nftables, nginx, networking, tacomp |
+| `teslalinux-tls` | fetch both slots of the shared car certificate and `active.json`, check them, serve the active slot + reload nginx (6 h, backoff, SIGUSR1 from `dhcpcd.exit-hook`) | after net, nginx; never blocks boot |
 | `tacomp` | display compositor: frames to the car browser, touch back; WebSockets on 127.0.0.1 only | localmount, uses seatd |
 | `teslalinux-atl` | Waze under ATL on tacomp's socket (`host/phase1-pios/teslalinux-atl`) | tacomp; uses gps, pipewire, wireplumber |
 | `teslalinux-gps` | browser geolocation -> location feed (loopback) | after net |
