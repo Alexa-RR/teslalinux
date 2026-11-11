@@ -124,6 +124,20 @@ PAYLOAD=(
 )
 [[ -f "$REPO/LICENSE" ]] && PAYLOAD+=(LICENSE)
 for p in "${PAYLOAD[@]}"; do [[ -e "$REPO/$p" ]] || die "payload path missing in the repo: $p"; done
+# the car page's Release Notes are generated from CHANGELOG.md: never ship a stale copy. A release
+# needs the changelog; a local pack from a partial repo copy without it only warns.
+if [[ -f "$REPO/CHANGELOG.md" && -f "$REPO/tools/changelog/changelog.py" ]]; then
+  python3 "$REPO/tools/changelog/changelog.py" --root "$REPO" page --check \
+    || die "web/js/release-notes/release-notes-data.js is out of date: run tools/changelog/changelog.py page"
+  if [[ -n "$RELEASE" ]]; then
+    python3 "$REPO/tools/changelog/changelog.py" --root "$REPO" notes "$RELEASE" >/dev/null \
+      || die "CHANGELOG.md has no section for $RELEASE"
+  fi
+elif [[ -n "$RELEASE" ]]; then
+  die "a release needs CHANGELOG.md and tools/changelog/changelog.py in $REPO (its release notes)"
+else
+  log "  no CHANGELOG.md in $REPO: the car page's release notes are not checked"
+fi
 mkdir -p "$D/share/teslalinux"
 tar -C "$REPO" --exclude=__pycache__ --exclude='*.pyc' --exclude=.DS_Store -cf - "${PAYLOAD[@]}" | tar -C "$D/share/teslalinux" -xf -
 if [[ -n "$RELEASE_REPO" ]]; then

@@ -175,19 +175,35 @@ softAp*, offlineMode*, …) on :8081 so `web/` runs unchanged, plus our own rout
 app state and restart, app updates, locale, keyboard, network, status, system update). Privileged changes go through one sudoers rule
 per helper (`teslalinux-apply-display`, `teslalinux-restart-app`, …).
 
-### 4.7 Car app host (opt-in, in progress)
+### 4.7 Car interface (Settings > Waze interface: Car)
 
 Waze ships a car UI built on the Car App Library (`androidx.car.app`, `WazeCarAppService`): the app
 sends templates (navigation, maneuvers, ETA, lists) to a host that draws them on a car screen. ATL
-runs such a host in the app's process (`ATL_CAR_HOST=1` in `/etc/teslalinux/atl.env`, off by
-default). The host is part of the platform, as Android Auto's host is a privileged app: it calls the
-app with the system uid as its Binder identity and presents itself as the framework package
-`android`, signed with ATL's own platform key (made at ATL's build time). Waze's host validator
-accepts that as a system binding without any change to Waze or its configuration (Waze's own
-"validate host connections" setting stays on). The host also answers the library's car connection
-query (`androidx.car.app.connection`) with "projection". Today it only logs the session and every
-template Waze returns (`ATLCarHost` in the app's log, with `ANDROID_LOG_TAGS='*:w ATLCarHost:i'`);
-rendering the templates on the car page is the next step.
+runs such a host in the app's process. The host is part of the platform, as Android Auto's host is
+a privileged app: it calls the app with the system uid as its Binder identity and presents itself
+as the framework package `android`, signed with ATL's own platform key (made at ATL's build time).
+Waze's host validator accepts that as a system binding without any change to Waze or its
+configuration (Waze's own "validate host connections" setting stays on). The host also answers
+the library's car connection query (`androidx.car.app.connection`) with "projection".
+
+The setting (`host/teslalinux-set-app-interface`, `TESLALINUX_APP_INTERFACE` in
+`/etc/teslalinux/interface.env`) chooses how the launcher starts the app:
+
+- **Phone** (default): the app's own activity, streamed as the display, as before.
+- **Car**: `--background` (Application and providers only, no activity, as Android starts a
+  process for a service binding), `ATL_CAR_HOST=1` and `ATL_IS_AUTOMOTIVE=1`. The host binds the app's
+  CarAppService (API level 9), gives it the display as its map surface (`ATLCarSurface`, sized to
+  the free area the page reports) and sends every template as JSON over `/sockets/carapp` (port
+  9995, `ATLCarAppChannel`, documented in UPSTREAM-NOTES.md). The car page draws them as HTML over
+  the map (`web/js/carapp/`) and sends clicks, list selections, toggles, search and back to the
+  app's callbacks; touches on the map go to the app through the existing touch socket. The host
+  also answers the library's constraints (list limits of a car host), vehicle data and day/night
+  (the sun at the car's position), and ATL's car service (`android.car`) turns the GPS speed into
+  driving state and UX restrictions.
+
+The AOSP Templates Host (the Android Automotive renderer) also runs under ATL as a privileged
+system app (`tools/carhost/`), but supports car API level 4 at most; Waze needs 5, so the car page
+renderer is the one the setting uses.
 
 ## 5. Certificate
 

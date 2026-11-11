@@ -2,6 +2,8 @@
 # runner inside Debian trixie, the same distribution and architecture as Raspberry Pi OS 13, and
 # publishes what tools/pios/install.sh downloads:
 #   teslalinux-dist-<ver>-arm64.tar.zst, MANIFEST, SHA256SUMS, install.sh
+# with the tag's section of CHANGELOG.md as the release notes (tools/changelog/changelog.py notes;
+# the section must be dated: "## [X.Y.Z] - YYYY-MM-DD").
 # The Pi never compiles. Install on the Pi:
 #   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/install.sh | sudo bash -s -- --waze apkpure
 #
@@ -50,6 +52,16 @@ jobs:
 
       - name: Build dependencies (tools/debvm/guest-provision.sh --ci)
         run: sh tools/debvm/guest-provision.sh --ci
+
+      # the release notes are the tag's section of CHANGELOG.md (checked before the long build, so a
+      # missing or undated section fails in the first minutes); images point at the tag on GitHub
+      - name: Release notes from CHANGELOG.md
+        if: env.TAG != ''
+        run: |
+          mkdir -p out-dist
+          python3 tools/changelog/changelog.py notes "$TAG" --repo "$GITHUB_REPOSITORY" --require-date > out-dist/RELEASE-NOTES.md
+          python3 tools/changelog/changelog.py page --check
+          wc -l out-dist/RELEASE-NOTES.md
 
       # sources (git clones of every pinned repo), the pinned r8.jar, cargo's registry and ccache:
       # keyed by the pins, so a new pin set starts from the previous cache and refreshes it
@@ -105,6 +117,7 @@ jobs:
             out-dist/MANIFEST
             out-dist/SHA256SUMS
             out-dist/install.sh
+            out-dist/RELEASE-NOTES.md
           if-no-files-found: error
 
   # Publishing is its own short job: the only one with write access, running only GitHub's own
@@ -129,7 +142,13 @@ jobs:
       - name: Publish the release
         run: |
           set -euo pipefail
-          cat > notes.md <<EOF
+          # the changelog section of the tag (dist job), then how to install
+          [ -s out-dist/RELEASE-NOTES.md ] || { echo "missing out-dist/RELEASE-NOTES.md"; exit 1; }
+          cp out-dist/RELEASE-NOTES.md notes.md
+          cat >> notes.md <<EOF
+
+          ## Install
+
           Raspberry Pi 4 (Raspberry Pi OS Lite 64-bit, trixie). Install or update on the Pi:
 
               curl -fsSL https://github.com/${GH_REPO}/releases/download/${TAG}/install.sh | sudo bash -s -- --dist ${TAG}

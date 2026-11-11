@@ -386,7 +386,8 @@
       min-height: 100%;
     }
 
-    /* teslalinux: these are upstream's release notes, said above the list */
+    /* teslalinux: our own release notes (generated from CHANGELOG.md), with a line above the list
+       crediting Tesla Android for the page */
     #page-release-notes:not([hidden]) {
       display: flex;
       flex-direction: column;

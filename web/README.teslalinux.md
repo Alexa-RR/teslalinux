@@ -69,11 +69,18 @@ Changes from upstream:
   the About page (what Teslalinux is, that it is a fork of Tesla Android and how it differs, and the
   upstream web app version it is based on, in place of the 2nd-generation hardware notice), the
   Donations tab renamed "Credits" (it credits Tesla Android and keeps upstream's donation QR, labelled
-  as supporting the original project), a line on the Release Notes page saying they are Tesla
-  Android's history, and "Teslalinux" in the user-facing strings of `index.html`,
+  as supporting the original project), a line on the Release Notes page crediting Tesla Android
+  for the page, and "Teslalinux" in the user-facing strings of `index.html`,
   `js/settings/settings-controller.js`, `js/shell/shell-controller.js` and the audio media session
   title (`js/audio/audioplayback.js`). The Settings "Release type" note no longer points at
   beta.teslaandroid.com. The `persist.tesla-android.*` configuration keys are protocol and stay.
+* Release Notes: the page, `js/release-notes/release-notes-controller.js` (unchanged) and its
+  styles are Tesla Android's; the data, `js/release-notes/release-notes-data.js`, now holds
+  Teslalinux's own releases instead of upstream's. It is generated from the repository's
+  `CHANGELOG.md` by `tools/changelog/changelog.py page` (one card per "###" topic, its italic first
+  line as the subtitle, plain text; the developers' "Platform" part and the images are left out),
+  and `tools/debvm/pack-dist.sh` refuses to pack a stale copy. Upstream's own release history is
+  at github.com/tesla-android.
 * No system update check: `js/home/home-controller.js` `checkForUpdates()` no longer compares the app
   version with the latest GitHub release of tesla-android/android-raspberry-pi (those are Tesla
   Android system images; Teslalinux updates apps from Settings > App updates), and
