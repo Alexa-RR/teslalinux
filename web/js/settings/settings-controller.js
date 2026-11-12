@@ -317,6 +317,22 @@
         ),
         dense: false,
       });
+      this._appendTile({
+        icon: "format_size",
+        title: "Map size",
+        subtitle: "The size of Waze's street names, symbols and position arrow on the map, at once; its speedometer follows when Waze next starts. The panels on this screen keep their size",
+        trailing: this._createSelect(
+          [
+            { value: "smaller", label: "Smaller" },
+            { value: "default", label: "Default" },
+            { value: "larger", label: "Larger" },
+            { value: "largest", label: "Largest" },
+          ],
+          look.mapSize || "default",
+          async (value) => car.setLook({ mapSize: value }),
+        ),
+        dense: false,
+      });
       // the map colours are the device's (they change what Waze draws): this state's, fresher than
       // the one the car interface read when the page loaded
       if (car.setDeviceMapColours) car.setDeviceMapColours(state);

@@ -8,6 +8,16 @@
   TAHtml.releaseNotesData = {
     "versions": [
       {
+        "versionName": "Unreleased",
+        "changelogItems": [
+          {
+            "title": "Map size",
+            "shortDescription": "Settings > Waze interface > Map size, in Car mode.",
+            "descriptionMarkdown": "Waze's street names, road signs, report icons, position arrow and speedometer can now be drawn larger (or smaller) on the map, to match the car page's large panels: Smaller, Default, Larger or Largest. The map changes at once, without restarting Waze; the speedometer, which Waze sizes only when it creates it, follows the next time Waze starts. The panels on the screen keep their size. The browser keeps the choice, and every car page that is open follows the latest one."
+          }
+        ]
+      },
+      {
         "versionName": "v0.2.0 · 2026-11-12",
         "changelogItems": [
           {

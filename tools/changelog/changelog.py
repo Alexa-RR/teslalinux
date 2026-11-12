@@ -12,6 +12,7 @@
   changelog.py versions                  list the versions and their dates
 
 The CHANGELOG format (Keep a Changelog, newest first):
+  ## [Unreleased]                  changes since the last release (on the car page as "Unreleased")
   ## [0.2.0] - 2026-11-12          (or "- Unreleased" until the tag is pushed)
   intro paragraphs, images
   ### A topic                      one card on the car page; the first paragraph, when it is one
@@ -85,10 +86,14 @@ def trim(lines):
     return lines
 
 
+def is_unreleased(v):
+    return v["version"].strip().lower() == "unreleased"
+
+
 def find(versions, tag):
     want = tag[1:] if tag.startswith("v") else tag
     for v in versions:
-        if v["version"].lstrip("v") == want:
+        if not is_unreleased(v) and v["version"].lstrip("v") == want:
             return v
     return None
 
@@ -172,7 +177,8 @@ def page_data(versions):
         if not items:
             continue
         date = v["date"] if re.match(r"^\d{4}-\d{2}-\d{2}$", v["date"]) else ""
-        name = "v" + v["version"].lstrip("v")
+        # Keep a Changelog's "## [Unreleased]": the changes since the last release, no version yet
+        name = "Unreleased" if is_unreleased(v) else "v" + v["version"].lstrip("v")
         out.append({"versionName": name + (" · " + date if date else ""), "changelogItems": items})
     return {"versions": out}
 

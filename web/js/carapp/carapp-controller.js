@@ -10,7 +10,8 @@
 
   // The car interface's look (Settings > Waze interface): this browser's choice, kept in its
   // local storage like the page's other display preferences (it changes nothing on the device but
-  // the day/night choice, which goes to the car-app host on every connection, and the map colours).
+  // the day/night choice, which goes to the car-app host on every connection, the map size and
+  // the map colours).
   const LOOK_STYLE_KEY = "teslalinux.carInterfaceStyle";
   const LOOK_DAY_NIGHT_KEY = "teslalinux.carDayNight";
   const LOOK_MAP_KEY = "teslalinux.carMapColours";
@@ -22,6 +23,13 @@
   // one is made on the device.
   const MAP_COLOURS = ["graphite", "muted", "app"];
   const PAGE_MAP_COLOURS = ["muted", "app"];
+  // The size of the app's map text and symbols: a scale on the display's density that the car-app
+  // host gives the app as the car display's density (the panels drawn here keep theirs). Kept by
+  // this browser and sent to the host while no page has chosen one since the app started; once
+  // one has, every page follows the host's ("mapScale" state), so all of them agree.
+  const LOOK_MAP_SIZE_KEY = "teslalinux.carMapSize";
+  const MAP_SIZE_SCALES = { smaller: 0.85, default: 1, larger: 1.25, largest: 1.5 };
+  const MAP_SIZES = Object.keys(MAP_SIZE_SCALES);
 
   function readPref(key, allowed, fallback) {
     try {
@@ -53,14 +61,15 @@
       this.lookStyle = readPref(LOOK_STYLE_KEY, STYLES, "rounded");
       this.dayNight = readPref(LOOK_DAY_NIGHT_KEY, DAY_NIGHT, "auto");
       this.mapColours = readPref(LOOK_MAP_KEY, PAGE_MAP_COLOURS, "muted");
+      this.mapSize = readPref(LOOK_MAP_SIZE_KEY, MAP_SIZES, "default");
       // whether the graphite map palette applies to the installed app (/api/appInterface "mapSkin")
       this.mapSkin = null;
       this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
     }
 
-    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin}. */
+    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin, mapSize}. */
     getLook() {
-      return { style: this.lookStyle, dayNight: this.dayNight, mapColours: this.mapColours, mapSkin: this.mapSkin };
+      return { style: this.lookStyle, dayNight: this.dayNight, mapColours: this.mapColours, mapSkin: this.mapSkin, mapSize: this.mapSize };
     }
 
     /** the device's map colours state (/api/appInterface), from start() or the settings page */
@@ -90,6 +99,11 @@
         this.dayNight = look.dayNight;
         writePref(LOOK_DAY_NIGHT_KEY, look.dayNight);
         this.send({ type: "dayNight", mode: this.dayNight });
+      }
+      if (look && MAP_SIZES.indexOf(look.mapSize) >= 0 && look.mapSize !== this.mapSize) {
+        this.mapSize = look.mapSize;
+        writePref(LOOK_MAP_SIZE_KEY, look.mapSize);
+        this.send({ type: "mapScale", scale: MAP_SIZE_SCALES[this.mapSize] });
       }
       let saved = Promise.resolve();
       if (look && MAP_COLOURS.indexOf(look.mapColours) >= 0) {
@@ -221,11 +235,28 @@
 
     onMessage(m) {
       switch (m.type) {
-        case "surface":
-          this.surface = { width: m.width, height: m.height, dpi: m.dpi };
-          this.renderer = null; // a new density: new tokens
+        case "surface": {
+          // the panels are laid out at the display's density (dpi); the app's map may be drawn at
+          // another (mapDpi, the map size): only a new size or display density needs new tokens
+          const s = this.surface;
+          if (m.width !== s.width || m.height !== s.height || m.dpi !== s.dpi) this.renderer = null;
+          this.surface = { width: m.width, height: m.height, dpi: m.dpi, mapDpi: m.mapDpi || m.dpi };
           this.fit();
           this.draw();
+          break;
+        }
+        case "mapScale":
+          // the map size (state): set by a page since the app started, which this one follows,
+          // else this page's own choice goes to the host
+          if (m.set) {
+            const named = MAP_SIZES.find((k) => Math.abs(MAP_SIZE_SCALES[k] - m.scale) < 0.005);
+            if (named && named !== this.mapSize) {
+              this.mapSize = named;
+              writePref(LOOK_MAP_SIZE_KEY, named);
+            }
+          } else {
+            this.send({ type: "mapScale", scale: MAP_SIZE_SCALES[this.mapSize] });
+          }
           break;
         case "icon": {
           const bytes = Uint8Array.from(atob(m.png), (c) => c.charCodeAt(0));

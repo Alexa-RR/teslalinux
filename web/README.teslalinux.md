@@ -147,6 +147,13 @@ Changes from upstream:
   only to the app versions on the device's verified list (`mapSkin` in the same reply); for any other
   version the page falls back to Muted and Settings shows a warning tile. "Muted" and "Waze's own"
   are also saved on the device; until one is, the browser's earlier `teslalinux.carMapColours` holds.
+  "Map size" (Settings > Waze interface, Car mode only; `teslalinux.carMapSize`: Smaller, Default,
+  Larger, Largest = 0.85, 1, 1.25, 1.5) sizes the app's own map text and symbols: the page sends
+  `mapScale` to the car-app host, which gives the app the display's density times that factor as the
+  car display's density, live (the app gets its surface again at the new dpi). The panels drawn
+  here keep the display's density (`surface.dpi`; the map's is `surface.mapDpi`). The browser keeps
+  the choice and sends it while the host reports none set since the app started (`mapScale` state
+  with `set` false); once a page has set one, every page adopts the host's, so all agree.
 * `fonts/Inter-Regular-car.woff2`, `fonts/Inter-Bold-car.woff2` (new): the Graphite look's text
   face, Inter 4.001 by The Inter Project Authors (SIL Open Font License 1.1, `fonts/Inter-OFL.txt`,
   github.com/rsms/inter), the static Regular and Bold cut to Latin, Latin-1 and Latin Extended-A

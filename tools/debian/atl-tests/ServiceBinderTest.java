@@ -356,6 +356,47 @@ public class ServiceBinderTest {
 		check("release removes it", !d.isValid() && dm.getDisplay(id) == null && displayEvents.contains("removed:" + id), "events " + displayEvents);
 	}
 
+	/**
+	 * The car display's density (the car host's map scale): what a car app gets as the
+	 * SurfaceContainer's dpi and as its CarContext configuration, and that a CarContext built as the
+	 * Car App Library builds it (a display context of a virtual display, then a configuration
+	 * context; Resources.updateConfiguration on onConfigurationChanged) takes it on.
+	 */
+	static void carDisplayTests() throws Exception {
+		check("map scale 1 keeps the display's density", android.atl.carhost.ATLCarHost.carDensityDpi(200, 1f) == 200, "");
+		check("map scale 1.25 of 200 dpi is 250 dpi", android.atl.carhost.ATLCarHost.carDensityDpi(200, 1.25f) == 250, "");
+		check("map scale 0.85 of 200 dpi is 170 dpi", android.atl.carhost.ATLCarHost.carDensityDpi(200, 0.85f) == 170, "");
+		check("a scale out of bounds counts as 1", android.atl.carhost.ATLCarHost.carDensityDpi(200, 5f) == 200
+		      && android.atl.carhost.ATLCarHost.carDensityDpi(200, Float.NaN) == 200, "");
+		android.content.res.Configuration device = new android.content.res.Configuration(Resources.getSystem().getConfiguration());
+		android.content.res.Configuration car = android.atl.carhost.ATLCarHost.carConfiguration(device, 300, 1200, 800, true);
+		check("the car configuration has the car's density and its size in dp", car.densityDpi == 300 && car.screenWidthDp == 640
+		      && car.screenHeightDp == 427 && car.smallestScreenWidthDp == 427,
+		      car.screenWidthDp + "x" + car.screenHeightDp + "dp sw" + car.smallestScreenWidthDp + " @" + car.densityDpi);
+		check("and its night mode", (car.uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES, "uiMode " + car.uiMode);
+		/* the CarContext's resources (CarContext.attachBaseContext, onCarConfigurationChanged) */
+		android.hardware.display.DisplayManager dm = new android.hardware.display.DisplayManager();
+		android.content.res.Configuration atCreate = android.atl.carhost.ATLCarHost.carConfiguration(device, 200, 1200, 800, false);
+		android.hardware.display.VirtualDisplay vd = dm.createVirtualDisplay("CarAppService", atCreate.screenWidthDp, atCreate.screenHeightDp,
+		    atCreate.densityDpi, null, android.hardware.display.DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
+		Context base = new android.app.ContextImpl(Resources.getSystem(), ATLLoadedApp.getSystemApplication(), 0);
+		Context carContext = base.createDisplayContext(vd.getDisplay()).createConfigurationContext(atCreate);
+		Resources res = carContext.getResources();
+		res.updateConfiguration(atCreate, res.getDisplayMetrics());
+		check("a CarContext's resources take the car's density", res.getDisplayMetrics().densityDpi == 200 && res.getConfiguration().densityDpi == 200,
+		      res.getDisplayMetrics().densityDpi + " / " + res.getConfiguration().densityDpi);
+		android.content.res.Configuration larger = android.atl.carhost.ATLCarHost.carConfiguration(device, 300, 1200, 800, false);
+		res.updateConfiguration(larger, res.getDisplayMetrics());
+		android.util.DisplayMetrics m = res.getDisplayMetrics();
+		check("and a new one on a configuration change", m.densityDpi == 300 && Math.abs(m.density - 300 / 160f) < 1e-4
+		      && res.getConfiguration().screenWidthDp == 640,
+		      m.densityDpi + " " + m.density + " " + res.getConfiguration().screenWidthDp + "dp");
+		check("the device's resources keep theirs", Resources.getSystem().getDisplayMetrics().densityDpi != 300 || device.densityDpi == 300,
+		      "" + Resources.getSystem().getDisplayMetrics().densityDpi);
+		vd.release();
+		drain();
+	}
+
 	/** an object written to a Parcel and read back, as a binder transaction in this process does
 	 * (Binder.transact rewinds the same Parcel; binder objects never leave the process) */
 	static <T> T roundTrip(android.os.Parcelable value, android.os.Parcelable.Creator<T> creator) {
@@ -573,6 +614,7 @@ public class ServiceBinderTest {
 					frameworkPackageTests();
 					serviceTests();
 					virtualDisplayTests();
+					carDisplayTests();
 					surfaceTests();
 					systemAppTests();
 				} catch (Throwable t) {

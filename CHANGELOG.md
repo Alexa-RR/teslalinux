@@ -13,7 +13,52 @@ This file is the one source of the release notes:
 Each "### Topic" is one card on the car page; its first line, in italics, is the card's subtitle.
 "### Platform" is for developers and stays off the car page. Images are shown on GitHub only.
 Date a version's heading ("- YYYY-MM-DD" instead of "- Unreleased") when its tag is pushed.
+Changes not in a release yet go under "## [Unreleased]" (the car page shows it as "Unreleased")
+until that section becomes the next version's.
 -->
+
+## [Unreleased]
+
+### Map size
+
+*Settings > Waze interface > Map size, in Car mode.*
+
+Waze's street names, road signs, report icons, position arrow and speedometer can now be drawn
+larger (or smaller) on the map, to match the car page's large panels: Smaller, Default, Larger or
+Largest. The map changes at once, without restarting Waze; the speedometer, which Waze sizes only
+when it creates it, follows the next time Waze starts. The panels on the screen keep their size.
+The browser keeps the choice, and every car page that is open follows the latest one.
+
+### Platform
+
+#### Added
+
+In ATL (the fork):
+
+- Car-app host: a map scale on the display's density (`{"type":"mapScale","scale":S}` from the car
+  page, 0.5 to 2). The car display's density, the display's times the scale, goes to the app as the
+  `SurfaceContainer`'s dpi and as the `CarContext` configuration's density (with the screen size in
+  dp at that density); when it changes, the app hears `onConfigurationChanged` and gets its surface
+  again (`onSurfaceDestroyed`, `onSurfaceAvailable` at the new dpi, the visible and stable areas), as
+  a host does when it replaces its surface. The `surface` message carries `mapDpi`; the host reports
+  the scale as state (`{"type":"mapScale","scale":S,"set":B}`) so that every page agrees.
+
+Tools, tests and docs:
+
+- `tools/debian/atl-tests/`: checks of the car display's density and of a CarContext's resources
+  taking it on at create and on a configuration change.
+- `tools/changelog/changelog.py`: an `## [Unreleased]` section shows on the car page as
+  "Unreleased".
+
+#### Fixed
+
+- HTTP/2: apps that set ALPN through `SSLParameters` (OkHttp 5, so Waze) always fell back to
+  HTTP/1.1, because art_standalone builds the wolfSSL JSSE provider without its `SSLParameters`
+  bridge (`WolfSSLJDK8Helper`) and drops the failure silently. A new build step (`wolfjsse` in
+  `tools/debvm/build-dist.sh`, `tools/debvm/patches/wolfjsse-sslparameters.py`) adds it, and fixes
+  `WolfSSLParametersHelper.decoupleParams`, so ClientHellos offer h2 like a phone's. Measured on
+  the map's tile host: one connection instead of five, same throughput (Waze's own limit of five
+  requests per host is what bounds it).
 
 ## [0.2.0] - 2026-11-12
 

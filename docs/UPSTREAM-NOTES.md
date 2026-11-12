@@ -82,8 +82,9 @@ surface (the map is then the normal `/sockets/display` stream, touches on it the
 here. The page (`web/js/carapp`) draws them over the display. JSON text frames, one message each:
 
 Host to page:
-- `{"type":"surface","width":W,"height":H,"dpi":D}`: the map surface (display pixels and density) the
-  templates are laid out on. Sent first, again when the display changes.
+- `{"type":"surface","width":W,"height":H,"dpi":D,"mapDpi":M}`: the map surface (display pixels and
+  density) the templates are laid out on, and `mapDpi` the density the app's map is drawn at (the
+  display's times the map scale). Sent first, again when the display or the map scale changes.
 - `{"type":"icon","id":N,"png":"<base64>"}`: an image the templates refer to by `icon` id (the app's
   drawables rendered to PNG; id 0 is the app's own icon). Sent before the first template using it,
   and to every new page.
@@ -103,6 +104,9 @@ Host to page:
 - `{"type":"dayNight","night":B}`: the car's night mode as the app hears it (`CarContext.isDarkMode`);
   state, sent to every new page and again when it changes. The page's Graphite look draws its
   panels by day or by night with it (unless the driver fixed day or night on the page).
+- `{"type":"mapScale","scale":S,"set":B}`: the map scale, and whether a page has set it since the app
+  started; state, sent to every new page and again when it changes. A page with a choice of its own
+  sends it while `set` is false, and adopts `scale` once it is true, so all pages agree.
 - `{"type":"toast","text":S,"long":B}`: `CarToast` (2 s, or 3.5 s when long).
 - `{"type":"alert","alert":A}`: an `Alert` (car API 5), its callbacks valid until the next alert;
   `{"type":"alertDismiss","id":N}`: the app took it back (`AppManager.dismissAlert`).
@@ -125,6 +129,15 @@ Page to host:
   default, or `ATL_CAR_DAY_NIGHT`) follows the sun at the car's position. The app hears it as the
   configuration's night mode (`CarContext.isDarkMode`). The page sends it when the driver changes
   it (Settings > Waze interface > Day and night) and, when it is not "auto", on every connection.
+- `{"type":"mapScale","scale":S}`: the size of the app's map text and symbols (Settings > Waze
+  interface > Map size: 0.85, 1, 1.25 or 1.5), a factor 0.5 to 2 on the display's density. The car
+  display's density becomes the display's times S: the host gives it to the app as the
+  `SurfaceContainer`'s dpi (which Waze draws its map at) and as the `CarContext` configuration's
+  `densityDpi` (`onConfigurationChanged`), and, as a host does when its surface is replaced, sends
+  `onSurfaceDestroyed`, then `onSurfaceAvailable` at the new density and the visible and stable areas
+  again: the change applies live, without restarting the app (Waze 5.25 redraws its map text,
+  signs, icons and position arrow at once; its speedometer keeps the size it was created with
+  until Waze next starts). The page's panels keep the display's density.
 
 ## Config API (`/api`, port 8081)
 
