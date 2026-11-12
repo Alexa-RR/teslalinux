@@ -295,7 +295,7 @@
         trailing: this._createSelect(
           [
             { value: "rounded", label: "Rounded" },
-            { value: "graphite", label: "Graphite" },
+            { value: "graphite", label: "Graphite (experimental)" },
           ],
           look.style,
           async (value) => car.setLook({ style: value }),

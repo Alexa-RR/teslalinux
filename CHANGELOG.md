@@ -54,13 +54,14 @@ in its own rounded dark style, sized for a touch screen at arm's length.
   morning.
 - Touches on the map still reach Waze directly: drag, pinch and tap work as in Phone mode.
 
-### Graphite, a second look for the car interface
+### Graphite, a second look for the car interface (experimental)
 
 *Settings > Waze interface > Car interface style.*
 
 Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels
 with a soft edge, light by day and dark by night (the page's own mute and settings buttons too), in
-the Inter typeface.
+the Inter typeface. Graphite is experimental in this release: its colours and details may still
+change, and a few things Waze draws itself keep Waze's colours (see Known issues).
 
 - Driving: one turn card with the lanes and the step after it, and a trip card with the arrival
   time, the minutes and distance left, and End drive.
@@ -134,6 +135,9 @@ from. It now lists Teslalinux's releases, generated from the project's changelog
   implemented yet.
 - With the Rounded look, the panels keep their dark style in daytime; only the map and its buttons
   switch to day colours (Graphite switches its panels too).
+- Graphite (experimental): the route bubbles in route preview ("Best" and the current route) keep
+  Waze's own colours, purple by day and cyan by night, because Waze sets them in its code, not in
+  its map colours; the position arrow keeps Waze's light blue for the same reason.
 - Muted map colours need the h264 renderer (Settings > Display > Renderer); with MJPEG the map keeps
   Waze's own colours.
 
