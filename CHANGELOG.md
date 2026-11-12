@@ -17,50 +17,59 @@ Date a version's heading ("- YYYY-MM-DD" instead of "- Unreleased") when its tag
 
 ## [0.2.0] - 2026-11-12
 
-The car interface: in Car mode Waze shows the screens it was made for car displays, drawn by the car
-page in large, rounded panels over Waze's own map. Phone mode (Waze as on a phone) stays the default.
+The car interface. In Car mode Waze shows the screens it was made to show on a car's display, and
+the car page draws them over Waze's map, sized for a touch screen at arm's length. Phone mode, Waze
+as on a phone, stays the default. This release also brings a second, lighter look for those screens,
+Graphite (experimental), with map colours to match.
 
-![Searching in Car mode: the map with the Drive now panel, the search screen and live results](docs/media/car-search.gif)
+### Car mode
 
-![A simulated drive in Tel Aviv, sped up: turn card with lanes, the next step and the trip estimate](docs/media/car-navigation.gif)
+*Settings > Waze interface > Car.*
 
-![Route preview with alternate routes, choosing one, then Go](docs/media/car-route-preview.gif)
+Choose Car and only Waze restarts, in a few seconds; your places and settings are the same in both
+modes, and every open car page follows the change by itself. Waze then draws only its map and sends
+every other screen the way it does to a car display; the car page draws them over the map. Choose
+Phone to go back.
 
 ![Settings > Waze interface: from Car to Phone and back](docs/media/car-interface-switch.gif)
 
-![Day and night: the map and its buttons follow the light](docs/media/car-day-night.gif)
-
-### Car interface
-
-*Waze's car screens, drawn in the car's browser.*
-
-Settings > Waze interface > Car starts Waze without its phone screens. Waze then draws only its map,
-and sends every other screen the way it does to a car display; the car page draws them over the map
-in its own rounded dark style, sized for a touch screen at arm's length.
-
+- Before driving: the Drive now panel with recent places, saved places behind the bookmark button,
+  and search with live results as you type; the place card (opening hours, rating, address,
+  distance); the route preview with alternate routes and their times, and Go now with its countdown.
 - Driving: a turn card with the maneuver, the distance, the road name and the lanes, and the step
   after it ("Then"); the trip estimate (minutes, arrival time, distance) with a button to end the
   drive; Waze's spoken prompts as before.
-- Before driving: the Drive now panel with recent places, saved places behind the bookmark
-  button, and search with live results as
-  you type; the place card (opening hours, rating, address, distance); the route preview with
-  alternate routes and their times, and Go now with its countdown.
-- Waze's car settings, lists with sections, switches and choices, paging on long lists, alerts
-  and short messages, the map buttons (zoom, recentre) folded into one ± button over the bare map,
-  and the next step as a small pill when a panel covers the turn card.
+- Settings and messages: Waze's car settings, lists with sections, switches and choices, paging on
+  long lists, alerts and short messages.
+- The map: touches still reach Waze directly (drag, pinch and tap work as in Phone mode); the map
+  buttons (zoom, recentre) fold into one ± button over the bare map; when a panel covers the turn
+  card, the next step shows as a small pill.
 - While the car moves, as on any car display: long lists are shortened and typing in search is
   turned off (Waze's own driving restrictions, from the car's speed).
-- Day and night: the map turns dark after sunset at the car's position and light again in the
-  morning.
-- Touches on the map still reach Waze directly: drag, pinch and tap work as in Phone mode.
 
-### Graphite, a second look for the car interface (experimental)
+![Searching in Car mode: the map with the Drive now panel, the search screen and live results](docs/media/car-search.gif)
+
+![Route preview with alternate routes, choosing one, then Go](docs/media/car-route-preview.gif)
+
+![A simulated drive in Tel Aviv, sped up: turn card with lanes, the next step and the trip estimate](docs/media/car-navigation.gif)
+
+### Day and night
+
+*Settings > Waze interface > Day and night.*
+
+Automatic (the default) follows the sun at the car's position: the map turns dark after sunset and
+light again in the morning. Day and Night fix it. Waze's map and the Graphite panels switch at the
+same moment.
+
+![Day and night: the map and its buttons follow the light](docs/media/car-day-night.gif)
+
+### Graphite look (experimental)
 
 *Settings > Waze interface > Car interface style.*
 
-Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels
-with a soft edge, light by day and dark by night (the page's own mute and settings buttons too), in
-the Inter typeface. Graphite is experimental in this release: its colours and details may still
+Rounded, the default, draws dark rounded panels. Graphite is flat and quieter: frosted panels with a
+soft edge, light by day and dark by night, in the Inter typeface; the page's own mute and settings
+buttons follow it. Graphite is experimental in this release: its colours and details may still
 change, and a few things Waze draws itself keep Waze's colours (see Known issues).
 
 - Driving: one turn card with the lanes and the step after it, and a trip card with the arrival
@@ -75,29 +84,28 @@ change, and a few things Waze draws itself keep Waze's colours (see Known issues
 
 ![Graphite from day to night during a drive: the panels and Waze's map switch together](docs/media/car-graphite-night.gif)
 
-### Day and night
-
-*Settings > Waze interface > Day and night.*
-
-Automatic (the default) follows the sun at the car's position, as before; Day and Night fix it.
-Waze's map follows the choice, and so do the Graphite panels: the car page now hears when the car
-switches between day and night, at the same moment as Waze.
-
 ### Map colours
 
-*Settings > Waze interface > Map colours, with Graphite.*
+*Settings > Waze interface > Map colours, with the Graphite look.*
 
+- Muted (the default) shows Waze's map in calm neutral greys with the route in Graphite's blue, by
+  day and by night; traffic, speed limits, report pins and the speedometer keep their colours. Only
+  the car page's picture changes.
 - Graphite: Waze draws its map in Graphite's own palette (neutral land and roads, the route in
   Graphite's blue), day and night. Waze's files are never changed: when Waze starts, it is handed a
   recoloured copy of its colour file in memory, and only for Waze versions verified with this
   palette (today 5.25.0.1). For any other version Settings says so and the map falls back to Muted.
   Switching Graphite on or off restarts Waze.
-- Muted (the default) shows Waze's map in calm neutral greys with the route in Graphite's blue, by
-  day and by night; traffic, speed limits, report pins and the speedometer keep their colours. Only
-  the car page's picture changes.
 - Waze's own shows the map exactly as Waze draws it.
 
 Phone mode always shows Waze's own colours.
+
+### Release notes in the car
+
+*This page now shows Teslalinux's own releases.*
+
+The Release Notes page used to show the history of Tesla Android, the project Teslalinux is forked
+from. It now lists Teslalinux's releases, generated from the project's changelog (CHANGELOG.md).
 
 ### Smaller fixes
 
@@ -108,91 +116,90 @@ Phone mode always shows Waze's own colours.
 - The notice about a temporary certificate no longer covers the first buttons of the bottom bar on
   the app pages, and in Car mode it sits at the bottom centre, clear of End drive.
 
-### Phone or Car, your choice
-
-*Settings > Waze interface.*
-
-Phone is the default. Switching restarts only Waze (a few seconds; your places and settings are the
-same in both), and every open car page follows the change by itself.
-
-### Release notes in the car
-
-*This page now shows Teslalinux's own releases.*
-
-The Release Notes page used to show the history of Tesla Android, the project Teslalinux is forked
-from. It now lists Teslalinux's releases, generated from the project's changelog (CHANGELOG.md).
-
 ### Known issues
 
 *What does not work yet.*
 
-- Waze 5.25 sends no arrival screen: at the destination the drive simply ends and the map comes
-  back, without the arrival summary some car displays show.
-- Waze keeps redrawing its map while nothing moves, so the display stream sends frames even when
-  the picture is still (more CPU and Wi-Fi use than needed).
-- In Phone mode, the Account and login screen does not scroll.
-- Some outlines drawn by the app may be missing: Paint.getFillPath (stroke to outline) is not
-  implemented yet.
-- With the Rounded look, the panels keep their dark style in daytime; only the map and its buttons
-  switch to day colours (Graphite switches its panels too).
-- Graphite (experimental): the route bubbles in route preview ("Best" and the current route) keep
-  Waze's own colours, purple by day and cyan by night, because Waze sets them in its code, not in
-  its map colours; the position arrow keeps Waze's light blue for the same reason.
+- Car mode: Waze 5.25 sends no arrival screen; at the destination the drive simply ends and the map
+  comes back, without the arrival summary some car displays show.
+- Rounded look: the panels keep their dark style in daytime; only the map and its buttons switch to
+  day colours.
+- Graphite look (experimental): the route bubbles in route preview ("Best" and the current route)
+  keep Waze's own colours, purple by day and cyan by night, because Waze sets them in its code, not
+  in its map colours; the position arrow keeps Waze's light blue for the same reason.
 - Muted map colours need the h264 renderer (Settings > Display > Renderer); with MJPEG the map keeps
   Waze's own colours.
+- Waze keeps redrawing its map while nothing moves, so the display stream sends frames even when
+  the picture is still (more CPU and Wi-Fi use than needed).
+- Phone mode: the Account and login screen does not scroll.
+- Some outlines drawn by the app may be missing: Paint.getFillPath (stroke to outline) is not
+  implemented yet.
 
 ### Platform
 
 #### Added
 
-- Car-app host in ATL (fork commit `6a7d2920`, enabled by the launcher in Car mode): binds the app's
+In ATL (the fork, `1235b18e`):
+
+- Car-app host (enabled by the launcher in Car mode): binds the app's
   `CarAppService`, handshakes at API level 9, gives the app a map surface sized to the free area the
   car page reports, answers constraints, vehicle data and day/night, and sends every template as JSON
   on `/sockets/carapp` (port 9995 behind nginx); the car page sends back clicks, selections,
   toggles, search, back and map gestures. `ATL_CAR_DAY_NIGHT=day|night` or a `dayNight` message
   overrides the sun. Documented in `docs/UPSTREAM-NOTES.md`, "Car app templates"; the upstream
   protocols are unchanged.
+- The car's night mode for the car page: `{"type":"dayNight","night":B}` on `/sockets/carapp`
+  (state: a page that connects later gets it too); the page sends the driver's choice back as
+  `{"type":"dayNight","mode":"auto|day|night"}`.
+- `--background` start: the app starts without an activity (Application and providers only), as
+  Android does for a service binding.
+- Android platform pieces: system apps from `system/{app,priv-app}` with privapp allowlists; a uid
+  per package and the platform as uid 1000; Binder calling identity across any number of parties;
+  permission checks per uid; `createPackageContext` per package; `android.car` (Car,
+  CarAppFocusManager, CarDrivingStateManager, CarUxRestrictionsManager, CarNavigationStatusManager)
+  backed by ATLCarService; SurfaceControl, SurfaceControlViewHost and SurfacePackage with embedded
+  windows; a real ServiceManager; services with AOSP semantics (bind, unbind, rebind, start ids);
+  virtual displays; a platform signature made at build time.
+- File overlays (`ATL_FILE_OVERLAYS=<manifest.json>`, `file_overlays.c`, a read-only open hook in
+  bionic_translation): an app's read-only opens of a listed file get an in-memory copy with text
+  replacements, only when the package, versionCode and the file's sha256 match a verified entry;
+  writes always reach the real file.
+
+In the car page (`web/`):
+
 - `web/js/carapp/`: the renderer (`carapp-renderer.js`), the channel (`carapp-controller.js`),
   `carapp.css`, `host-style.json` (sizes taken from the AOSP Templates Host by
   `tools/carhost/host-style.py`) and `test.html` with sample templates; a Material Symbols subset
   for the maneuver glyphs.
-- `--background` start in ATL: the app starts without an activity (Application and providers
-  only), as Android does for a service binding.
-- Android platform pieces in the fork: system apps from `system/{app,priv-app}` with privapp
-  allowlists; a uid per package and the platform as uid 1000; Binder calling identity across any
-  number of parties; permission checks per uid; `createPackageContext` per package; `android.car`
-  (Car, CarAppFocusManager, CarDrivingStateManager, CarUxRestrictionsManager,
-  CarNavigationStatusManager) backed by ATLCarService; SurfaceControl, SurfaceControlViewHost and
-  SurfacePackage with embedded windows; a real ServiceManager; services with AOSP semantics (bind,
-  unbind, rebind, start ids); virtual displays; a platform signature made at build time.
+- The Graphite look (`.carapp-graphite` in `carapp.css`, a few structural branches in
+  `carapp-renderer.js`), with Inter (SIL OFL, `web/fonts/Inter-*-car.woff2`, subsets).
+- `web/js/display/map-tone.js`: the muted map colours as a pass in the h264 renderers' WebGL draw
+  (WebCodecs and Broadway).
+
+On the Pi:
+
 - Settings > Waze interface: `GET/POST /api/appInterface`, the root helper
   `host/teslalinux-set-app-interface` (one sudoers rule), and `TESLALINUX_APP_INTERFACE` in the
   launcher (`--background`, `ATL_CAR_HOST`, `ATL_IS_AUTOMOTIVE`).
-- `tools/carhost/`: a reproducible build of the AOSP Templates Host (pinned commit and checksums)
-  with its privapp allowlist, for the system-app path.
+- Graphite map colours: `host/appstyle/waze-map-graphite.json` (the palette and its verified Waze
+  versions) passed as a file overlay; the API reports whether the installed version is supported;
+  `tools/appstyle/mapskin.py check|add|preview` and `docs/MAP-COLOURS.md` describe how to verify a
+  new Waze version.
+
+Tools, tests and docs:
+
 - `tools/debian/atl-tests/`: runtime tests for services, calling identity, the platform package,
   virtual displays, system apps, uids, permissions and SurfaceControlViewHost embedding (84 checks
   plus a GTK embedding test); `docs/ARCHITECTURE.md` section 4.7.
+- `tools/carhost/`: a reproducible build of the AOSP Templates Host (pinned commit and checksums)
+  with its privapp allowlist, for the system-app path.
 - `CHANGELOG.md` and `tools/changelog/changelog.py`: the car page's release notes and the GitHub
   Release body are generated from this file; `pack-dist.sh` refuses stale release notes.
 - `docs/media/`: the GIFs above.
-- The car-app host tells the car page the car's night mode, `{"type":"dayNight","night":B}` on
-  `/sockets/carapp` (state: a page that connects later gets it too); the page sends the driver's
-  choice back as `{"type":"dayNight","mode":"auto|day|night"}`.
-- The Graphite look in `web/js/carapp/` (`carapp.css`, `carapp-renderer.js`), with Inter (SIL OFL,
-  `web/fonts/Inter-*-car.woff2`, subsets), and `web/js/display/map-tone.js`: the muted map colours
-  as a pass in the h264 renderers' WebGL draw (WebCodecs and Broadway).
-- File overlays (ATL `ATL_FILE_OVERLAYS=<manifest.json>`, `file_overlays.c`, a read-only open hook in
-  bionic_translation): an app's read-only opens of a listed file get an in-memory copy with text
-  replacements, only when the package, versionCode and the file's sha256 match a verified entry;
-  writes always reach the real file. `host/appstyle/waze-map-graphite.json` is the Graphite map
-  palette with its verified versions; `tools/appstyle/mapskin.py check|add|preview` and
-  `docs/MAP-COLOURS.md` describe how to verify a new Waze version. The API reports whether the
-  installed version is supported.
 
 #### Changed
 
-- ATL pinned to `6a7d2920` (from `125a433c`).
+- ATL pinned to `1235b18e` (from `125a433c`).
 - New runtime package `webp-pixbuf-loader` (app icons in WebP) on Raspberry Pi OS, the Alpine image
   and the development VMs.
 - The release workflow uses this changelog's section of the pushed tag as the release notes, with

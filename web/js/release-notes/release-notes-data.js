@@ -11,34 +11,24 @@
         "versionName": "v0.2.0 · 2026-11-12",
         "changelogItems": [
           {
-            "title": "Car interface",
-            "shortDescription": "Waze's car screens, drawn in the car's browser.",
-            "descriptionMarkdown": "Settings > Waze interface > Car starts Waze without its phone screens. Waze then draws only its map, and sends every other screen the way it does to a car display; the car page draws them over the map in its own rounded dark style, sized for a touch screen at arm's length.\n\n• Driving: a turn card with the maneuver, the distance, the road name and the lanes, and the step after it (\"Then\"); the trip estimate (minutes, arrival time, distance) with a button to end the drive; Waze's spoken prompts as before.\n• Before driving: the Drive now panel with recent places, saved places behind the bookmark button, and search with live results as you type; the place card (opening hours, rating, address, distance); the route preview with alternate routes and their times, and Go now with its countdown.\n• Waze's car settings, lists with sections, switches and choices, paging on long lists, alerts and short messages, the map buttons (zoom, recentre) folded into one ± button over the bare map, and the next step as a small pill when a panel covers the turn card.\n• While the car moves, as on any car display: long lists are shortened and typing in search is turned off (Waze's own driving restrictions, from the car's speed).\n• Day and night: the map turns dark after sunset at the car's position and light again in the morning.\n• Touches on the map still reach Waze directly: drag, pinch and tap work as in Phone mode."
-          },
-          {
-            "title": "Graphite, a second look for the car interface (experimental)",
-            "shortDescription": "Settings > Waze interface > Car interface style.",
-            "descriptionMarkdown": "Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels with a soft edge, light by day and dark by night (the page's own mute and settings buttons too), in the Inter typeface. Graphite is experimental in this release: its colours and details may still change, and a few things Waze draws itself keep Waze's colours (see Known issues).\n\n• Driving: one turn card with the lanes and the step after it, and a trip card with the arrival time, the minutes and distance left, and End drive.\n• The map buttons stand in slim frosted columns at the right edge; search opens as a card over the live map, with the keyboard under it; lists have thin dividers between rows.\n• The choice is kept by the browser, like the display settings, and applies at once."
+            "title": "Car mode",
+            "shortDescription": "Settings > Waze interface > Car.",
+            "descriptionMarkdown": "Choose Car and only Waze restarts, in a few seconds; your places and settings are the same in both modes, and every open car page follows the change by itself. Waze then draws only its map and sends every other screen the way it does to a car display; the car page draws them over the map. Choose Phone to go back.\n\n• Before driving: the Drive now panel with recent places, saved places behind the bookmark button, and search with live results as you type; the place card (opening hours, rating, address, distance); the route preview with alternate routes and their times, and Go now with its countdown.\n• Driving: a turn card with the maneuver, the distance, the road name and the lanes, and the step after it (\"Then\"); the trip estimate (minutes, arrival time, distance) with a button to end the drive; Waze's spoken prompts as before.\n• Settings and messages: Waze's car settings, lists with sections, switches and choices, paging on long lists, alerts and short messages.\n• The map: touches still reach Waze directly (drag, pinch and tap work as in Phone mode); the map buttons (zoom, recentre) fold into one ± button over the bare map; when a panel covers the turn card, the next step shows as a small pill.\n• While the car moves, as on any car display: long lists are shortened and typing in search is turned off (Waze's own driving restrictions, from the car's speed)."
           },
           {
             "title": "Day and night",
             "shortDescription": "Settings > Waze interface > Day and night.",
-            "descriptionMarkdown": "Automatic (the default) follows the sun at the car's position, as before; Day and Night fix it. Waze's map follows the choice, and so do the Graphite panels: the car page now hears when the car switches between day and night, at the same moment as Waze."
+            "descriptionMarkdown": "Automatic (the default) follows the sun at the car's position: the map turns dark after sunset and light again in the morning. Day and Night fix it. Waze's map and the Graphite panels switch at the same moment."
+          },
+          {
+            "title": "Graphite look (experimental)",
+            "shortDescription": "Settings > Waze interface > Car interface style.",
+            "descriptionMarkdown": "Rounded, the default, draws dark rounded panels. Graphite is flat and quieter: frosted panels with a soft edge, light by day and dark by night, in the Inter typeface; the page's own mute and settings buttons follow it. Graphite is experimental in this release: its colours and details may still change, and a few things Waze draws itself keep Waze's colours (see Known issues).\n\n• Driving: one turn card with the lanes and the step after it, and a trip card with the arrival time, the minutes and distance left, and End drive.\n• The map buttons stand in slim frosted columns at the right edge; search opens as a card over the live map, with the keyboard under it; lists have thin dividers between rows.\n• The choice is kept by the browser, like the display settings, and applies at once."
           },
           {
             "title": "Map colours",
-            "shortDescription": "Settings > Waze interface > Map colours, with Graphite.",
-            "descriptionMarkdown": "• Graphite: Waze draws its map in Graphite's own palette (neutral land and roads, the route in Graphite's blue), day and night. Waze's files are never changed: when Waze starts, it is handed a recoloured copy of its colour file in memory, and only for Waze versions verified with this palette (today 5.25.0.1). For any other version Settings says so and the map falls back to Muted. Switching Graphite on or off restarts Waze.\n• Muted (the default) shows Waze's map in calm neutral greys with the route in Graphite's blue, by day and by night; traffic, speed limits, report pins and the speedometer keep their colours. Only the car page's picture changes.\n• Waze's own shows the map exactly as Waze draws it.\n\nPhone mode always shows Waze's own colours."
-          },
-          {
-            "title": "Smaller fixes",
-            "shortDescription": "Things that were in the way.",
-            "descriptionMarkdown": "• In Car mode, the page's mute and settings buttons no longer cover the top of Waze's buttons at the top right: those now start just below them.\n• The notice about a temporary certificate no longer covers the first buttons of the bottom bar on the app pages, and in Car mode it sits at the bottom centre, clear of End drive."
-          },
-          {
-            "title": "Phone or Car, your choice",
-            "shortDescription": "Settings > Waze interface.",
-            "descriptionMarkdown": "Phone is the default. Switching restarts only Waze (a few seconds; your places and settings are the same in both), and every open car page follows the change by itself."
+            "shortDescription": "Settings > Waze interface > Map colours, with the Graphite look.",
+            "descriptionMarkdown": "• Muted (the default) shows Waze's map in calm neutral greys with the route in Graphite's blue, by day and by night; traffic, speed limits, report pins and the speedometer keep their colours. Only the car page's picture changes.\n• Graphite: Waze draws its map in Graphite's own palette (neutral land and roads, the route in Graphite's blue), day and night. Waze's files are never changed: when Waze starts, it is handed a recoloured copy of its colour file in memory, and only for Waze versions verified with this palette (today 5.25.0.1). For any other version Settings says so and the map falls back to Muted. Switching Graphite on or off restarts Waze.\n• Waze's own shows the map exactly as Waze draws it.\n\nPhone mode always shows Waze's own colours."
           },
           {
             "title": "Release notes in the car",
@@ -46,9 +36,14 @@
             "descriptionMarkdown": "The Release Notes page used to show the history of Tesla Android, the project Teslalinux is forked from. It now lists Teslalinux's releases, generated from the project's changelog (CHANGELOG.md)."
           },
           {
+            "title": "Smaller fixes",
+            "shortDescription": "Things that were in the way.",
+            "descriptionMarkdown": "• In Car mode, the page's mute and settings buttons no longer cover the top of Waze's buttons at the top right: those now start just below them.\n• The notice about a temporary certificate no longer covers the first buttons of the bottom bar on the app pages, and in Car mode it sits at the bottom centre, clear of End drive."
+          },
+          {
             "title": "Known issues",
             "shortDescription": "What does not work yet.",
-            "descriptionMarkdown": "• Waze 5.25 sends no arrival screen: at the destination the drive simply ends and the map comes back, without the arrival summary some car displays show.\n• Waze keeps redrawing its map while nothing moves, so the display stream sends frames even when the picture is still (more CPU and Wi-Fi use than needed).\n• In Phone mode, the Account and login screen does not scroll.\n• Some outlines drawn by the app may be missing: Paint.getFillPath (stroke to outline) is not implemented yet.\n• With the Rounded look, the panels keep their dark style in daytime; only the map and its buttons switch to day colours (Graphite switches its panels too).\n• Graphite (experimental): the route bubbles in route preview (\"Best\" and the current route) keep Waze's own colours, purple by day and cyan by night, because Waze sets them in its code, not in its map colours; the position arrow keeps Waze's light blue for the same reason.\n• Muted map colours need the h264 renderer (Settings > Display > Renderer); with MJPEG the map keeps Waze's own colours."
+            "descriptionMarkdown": "• Car mode: Waze 5.25 sends no arrival screen; at the destination the drive simply ends and the map comes back, without the arrival summary some car displays show.\n• Rounded look: the panels keep their dark style in daytime; only the map and its buttons switch to day colours.\n• Graphite look (experimental): the route bubbles in route preview (\"Best\" and the current route) keep Waze's own colours, purple by day and cyan by night, because Waze sets them in its code, not in its map colours; the position arrow keeps Waze's light blue for the same reason.\n• Muted map colours need the h264 renderer (Settings > Display > Renderer); with MJPEG the map keeps Waze's own colours.\n• Waze keeps redrawing its map while nothing moves, so the display stream sends frames even when the picture is still (more CPU and Wi-Fi use than needed).\n• Phone mode: the Account and login screen does not scroll.\n• Some outlines drawn by the app may be missing: Paint.getFillPath (stroke to outline) is not implemented yet."
           }
         ]
       },
