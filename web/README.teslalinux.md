@@ -139,6 +139,12 @@ Changes from upstream:
   60 shader operations per pixel; off, the shader returns at once. It runs only while the page
   knows which of the app's two palettes is on screen (day or night chosen, or reported by the
   host). The MJPEG renderer shows the map as it is. The app itself is not changed.
+  "Map colours: Graphite" is the device's choice instead (`/api/appInterface` `mapColours`,
+  `teslalinux-set-app-interface map graphite`, the app restarts): ATL serves the app its own map
+  palette recoloured to the look (docs/MAP-COLOURS.md), so the page draws no shader pass. It applies
+  only to the app versions on the device's verified list (`mapSkin` in the same reply); for any other
+  version the page falls back to Muted and Settings shows a warning tile. "Muted" and "Waze's own"
+  are also saved on the device; until one is, the browser's earlier `teslalinux.carMapColours` holds.
 * `fonts/Inter-Regular-car.woff2`, `fonts/Inter-Bold-car.woff2` (new): the Graphite look's text
   face, Inter 4.001 by The Inter Project Authors (SIL Open Font License 1.1, `fonts/Inter-OFL.txt`,
   github.com/rsms/inter), the static Regular and Bold cut to Latin, Latin-1 and Latin Extended-A

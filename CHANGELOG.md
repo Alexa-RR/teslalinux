@@ -54,6 +54,52 @@ in its own rounded dark style, sized for a touch screen at arm's length.
   morning.
 - Touches on the map still reach Waze directly: drag, pinch and tap work as in Phone mode.
 
+### Graphite, a second look for the car interface
+
+*Settings > Waze interface > Car interface style.*
+
+Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels,
+light by day and dark by night, in the Inter typeface.
+
+- Driving: one turn card with the lanes and the step after it, and a trip card with the arrival
+  time, the minutes and distance left, and End drive.
+- The map buttons stand in slim frosted columns at the right edge; search opens as a card over the
+  live map, with the keyboard under it; lists have thin dividers between rows.
+- The choice is kept by the browser, like the display settings, and applies at once.
+
+### Day and night
+
+*Settings > Waze interface > Day and night.*
+
+Automatic (the default) follows the sun at the car's position, as before; Day and Night fix it.
+Waze's map follows the choice, and so do the Graphite panels: the car page now hears when the car
+switches between day and night, at the same moment as Waze.
+
+### Map colours
+
+*Settings > Waze interface > Map colours, with Graphite.*
+
+- Graphite: Waze draws its map in Graphite's own palette (neutral land and roads, the route in
+  Graphite's blue), day and night. Waze's files are never changed: when Waze starts, it is handed a
+  recoloured copy of its colour file in memory, and only for Waze versions verified with this
+  palette (today 5.25.0.1). For any other version Settings says so and the map falls back to Muted.
+  Switching Graphite on or off restarts Waze.
+- Muted (the default) shows Waze's map in calm neutral greys with the route in Graphite's blue, by
+  day and by night; traffic, speed limits, report pins and the speedometer keep their colours. Only
+  the car page's picture changes.
+- Waze's own shows the map exactly as Waze draws it.
+
+Phone mode always shows Waze's own colours.
+
+### Smaller fixes
+
+*Things that were in the way.*
+
+- In Car mode, the page's mute and settings buttons no longer cover the top of Waze's buttons at
+  the top right: those now start just below them.
+- The notice about a temporary certificate no longer covers the first buttons of the bottom bar on
+  the app pages, and in Car mode it sits at the bottom centre, clear of End drive.
+
 ### Phone or Car, your choice
 
 *Settings > Waze interface.*
@@ -79,7 +125,10 @@ from. It now lists Teslalinux's releases, generated from the project's changelog
 - In Phone mode, the Account and login screen does not scroll.
 - Some outlines drawn by the app may be missing: Paint.getFillPath (stroke to outline) is not
   implemented yet.
-- The panels keep their dark style in daytime; only the map and its buttons switch to day colours.
+- With the Rounded look, the panels keep their dark style in daytime; only the map and its buttons
+  switch to day colours (Graphite switches its panels too).
+- Muted map colours need the h264 renderer (Settings > Display > Renderer); with MJPEG the map keeps
+  Waze's own colours.
 
 ### Platform
 
@@ -116,6 +165,19 @@ from. It now lists Teslalinux's releases, generated from the project's changelog
 - `CHANGELOG.md` and `tools/changelog/changelog.py`: the car page's release notes and the GitHub
   Release body are generated from this file; `pack-dist.sh` refuses stale release notes.
 - `docs/media/`: the GIFs above.
+- The car-app host tells the car page the car's night mode, `{"type":"dayNight","night":B}` on
+  `/sockets/carapp` (state: a page that connects later gets it too); the page sends the driver's
+  choice back as `{"type":"dayNight","mode":"auto|day|night"}`.
+- The Graphite look in `web/js/carapp/` (`carapp.css`, `carapp-renderer.js`), with Inter (SIL OFL,
+  `web/fonts/Inter-*-car.woff2`, subsets), and `web/js/display/map-tone.js`: the muted map colours
+  as a pass in the h264 renderers' WebGL draw (WebCodecs and Broadway).
+- File overlays (ATL `ATL_FILE_OVERLAYS=<manifest.json>`, `file_overlays.c`, a read-only open hook in
+  bionic_translation): an app's read-only opens of a listed file get an in-memory copy with text
+  replacements, only when the package, versionCode and the file's sha256 match a verified entry;
+  writes always reach the real file. `host/appstyle/waze-map-graphite.json` is the Graphite map
+  palette with its verified versions; `tools/appstyle/mapskin.py check|add|preview` and
+  `docs/MAP-COLOURS.md` describe how to verify a new Waze version. The API reports whether the
+  installed version is supported.
 
 #### Changed
 

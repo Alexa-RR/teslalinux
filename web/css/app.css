@@ -264,6 +264,17 @@
       color: #f7c85b;
     }
 
+    /* teslalinux: the certificate notice (js/core/cert-warning.js) sits above the pages' bottom bar,
+       and in Car mode at the bottom centre, clear of the app's cards on the left */
+    body:has(#panel-shell:not([hidden])) {
+      --cert-warning-bottom: calc(var(--nav-height) + 12px);
+    }
+
+    body:has(#carapp-overlay) {
+      --cert-warning-left: 50%;
+      --cert-warning-transform: translateX(-50%);
+    }
+
     #panel-shell {
       display: grid;
       grid-template-rows: var(--appbar-height) 1fr var(--nav-height);

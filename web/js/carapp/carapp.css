@@ -81,7 +81,9 @@
 
 /* ---- floating action strips (top right row, bottom right column) ---- */
 .carapp-strip { position: absolute; display: flex; gap: var(--pad-2); padding: var(--strip-pad); pointer-events: auto; }
-.carapp-strip.top { top: 0; right: 0; flex-direction: row; }
+/* --page-inset-top: below the page's own buttons over the display's top right corner (set by the
+   controller; 0 in the test page) */
+.carapp-strip.top { top: var(--page-inset-top, 0px); right: 0; flex-direction: row; }
 .carapp-strip.map { bottom: 0; right: 0; flex-direction: column; }
 .carapp-strip:empty { display: none; }
 

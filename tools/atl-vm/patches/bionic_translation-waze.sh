@@ -381,6 +381,127 @@ open(p, 'w').write(s)
 PY4
 fi
 
+# teslalinux: an open overlay hook (libc_bio_set_open_overlay_func). The path override hook only sees
+# a path; the host's file overlays (ATL_FILE_OVERLAYS) must also know whether an open only reads, so
+# they never stand in for an open that writes. Read-only open()/open64()/fopen()/fopen64()/freopen()
+# and the fortified __open_2() ask the hook first; a descriptor it returns is used instead of opening
+# the path, -1 opens the path as before. __open_2() and freopen() now also take the path overrides,
+# like open() and fopen(). Idempotent.
+if ! grep -q 'libc_bio_set_open_overlay_func' libc/libc-open-overrides.c; then
+log "open overlay hook (open, fopen, freopen, __open_2)"
+python3 - libc/libc-open-overrides.c libc/libc-musl.c libc/libc-chk.c <<'PY5'
+import sys
+ovr, musl, chk = sys.argv[1:4]
+
+def rep(path, old, new):
+    s = open(path).read()
+    assert s.count(old) == 1, (path, old[:60], s.count(old))
+    open(path, 'w').write(s.replace(old, new, 1))
+
+rep(ovr, "/* open and fopen overrides */", '''/* teslalinux: the open overlay hook: given a path and open() flags of a read-only open, a descriptor
+ * to use instead of opening the path, or -1 to open it */
+typedef int (open_overlay_func_type)(const char *, int);
+static open_overlay_func_type *open_overlay_func = NULL;
+
+void libc_bio_set_open_overlay_func(open_overlay_func_type *func)
+{
+	open_overlay_func = func;
+}
+
+static int open_overlay(const char *path, int oflag)
+{
+	if (!open_overlay_func || (oflag & O_ACCMODE) != O_RDONLY || (oflag & (O_CREAT | O_TRUNC | O_TMPFILE)))
+		return -1;
+#ifdef O_PATH
+	if (oflag & O_PATH)
+		return -1;
+#endif
+	return open_overlay_func(path, oflag);
+}
+
+/* a stdio mode that only reads ("r", "rb", "re", ...), as open() flags */
+static bool mode_only_reads(const char *mode, int *oflag)
+{
+	if (!mode || mode[0] != 'r' || strchr(mode, '+'))
+		return false;
+	*oflag = O_RDONLY | (strchr(mode, 'e') ? O_CLOEXEC : 0);
+	return true;
+}
+
+/* freopen() with the path overrides and the open overlay; stream is glibc's FILE */
+FILE *bionic_freopen_glibc(const char *filename, const char *mode, FILE *stream)
+{
+	if (!filename)
+		return freopen(NULL, mode, stream);
+	char *path = (char *)filename;
+	bool free_path = (*apply_path_overrides_func)(&path);
+	FILE *file;
+	int oflag, fd;
+	if (mode_only_reads(mode, &oflag) && (fd = open_overlay(path, oflag)) >= 0) {
+		/* the stream is reopened on the overlay's descriptor, through its /proc/self/fd name */
+		char proc[48];
+		snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+		file = freopen(proc, mode, stream);
+		close(fd);
+	} else {
+		file = freopen(path, mode, stream);
+	}
+	if (free_path)
+		free(path);
+	return file;
+}
+
+/* open and fopen overrides */''')
+rep(ovr, '''	if(OPEN_NEEDS_MODE(oflag)) {
+		va_list arg;
+		va_start(arg, oflag);''', '''	fd = open_overlay(path, oflag);
+	if (fd >= 0) {
+		if (free_path)
+			free(path);
+		return fd;
+	}
+
+	if(OPEN_NEEDS_MODE(oflag)) {
+		va_list arg;
+		va_start(arg, oflag);''')
+rep(ovr, '''	file = fopen(path, mode);
+	if(free_path)''', '''	int oflag, fd;
+	if (mode_only_reads(mode, &oflag) && (fd = open_overlay(path, oflag)) >= 0) {
+		file = fdopen(fd, "r"); /* the descriptor already has the mode's O_CLOEXEC */
+		if (!file)
+			close(fd);
+	} else {
+		file = fopen(path, mode);
+	}
+	if(free_path)''')
+rep(musl, '''FILE * bionic_freopen64(const char *filename, const char *opentype, FILE *stream)
+{
+	return freopen(filename, opentype, bionic_file_to_glibc_file(stream));
+}''', '''FILE *bionic_freopen_glibc(const char *filename, const char *mode, FILE *stream);
+FILE * bionic_freopen64(const char *filename, const char *opentype, FILE *stream)
+{
+	return bionic_freopen_glibc(filename, opentype, bionic_file_to_glibc_file(stream));
+}''')
+rep(musl, '''FILE * bionic_freopen(const char *filename, const char *opentype, FILE *stream)
+{
+	return freopen(filename, opentype, bionic_file_to_glibc_file(stream));
+}''', '''FILE * bionic_freopen(const char *filename, const char *opentype, FILE *stream)
+{
+	return bionic_freopen_glibc(filename, opentype, bionic_file_to_glibc_file(stream));
+}''')
+rep(chk, '''int bionic___open_2(const char *pathname, int flags)
+{
+	flags |= O_LARGEFILE;
+	return open(pathname, flags, 0);
+}''', '''int bionic_open(char *path, int oflag, ...);
+/* _FORTIFY_SOURCE's open() without O_CREAT: the same as open(), path overrides and overlay included */
+int bionic___open_2(const char *pathname, int flags)
+{
+	return bionic_open((char *)pathname, flags | O_LARGEFILE);
+}''')
+PY5
+fi
+
 if ! grep -q "teslalinux: sysconf" libc/libc.c; then
 log "sysconf: unknown names return -1/EINVAL, cache geometry 0 (glibc behaviour) instead of abort()"
 python3 "${BIONIC_SYSCONF_PY:-$HOME/patch-bionic-sysconf.py}"

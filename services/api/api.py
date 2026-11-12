@@ -43,9 +43,14 @@ The keyboard (new routes only):
 
 The app's interface (new routes only):
 * GET  /api/appInterface  {"interface": "phone" | "car"}: the app's phone screens, or its car interface
-                          (the page then draws the app's car templates from /sockets/carapp)
-* POST /api/appInterface  JSON {"interface": ...}: `teslalinux-set-app-interface` (one sudoers rule)
-                          writes /etc/teslalinux/interface.env and restarts the app if the choice changed
+                          (the page then draws the app's car templates from /sockets/carapp);
+                          "mapColours": "graphite" | "muted" | "app" | null (not chosen yet), and
+                          "mapSkin": whether the graphite map palette applies to the installed app
+                          version (map_skin_status: its versionCode and unpacked files against the
+                          verified list of host/appstyle/waze-map-graphite.json, docs/MAP-COLOURS.md)
+* POST /api/appInterface  JSON {"interface": ...} and/or {"mapColours": ...}: `teslalinux-set-app-interface`
+                          (one sudoers rule) writes /etc/teslalinux/interface.env and restarts the app
+                          if what it starts with changed
 
 The settings page's Status, Network and System update sections (new routes only):
 * GET  /api/status        what the device is connected to now: the hotspot (SSID, channel, the car and
@@ -71,6 +76,7 @@ Settings are stored by tlprops (property names and string values as upstream). T
 channel and offline-mode switches take effect at the next boot (host/teslalinux-render), exactly as
 the frontend says ("Apply it during the next system startup?").
 """
+import hashlib
 import json
 import os
 import re
@@ -96,6 +102,18 @@ KEYBOARD_MODES = ("builtin", "device")
 SET_APP_INTERFACE = os.environ.get("TESLALINUX_SET_APP_INTERFACE", "/usr/local/bin/teslalinux-set-app-interface")
 INTERFACE_ENV = os.environ.get("TESLALINUX_INTERFACE_ENV", "/etc/teslalinux/interface.env")
 APP_INTERFACES = ("phone", "car")
+# the car map's colours: graphite (ATL's file overlay of the app's palette, verified versions only),
+# muted (the car page recolours the stream), app (the app's own)
+MAP_COLOURS = ("graphite", "muted", "app")
+APP_PACKAGE = "com.waze"
+APP_DIR = os.environ.get("TESLALINUX_APP_DIR", "/var/lib/teslalinux/apps/" + APP_PACKAGE)
+# ATL's data directory for the app: ANDROID_APP_DATA_DIR/<base APK name>_ (main.c)
+APP_DATA_DIR = os.path.join(os.environ.get("ANDROID_APP_DATA_DIR", "/var/lib/tesla/android/waze"), "base.apk_")
+MAP_SKIN_MANIFESTS = tuple(p for p in (
+    os.environ.get("TESLALINUX_MAP_SKIN_MANIFEST"),
+    "/usr/local/lib/teslalinux/appstyle/waze-map-graphite.json",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "host", "appstyle", "waze-map-graphite.json"),
+) if p)
 LOCALE_ENV = os.environ.get("TESLALINUX_LOCALE_ENV", "/etc/teslalinux/locale.env")
 # the helper restarts services as root: through one sudoers rule (host setup), off for tests
 APPLY_SUDO = os.environ.get("TESLALINUX_APPLY_SUDO", "1") != "0"
@@ -571,24 +589,86 @@ def set_keyboard(mode):
 
 # ---------------------------------------------------------------------------- app interface
 
-def app_interface_state():
-    """GET /api/appInterface: {"interface": "phone"|"car"} (teslalinux-set-app-interface)"""
-    mode = _env_file(INTERFACE_ENV).get("TESLALINUX_APP_INTERFACE", "phone")
-    return {"interface": mode if mode in APP_INTERFACES else "phone"}
+def app_interface_state(with_map_skin=False):
+    """GET /api/appInterface: {"interface": "phone"|"car", "mapColours": "graphite"|"muted"|"app"|null,
+    "mapSkin": map_skin_status()} (teslalinux-set-app-interface). mapColours null: never chosen on
+    the device (the page keeps its own earlier choice)."""
+    env = _env_file(INTERFACE_ENV)
+    mode = env.get("TESLALINUX_APP_INTERFACE", "phone")
+    colours = env.get("TESLALINUX_MAP_COLOURS")
+    out = {"interface": mode if mode in APP_INTERFACES else "phone",
+           "mapColours": colours if colours in MAP_COLOURS else None}
+    if with_map_skin:
+        out["mapSkin"] = map_skin_status()
+    return out
 
 
-def set_app_interface(mode):
-    """POST /api/appInterface: the root helper writes interface.env and restarts the app if it changed"""
+def set_app_interface(mode=None, map_colours=None):
+    """POST /api/appInterface: the root helper writes interface.env and restarts the app if what it
+    starts with changed (the interface, or the map colours to or from "graphite")"""
     cmd = ["sudo", "-n", SET_APP_INTERFACE] if APPLY_SUDO and os.geteuid() != 0 else [SET_APP_INTERFACE]
+    calls = ([[mode]] if mode else []) + ([["map", map_colours]] if map_colours else [])
 
     def run():
         with _apply_lock:
-            try:
-                subprocess.run(cmd + [mode], check=False, timeout=120)
-            except (OSError, subprocess.SubprocessError) as e:
-                print("teslalinux-api: %s failed: %s" % (SET_APP_INTERFACE, e), flush=True)
+            for args in calls:
+                try:
+                    subprocess.run(cmd + args, check=False, timeout=120)
+                except (OSError, subprocess.SubprocessError) as e:
+                    print("teslalinux-api: %s failed: %s" % (SET_APP_INTERFACE, e), flush=True)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def map_skin_status():
+    """Whether ATL's file overlay of the app's map palette (the "graphite" map colours) applies to the
+    app as installed: the same check ATL makes when the app opens the files (file_overlays.c), against
+    the manifest the launcher hands it (host/appstyle/waze-map-graphite.json, docs/MAP-COLOURS.md).
+    state: "verified" (the installed version and its unpacked files are on the list), "pending" (the
+    version is on the list; the app unpacks its files at its next start and ATL checks them then),
+    "unverified-version", "unverified-files" (on the list, but the files on disk differ),
+    "no-manifest", "not-installed"."""
+    inst = _read_json(os.path.join(APP_DIR, "installed.json")) or {}
+    vc, vn = inst.get("versionCode"), inst.get("versionName")
+    out = {"supported": False, "versionCode": vc, "versionName": vn, "verifiedVersions": []}
+    manifest = None
+    for path in MAP_SKIN_MANIFESTS:
+        manifest = _read_json(path)
+        if manifest is not None:
+            break
+    entries = [e for e in (manifest or {}).get("overlays", []) if isinstance(e, dict) and e.get("package") == APP_PACKAGE]
+    seen = set()
+    for e in entries:
+        for v in e.get("verified") or []:
+            if isinstance(v, dict) and isinstance(v.get("versionCode"), int) and v["versionCode"] not in seen:
+                seen.add(v["versionCode"])
+                out["verifiedVersions"].append({"versionCode": v["versionCode"], "versionName": v.get("versionName")})
+    if not entries:
+        out["state"] = "no-manifest"
+        return out
+    if not isinstance(vc, int):
+        out["state"] = "not-installed"
+        return out
+    listed = [e for e in entries if any(isinstance(v, dict) and v.get("versionCode") == vc for v in e.get("verified") or [])]
+    if not listed:
+        out["state"] = "unverified-version"
+        return out
+    state = "verified"
+    for e in listed:
+        path = e.get("path") or ""
+        path = path if path.startswith("/") else os.path.join(APP_DATA_DIR, path)
+        try:
+            with open(path, "rb") as f:
+                sha = hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            state = "pending" if state == "verified" else state
+            continue
+        if not any(isinstance(v, dict) and v.get("versionCode") == vc and str(v.get("sha256", "")).lower() == sha
+                   for v in e.get("verified") or []):
+            state = "unverified-files"
+    out["state"] = state
+    out["supported"] = state in ("verified", "pending")
+    return out
 
 
 # ---------------------------------------------------------------------------- status
@@ -1302,7 +1382,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "keyboard":
             return self._json(keyboard_state())
         if route == "appInterface":
-            return self._json(app_interface_state())
+            return self._json(app_interface_state(with_map_skin=True))
         if route == "appUpdate":
             return self._json(appupdate_state())
         if route == "status":
@@ -1377,9 +1457,11 @@ class Handler(BaseHTTPRequestHandler):
                 req = json.loads(body.decode("utf-8") or "null")
             except (ValueError, UnicodeDecodeError):
                 return self._error()
-            if not isinstance(req, dict) or req.get("interface") not in APP_INTERFACES:
+            if (not isinstance(req, dict) or not ("interface" in req or "mapColours" in req)
+                    or ("interface" in req and req["interface"] not in APP_INTERFACES)
+                    or ("mapColours" in req and req["mapColours"] not in MAP_COLOURS)):
                 return self._error()
-            set_app_interface(req["interface"])
+            set_app_interface(req.get("interface"), req.get("mapColours"))
             return self._ok()
         if route == "appUpdateSettings":
             try:

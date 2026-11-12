@@ -137,6 +137,10 @@ install -m 0755 "$REPO/host/teslalinux-system-update" /usr/local/bin/teslalinux-
 install -m 0755 "$REPO/host/teslalinux-uplink" /usr/local/bin/teslalinux-uplink
 install -m 0755 "$REPO/host/teslalinux-dexopt" /usr/local/bin/teslalinux-dexopt
 install -m 0644 "$REPO/tools/atl-vm/mk-android-tzdata.py" /usr/local/lib/teslalinux/mk-android-tzdata.py
+# the car map's Graphite colours: ATL's file overlay manifest and its checking tool (docs/MAP-COLOURS.md)
+install -d /usr/local/lib/teslalinux/appstyle
+install -m 0644 "$REPO/host/appstyle/waze-map-graphite.json" /usr/local/lib/teslalinux/appstyle/
+install -m 0755 "$REPO/tools/appstyle/mapskin.py" /usr/local/lib/teslalinux/appstyle/
 echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update' > /etc/sudoers.d/teslalinux
 chmod 0440 /etc/sudoers.d/teslalinux
 # tacomp is written against wlroots 0.20; Debian trixie ships 0.18 (see docs/CAR-STACK-READINESS.md,

@@ -58,9 +58,22 @@ fi
 # Android starts a process for a service binding, as on a phone running Android Auto) and its car
 # app service draws only the car map.
 LAUNCH_ARGS=()
+unset ATL_FILE_OVERLAYS
 if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
   export ATL_CAR_HOST=1 ATL_CAR_APP_CHANNEL_PORT="${ATL_CAR_APP_CHANNEL_PORT:-9995}"
   LAUNCH_ARGS+=(--background)
+  # the car map's colours chosen on the settings page (teslalinux-set-app-interface map ...):
+  # "graphite" has ATL serve the app its map palette recoloured, in memory, from a file overlay
+  # manifest that lists the app versions and original files it was checked against (ATL applies it
+  # to those only; docs/MAP-COLOURS.md). The app's files on disk are never changed.
+  MAP_SKIN="${TESLALINUX_MAP_SKIN_MANIFEST:-/usr/local/lib/teslalinux/appstyle/waze-map-graphite.json}"
+  if [[ "${TESLALINUX_MAP_COLOURS:-}" == graphite ]]; then
+    if [[ -r "$MAP_SKIN" ]]; then
+      export ATL_FILE_OVERLAYS="$MAP_SKIN"
+    else
+      echo "teslalinux-atl: no map colour manifest at $MAP_SKIN; the app keeps its own map colours" >&2
+    fi
+  fi
 fi
 export ANDROID_LOG_TAGS="${ANDROID_LOG_TAGS:-*:w}"
 export ANDROID_APP_DATA_DIR="$DATA_DIR"

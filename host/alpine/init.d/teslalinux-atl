@@ -31,6 +31,8 @@ start_pre() {
 	[ -r /etc/teslalinux/keyboard.env ] && . /etc/teslalinux/keyboard.env && export TESLALINUX_KEYBOARD
 	# the app's interface, phone or car (teslalinux-set-app-interface, from the settings page)
 	[ -r /etc/teslalinux/interface.env ] && . /etc/teslalinux/interface.env && export TESLALINUX_APP_INTERFACE
+	# and the car map's colours (graphite: ATL's file overlay of the app's map palette)
+	[ -n "${TESLALINUX_MAP_COLOURS:-}" ] && export TESLALINUX_MAP_COLOURS
 	export HOME=/var/lib/tesla XDG_RUNTIME_DIR=/run/tesla WAYLAND_DISPLAY=tesla-0
 	# ALSA "default" -> pipewire-alsa -> the "android" sink in this runtime dir
 	export PIPEWIRE_RUNTIME_DIR=/run/tesla

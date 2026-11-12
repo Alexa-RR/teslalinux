@@ -1,0 +1,130 @@
+{
+  "_about": [
+    "Waze's map in the car page's Graphite look: neutral grey land, white roads by day and dark roads by night, the route in the theme blue; traffic, pins and reports stay Waze's.",
+    "An ATL file overlay manifest (ATL_FILE_OVERLAYS, see the fork's src/api-impl-jni/file_overlays.c). Waze reads its map palette from the Lua files it unpacks into its data folder; ATL serves Waze a copy with these replacements, in memory. The files on disk never change.",
+    "Applied only for the (versionCode, sha256 of the original file) pairs under each entry's 'verified'. Any other Waze version or file contents: Waze's own colours, and Settings > Waze interface says so (services/api/api.py).",
+    "To check a new Waze version and add it: docs/MAP-COLOURS.md (tools/appstyle/mapskin.py)."
+  ],
+  "replacements": {
+    "graphite-day": [
+      ["map_background = rgb(0xFAFCFA)", "map_background = rgb(0xE4E5E7)"],
+      ["map_missing = rgb(0xefefef)", "map_missing = rgb(0xDCDDE0)"],
+      ["labels = rgb(0x787878)", "labels = rgb(0x6C6E73)"],
+      ["labels_strong = rgb(0x565C61)", "labels_strong = rgb(0x48494D)"],
+      ["freeways = rgb(0x8D949B)", "freeways = rgb(0xFBFBFB)"],
+      ["primary = rgb(0xA6ADB3)", "primary = rgb(0xFFFFFF)"],
+      ["secondary = rgb(0xC6CBCF)", "secondary = rgb(0xFFFFFF)"],
+      ["highways = rgb(0xBABFC4)", "highways = rgb(0xFBFBFB)"],
+      ["street = rgb(0xD2D7DB)", "street = rgb(0xFFFFFF)"],
+      ["private = rgb(0xDADFE2)", "private = rgb(0xF4F4F5)"],
+      ["alleys = rgb(0xD2D9E1)", "alleys = rgb(0xF4F4F5)"],
+      ["ramps = rgb(0xA6ADB3)", "ramps = rgb(0xFBFBFB)"],
+      ["parking = rgb(0xDCE1E3)", "parking = rgb(0xF4F4F5)"],
+      ["parking_lots = rgb(0xEAECED)", "parking_lots = rgb(0xDADBDE)"],
+      ["parking_lots_pins = rgb(0xCFDBE7)", "parking_lots_pins = rgb(0xC6C8CC)"],
+      ["railroads = rgb(0xD2CECC)", "railroads = rgb(0xC6C8CC)"],
+      ["pedestrian = rgb(0xD2D9E1)", "pedestrian = rgb(0xF0F0F1)"],
+      ["trails = rgb(0xD2D9E1)", "trails = rgb(0xF0F0F1)"],
+      ["walkway = rgb(0xD2D9E1)", "walkway = rgb(0xF0F0F1)"],
+      ["cities = rgb(0xF9F8F4)", "cities = rgb(0xE4E5E7)"],
+      ["stations = rgb(0xE1E4E5)", "stations = rgb(0xDADBDE)"],
+      ["parks = rgb(0xBEF2C9)", "parks = rgb(0xD4DCD2)"],
+      ["sea = rgb(0x9EE4FF)", "sea = rgb(0xB4BAC2)"],
+      ["lakes = rgb(0x9EE4FF)", "lakes = rgb(0xB4BAC2)"],
+      ["rivers = rgb(0x9EE4FF)", "rivers = rgb(0xB4BAC2)"],
+      ["label_cities = rgb(0x3D4B52)", "label_cities = rgb(0x3C3E42)"],
+      ["label_vegetation = rgb(0x118742)", "label_vegetation = rgb(0x5E7361)"],
+      ["label_water = rgb(0x1360A7)", "label_water = rgb(0x5C6470)"],
+      ["navigation = rgb(0x711ED4)", "navigation = rgb(0x2F64E8)"],
+      ["stop_point = rgb(0x9E42BE)", "stop_point = rgb(0x1C4BC0)"],
+      ["snail = rgb(0xD9BAFA)", "snail = rgb(0xA9BFE8)"],
+      ["snail_via = rgb(0xDBB9E7)", "snail_via = rgb(0xA9BFE8)"],
+      ["detour = rgb(0xD5ACFF)", "detour = rgb(0xA9BFE8)"],
+      ["detour_stroke = rgb(0xC088FF)", "detour_stroke = rgb(0x86A1D6)"],
+      ["alt_color_current = rgb(0x9C86FF)", "alt_color_current = rgb(0x2F64E8)"],
+      ["route_preview_unselected_fill = rgb(0xD5ACFF)", "route_preview_unselected_fill = rgb(0xA9BFE8)"],
+      ["route_preview_unselected_stroke = rgb(0xC088FF)", "route_preview_unselected_stroke = rgb(0x86A1D6)"]
+    ],
+    "graphite-night": [
+      ["map_background = rgb(0x272E3A)", "map_background = rgb(0x2F3032)"],
+      ["map_missing = rgb(0x60666c)", "map_missing = rgb(0x3A3B3E)"],
+      ["labels = rgb(0xCADADC)", "labels = rgb(0xB4B6BB)"],
+      ["labels_strong = rgb(0xD2E2E4)", "labels_strong = rgb(0xD0D2D6)"],
+      ["labels_bgcolor = rgba(0x091421bf)", "labels_bgcolor = rgba(0x1C1C1Ebf)"],
+      ["freeways = rgb(0x799ABA)", "freeways = rgb(0x1C1C1E)"],
+      ["primary = rgb(0x54718C)", "primary = rgb(0x1F1F21)"],
+      ["secondary = rgb(0x3F5871)", "secondary = rgb(0x222224)"],
+      ["highways = rgb(0x3F5871)", "highways = rgb(0x1F1F21)"],
+      ["street = rgb(0x3F5871)", "street = rgb(0x252527)"],
+      ["private = rgb(0x3F5871)", "private = rgb(0x28292B)"],
+      ["alleys = rgb(0x293E52)", "alleys = rgb(0x2A2B2D)"],
+      ["ramps = rgb(0x54718C)", "ramps = rgb(0x1F1F21)"],
+      ["parking = rgb(0x3F5871)", "parking = rgb(0x28292B)"],
+      ["parking_lots = rgb(0x2B3A4D)", "parking_lots = rgb(0x353639)"],
+      ["parking_lots_pins = rgb(0x3B5987)", "parking_lots_pins = rgb(0x45464A)"],
+      ["railroads = rgb(0x455B70)", "railroads = rgb(0x45464A)"],
+      ["pedestrian = rgb(0x293E52)", "pedestrian = rgb(0x2A2B2D)"],
+      ["trails = rgb(0x293E52)", "trails = rgb(0x2A2B2D)"],
+      ["walkway = rgb(0x293E52)", "walkway = rgb(0x2A2B2D)"],
+      ["cities = rgb(0x2B3A4D)", "cities = rgb(0x2F3032)"],
+      ["stations = rgb(0x2E3E53)", "stations = rgb(0x353639)"],
+      ["parks = rgb(0x256950)", "parks = rgb(0x2B332D)"],
+      ["sea = rgb(0x24467A)", "sea = rgb(0x1C1D20)"],
+      ["lakes = rgb(0x24467A)", "lakes = rgb(0x1C1D20)"],
+      ["rivers = rgb(0x24467A)", "rivers = rgb(0x1C1D20)"],
+      ["label_station = rgb(0x97B8D8)", "label_station = rgb(0x9A9CA1)"],
+      ["label_cities = rgb(0xB9C5D3)", "label_cities = rgb(0xC8CACE)"],
+      ["label_vegetation = rgb(0x7CDA98)", "label_vegetation = rgb(0x8FA592)"],
+      ["label_water = rgb(0x80DDFF)", "label_water = rgb(0x8E96A3)"],
+      ["ad_labels_color = rgb(0xD2E2E4)", "ad_labels_color = rgb(0xD0D2D6)"],
+      ["ad_labels_outline_color = rgba(0x091421bf)", "ad_labels_outline_color = rgba(0x1C1C1Ebf)"],
+      ["navigation = rgb(0x2DDDFF)", "navigation = rgb(0x2F64E8)"],
+      ["stop_point = rgb(0x30F7D3)", "stop_point = rgb(0x2E78FF)"],
+      ["snail = rgb(0x0B7484)", "snail = rgb(0x33466B)"],
+      ["snail_via = rgb(0x0B7484)", "snail_via = rgb(0x33466B)"],
+      ["detour = rgb(0xD5D7DB)", "detour = rgb(0x4B628F)"],
+      ["detour_stroke = rgb(0x90959C)", "detour_stroke = rgb(0x33466B)"],
+      ["alt_color_current = rgb(0x9C86FF)", "alt_color_current = rgb(0x2F64E8)"],
+      ["route_preview_unselected_fill = rgb(0xB7BABF)", "route_preview_unselected_fill = rgb(0x4B628F)"],
+      ["route_preview_unselected_stroke = rgb(0x90959C)", "route_preview_unselected_stroke = rgb(0x33466B)"]
+    ]
+  },
+  "overlays": [
+    {
+      "name": "waze map, Graphite day",
+      "package": "com.waze",
+      "path": "waze/skins/default/skin_values.day.lua",
+      "replace": "graphite-day",
+      "verified": [
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "4e51a4ca5bfe8565c79c15d6ee580583d60eea27a72aaa7650423d2f7c1572fa"}
+      ]
+    },
+    {
+      "name": "waze map, Graphite day (experiment skin)",
+      "package": "com.waze",
+      "path": "waze/skins/default/experiment/skin_values.day.lua",
+      "replace": "graphite-day",
+      "verified": [
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "c9ab9833053a436f66c63bafd2cdbaf06592d44bde06b416218fc55c3eab8335"}
+      ]
+    },
+    {
+      "name": "waze map, Graphite night",
+      "package": "com.waze",
+      "path": "waze/skins/default/skin_values.night.lua",
+      "replace": "graphite-night",
+      "verified": [
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "ad7c719dc4e946908780f257f224bcaeb93242f7fef572b1442591e538509133"}
+      ]
+    },
+    {
+      "name": "waze map, Graphite night (experiment skin)",
+      "package": "com.waze",
+      "path": "waze/skins/default/experiment/skin_values.night.lua",
+      "replace": "graphite-night",
+      "verified": [
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "578ee060acfea249ce9c787f87e1fb8ebaea3c54fbfa629d27f2f1ab6a6b5a9d"}
+      ]
+    }
+  ]
+}

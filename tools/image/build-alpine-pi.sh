@@ -120,6 +120,10 @@ install -m 0755 "$REPO/host/teslalinux-render" "$ROOT/usr/local/bin/teslalinux-r
 cp -r "$REPO/host/phase1-pios/etc/." "$ROOT/usr/share/teslalinux/templates/"
 rm -rf "$ROOT/usr/share/teslalinux/templates/systemd" "$ROOT/usr/share/teslalinux/templates/NetworkManager"
 install -m 0755 "$REPO/host/phase1-pios/teslalinux-atl" "$ROOT/usr/local/bin/teslalinux-atl"
+# the car map's Graphite colours: ATL's file overlay manifest and its checking tool (docs/MAP-COLOURS.md)
+install -d "$ROOT/usr/local/lib/teslalinux/appstyle"
+install -m 0644 "$REPO/host/appstyle/waze-map-graphite.json" "$ROOT/usr/local/lib/teslalinux/appstyle/"
+install -m 0755 "$REPO/tools/appstyle/mapskin.py" "$ROOT/usr/local/lib/teslalinux/appstyle/"
 install -m 0755 "$REPO/host/alpine/teslalinux-firstboot" "$ROOT/usr/local/bin/teslalinux-firstboot"
 install -m 0755 "$REPO/host/tls/teslalinux-tls" "$ROOT/usr/local/bin/teslalinux-tls"
 install -m 0755 "$REPO/host/alpine/teslalinux-apply-display" "$ROOT/usr/local/bin/teslalinux-apply-display"

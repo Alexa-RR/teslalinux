@@ -10,13 +10,18 @@
 
   // The car interface's look (Settings > Waze interface): this browser's choice, kept in its
   // local storage like the page's other display preferences (it changes nothing on the device but
-  // the day/night choice, which goes to the car-app host on every connection).
+  // the day/night choice, which goes to the car-app host on every connection, and the map colours).
   const LOOK_STYLE_KEY = "teslalinux.carInterfaceStyle";
   const LOOK_DAY_NIGHT_KEY = "teslalinux.carDayNight";
   const LOOK_MAP_KEY = "teslalinux.carMapColours";
   const STYLES = ["rounded", "graphite"];
   const DAY_NIGHT = ["auto", "day", "night"];
-  const MAP_COLOURS = ["muted", "app"];
+  // The map's colours are the device's choice (/api/appInterface "mapColours"), since "graphite"
+  // changes what the app draws: ATL serves the app its map palette recoloured, for verified app
+  // versions only (docs/MAP-COLOURS.md). This browser's earlier "muted"/"app" choice is used until
+  // one is made on the device.
+  const MAP_COLOURS = ["graphite", "muted", "app"];
+  const PAGE_MAP_COLOURS = ["muted", "app"];
 
   function readPref(key, allowed, fallback) {
     try {
@@ -47,13 +52,28 @@
       this.retry = null;
       this.lookStyle = readPref(LOOK_STYLE_KEY, STYLES, "rounded");
       this.dayNight = readPref(LOOK_DAY_NIGHT_KEY, DAY_NIGHT, "auto");
-      this.mapColours = readPref(LOOK_MAP_KEY, MAP_COLOURS, "muted");
+      this.mapColours = readPref(LOOK_MAP_KEY, PAGE_MAP_COLOURS, "muted");
+      // whether the graphite map palette applies to the installed app (/api/appInterface "mapSkin")
+      this.mapSkin = null;
       this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
     }
 
-    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours}. */
+    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin}. */
     getLook() {
-      return { style: this.lookStyle, dayNight: this.dayNight, mapColours: this.mapColours };
+      return { style: this.lookStyle, dayNight: this.dayNight, mapColours: this.mapColours, mapSkin: this.mapSkin };
+    }
+
+    /** the device's map colours state (/api/appInterface), from start() or the settings page */
+    setDeviceMapColours(state) {
+      if (!state) return;
+      if (MAP_COLOURS.indexOf(state.mapColours) >= 0) this.mapColours = state.mapColours;
+      if (state.mapSkin) this.mapSkin = state.mapSkin;
+      this.applyMapColours();
+    }
+
+    /** "graphite" only applies where the installed app version is on the verified list */
+    graphiteMapApplies() {
+      return this.mapColours === "graphite" && !!(this.mapSkin && this.mapSkin.supported);
     }
 
     /**
@@ -71,11 +91,21 @@
         writePref(LOOK_DAY_NIGHT_KEY, look.dayNight);
         this.send({ type: "dayNight", mode: this.dayNight });
       }
+      let saved = Promise.resolve();
       if (look && MAP_COLOURS.indexOf(look.mapColours) >= 0) {
         this.mapColours = look.mapColours;
-        writePref(LOOK_MAP_KEY, look.mapColours);
+        if (PAGE_MAP_COLOURS.indexOf(look.mapColours) >= 0) writePref(LOOK_MAP_KEY, look.mapColours);
+        // the device keeps it (and restarts the app when "graphite" is switched on or off)
+        saved = fetch(TAHtml.createFlavor().apiBaseUrl + "/appInterface", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mapColours: look.mapColours }),
+        }).then((r) => {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+        });
       }
       this.applyLook();
+      return saved;
     }
 
     /** night: the driver's choice, else the car's night mode from the host (day until it tells) */
@@ -94,11 +124,14 @@
      * The app's map in the Graphite look's muted colours (js/display/map-tone.js, a shader pass of
      * the H.264 renderers; the MJPEG one shows it as it is): only with the Graphite look, and only
      * while the page knows whether the app draws its day or its night map (the driver's choice, or
-     * the host's night mode), since each has its own palette.
+     * the host's night mode), since each has its own palette. With "graphite" map colours the app
+     * draws them itself; where its version is not verified for them it draws its own palette, which
+     * this page then mutes instead (Settings shows a warning).
      */
     applyMapColours() {
       const known = this.dayNight !== "auto" || this.hostNight !== null;
-      const tone = this.mode === "car" && this.lookStyle === "graphite" && this.mapColours === "muted" && known
+      const muted = this.mapColours === "muted" || (this.mapColours === "graphite" && !this.graphiteMapApplies());
+      const tone = this.mode === "car" && this.lookStyle === "graphite" && muted && known
         ? (this.isNight() ? "night" : "day") : null;
       global.displayMapTone = tone;
       if (typeof global.setDisplayMapTone === "function") global.setDisplayMapTone(tone);
@@ -106,14 +139,17 @@
 
     async start() {
       let mode = "phone";
+      let state = null;
       try {
         const r = await fetch(TAHtml.createFlavor().apiBaseUrl + "/appInterface", { cache: "no-store" });
         if (!r.ok) return; // no API route: Phone mode, as upstream
-        mode = (await r.json()).interface || "phone";
+        state = await r.json();
+        mode = state.interface || "phone";
       } catch (e) {
         return;
       }
       this.mode = mode;
+      this.setDeviceMapColours(state);
       // a switch made elsewhere: the page's own health checks carry the interface
       global.addEventListener("teslalinux-app-interface", (e) => {
         if (e.detail && e.detail !== this.mode) global.location.reload();
@@ -280,6 +316,35 @@
         s.height = this.surface.height + "px";
         s.transform = "scale(" + box.width / this.surface.width + "," + box.height / this.surface.height + ")";
       }
+      // the page's own buttons (mute, settings: #home-controls) stand over the display's top right
+      // corner: the strip at the top right starts below them (carapp.css, --page-inset-top, in
+      // surface pixels), and the map area sent to the app follows
+      let inset = 0;
+      const controls = document.getElementById("home-controls");
+      if (controls && box.height > 0) {
+        const b = controls.getBoundingClientRect();
+        if (b.height > 0 && b.left < box.right && b.right > box.left && b.bottom > box.top && b.top < box.bottom)
+          inset = Math.ceil((b.bottom - box.top) * this.surface.height / box.height);
+      }
+      const value = inset + "px";
+      if (this.surfaceEl.style.getPropertyValue("--page-inset-top") !== value) {
+        this.surfaceEl.style.setProperty("--page-inset-top", value);
+        this.sendVisibleArea();
+      }
+    }
+
+    /** The map area the panels leave free goes to the app (it keeps its car and route there). */
+    sendVisibleArea() {
+      if (!this.renderer || !this.surface.width) return;
+      requestAnimationFrame(() => {
+        if (!this.renderer) return;
+        const a = this.renderer.visibleArea(this.surface.width, this.surface.height);
+        if (!a) return;
+        const key = JSON.stringify(a);
+        if (key === this.lastArea) return;
+        this.lastArea = key;
+        this.send(Object.assign({ type: "visibleArea" }, a));
+      });
     }
 
     draw() {
@@ -299,15 +364,7 @@
         if (this.restrictions) this.renderer.setRestrictions(this.restrictions);
       }
       this.renderer.render(this.template);
-      // the map area the panels leave free goes to the app (it keeps its car and route there)
-      requestAnimationFrame(() => {
-        const a = this.renderer.visibleArea(this.surface.width, this.surface.height);
-        if (!a) return;
-        const key = JSON.stringify(a);
-        if (key === this.lastArea) return;
-        this.lastArea = key;
-        this.send(Object.assign({ type: "visibleArea" }, a));
-      });
+      this.sendVisibleArea();
     }
   }
 

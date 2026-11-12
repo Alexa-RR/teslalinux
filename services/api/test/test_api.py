@@ -45,7 +45,26 @@ with open(os.path.join(TMP, "network"), "w") as f:
             '"secure": true, "band": "2.4 GHz"}]}\'; exit 0; fi\n'
             'echo "$@" >> "%s"; cat >> "%s"; echo >> "%s"\n' % (NETWORK_LOG, NETWORK_LOG, NETWORK_LOG))
 os.chmod(os.path.join(TMP, "network"), 0o755)
+# the app interface helper: keep the arguments
+IFACE_LOG = os.path.join(TMP, "iface.log")
+with open(os.path.join(TMP, "set-app-interface"), "w") as f:
+    f.write('#!/bin/sh\necho "$@" >> "%s"\n' % IFACE_LOG)
+os.chmod(os.path.join(TMP, "set-app-interface"), 0o755)
+# the map colour manifest and an installed app with one unpacked skin file
+SKIN = b"local Palette = { map_background = rgb(0xFAFCFA), }\n"
+os.makedirs(os.path.join(TMP, "appdata", "base.apk_", "skins"))
+os.makedirs(os.path.join(TMP, "apps"))
+with open(os.path.join(TMP, "mapskin.json"), "w") as f:
+    import hashlib
+    json.dump({"overlays": [{"package": "com.waze", "path": "skins/day.lua", "replace": [["0xFAFCFA", "0xE4E5E7"]],
+                             "verified": [{"versionCode": 1030736, "versionName": "5.25.0.1",
+                                           "sha256": hashlib.sha256(SKIN).hexdigest()}]}]}, f)
 os.environ.update({
+    "TESLALINUX_SET_APP_INTERFACE": os.path.join(TMP, "set-app-interface"),
+    "TESLALINUX_INTERFACE_ENV": os.path.join(TMP, "interface.env"),
+    "TESLALINUX_APP_DIR": os.path.join(TMP, "apps"),
+    "ANDROID_APP_DATA_DIR": os.path.join(TMP, "appdata"),
+    "TESLALINUX_MAP_SKIN_MANIFEST": os.path.join(TMP, "mapskin.json"),
     "TESLALINUX_NETWORK": os.path.join(TMP, "network"),
     "TESLALINUX_SYSUPDATE_DIR": os.path.join(TMP, "sysupdate"),
     "TESLALINUX_SYSUPDATE_LOG": os.path.join(TMP, "sysupdate.log"),
@@ -212,6 +231,62 @@ class AppUpdate(unittest.TestCase):
         with open(KICK_LOG) as f:
             self.assertEqual(f.read().strip(), "kick --force")
         self.assertEqual(call("appUpdateCheck", "OPTIONS")[0], 204)
+
+
+class AppInterface(unittest.TestCase):
+    """The app's interface and its car map's colours (teslalinux-set-app-interface, map_skin_status)"""
+
+    def installed(self, vc):
+        with open(os.path.join(TMP, "apps", "installed.json"), "w") as f:
+            json.dump({"package": "com.waze", "versionCode": vc, "versionName": "x"}, f)
+
+    def skin(self, data):
+        path = os.path.join(TMP, "appdata", "base.apk_", "skins", "day.lua")
+        if data is None:
+            if os.path.exists(path):
+                os.unlink(path)
+        else:
+            with open(path, "wb") as f:
+                f.write(data)
+
+    def state(self):
+        return json.loads(call("appInterface")[2])
+
+    def test_map_skin_status(self):
+        with open(os.path.join(TMP, "interface.env"), "w") as f:
+            f.write("TESLALINUX_APP_INTERFACE=car\nTESLALINUX_MAP_COLOURS=graphite\n")
+        self.installed(1030736)
+        self.skin(SKIN)
+        st = self.state()
+        self.assertEqual((st["interface"], st["mapColours"]), ("car", "graphite"))
+        self.assertEqual((st["mapSkin"]["state"], st["mapSkin"]["supported"]), ("verified", True))
+        self.assertEqual(st["mapSkin"]["verifiedVersions"], [{"versionCode": 1030736, "versionName": "5.25.0.1"}])
+        self.skin(None)  # not unpacked yet: the app does it at its next start, ATL checks it then
+        self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("pending", True))
+        self.skin(SKIN.replace(b"FAFCFA", b"FFFFFF"))  # same version, other contents
+        self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("unverified-files", False))
+        self.skin(SKIN)
+        self.installed(1030800)  # an update to a version nobody checked
+        st = self.state()["mapSkin"]
+        self.assertEqual((st["state"], st["supported"], st["versionCode"]), ("unverified-version", False, 1030800))
+        os.unlink(os.path.join(TMP, "apps", "installed.json"))
+        self.assertEqual(self.state()["mapSkin"]["state"], "not-installed")
+        with open(os.path.join(TMP, "interface.env"), "w") as f:
+            f.write("TESLALINUX_APP_INTERFACE=phone\n")
+        self.assertIsNone(self.state()["mapColours"])  # never chosen: the page keeps its own choice
+
+    def test_set_map_colours(self):
+        if os.path.exists(IFACE_LOG):
+            os.unlink(IFACE_LOG)
+        self.assertEqual(call("appInterface", "POST", json.dumps({"mapColours": "graphite"}), "application/json")[0], 200)
+        for bad in ({"mapColours": "pink"}, {"interface": "tablet"}, {}, {"other": 1}, []):
+            self.assertEqual(call("appInterface", "POST", json.dumps(bad), "application/json")[0], 500, bad)
+        for _ in range(50):
+            if os.path.exists(IFACE_LOG):
+                break
+            time.sleep(0.05)
+        with open(IFACE_LOG) as f:
+            self.assertEqual(f.read().strip(), "map graphite")
 
 
 class Settings(unittest.TestCase):

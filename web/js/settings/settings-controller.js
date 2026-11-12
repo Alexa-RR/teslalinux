@@ -317,20 +317,73 @@
         ),
         dense: false,
       });
+      // the map colours are the device's (they change what Waze draws): this state's, fresher than
+      // the one the car interface read when the page loaded
+      if (car.setDeviceMapColours) car.setDeviceMapColours(state);
+      const mapNotice = utils.createElement("div", "settings-description", "");
+      mapNotice.hidden = true;
+      const mapWarning = global.document.createElement("div");
       this._appendTile({
         icon: "map",
         title: "Map colours",
-        subtitle: "With Graphite: Waze's map shown in muted greys with a blue route (on this screen only; Waze is unchanged)",
+        subtitle:
+          "Graphite: Waze's own map recoloured at start, grey land, white roads by day and dark roads by night, a blue route. Muted: this screen tones Waze's map down. Waze's own: as Waze draws it",
         trailing: this._createSelect(
           [
-            { value: "muted", label: "Muted" },
+            { value: "graphite", label: "Graphite" },
+            { value: "muted", label: "Muted (page)" },
             { value: "app", label: "Waze's own" },
           ],
-          look.mapColours,
-          async (value) => car.setLook({ mapColours: value }),
+          car.getLook().mapColours,
+          async (value) => {
+            const before = car.getLook().mapColours;
+            try {
+              await car.setLook({ mapColours: value });
+            } catch (_error) {
+              this._renderErrorState("Service error");
+              return;
+            }
+            this._showMapColoursWarning(mapWarning, car.getLook());
+            if ((value === "graphite") !== (before === "graphite")) {
+              mapNotice.textContent = "Saved. Waze restarts " + (value === "graphite" ? "with its map in Graphite colours." : "with its own map colours.");
+              mapNotice.hidden = false;
+            }
+          },
         ),
         dense: false,
       });
+      this.content.appendChild(mapNotice);
+      this.content.appendChild(mapWarning);
+      this._showMapColoursWarning(mapWarning, car.getLook());
+    }
+
+    /**
+     * Graphite map colours apply only to the Waze versions they were checked with (the device's
+     * verified list, docs/MAP-COLOURS.md); for any other version Waze keeps its own palette and the
+     * page mutes it instead. The warning says so while Graphite is chosen.
+     */
+    _showMapColoursWarning(container, look) {
+      container.innerHTML = "";
+      const skin = look.mapSkin;
+      if (look.mapColours !== "graphite" || !skin || skin.supported) return;
+      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
+      const installed = skin.versionCode ? "Waze " + named(skin) : "this Waze";
+      const checked = (skin.verifiedVersions || []).map(named).join(", ");
+      const why = {
+        "unverified-version": "Graphite map colours are not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".",
+        "unverified-files": "Graphite map colours are not available: " + installed + " has map files that differ from the checked ones.",
+        "not-installed": "Graphite map colours are not available: no installed Waze was found.",
+        "no-manifest": "Graphite map colours are not available on this device (no verified list).",
+      }[skin.state] || "Graphite map colours are not available for " + installed + ".";
+      const previous = this._target;
+      this._target = container;
+      this._appendTile({
+        icon: "warning",
+        title: "Map colours: not available for " + installed,
+        subtitle: why + (look.style === "graphite" ? " Waze's own colours are used, toned down by this screen (Muted)." : " Waze's own colours are used."),
+        dense: false,
+      });
+      this._target = previous;
     }
 
     _showLocaleNotice(text) {

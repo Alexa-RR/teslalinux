@@ -121,6 +121,7 @@ PAYLOAD=(
   tools/apps/install-app.sh tools/apps/apk-info.py tools/apps/apk_verify.py
   tools/appupdate/install.sh tools/appupdate/teslalinux-appupdate tools/appupdate/device.properties
   tools/pios/install.sh tools/atl-vm/mk-android-tzdata.py docs/APP-UPDATES.md
+  host/appstyle tools/appstyle/mapskin.py docs/MAP-COLOURS.md
 )
 [[ -f "$REPO/LICENSE" ]] && PAYLOAD+=(LICENSE)
 for p in "${PAYLOAD[@]}"; do [[ -e "$REPO/$p" ]] || die "payload path missing in the repo: $p"; done

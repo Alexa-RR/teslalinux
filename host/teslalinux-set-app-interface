@@ -1,23 +1,46 @@
 #!/bin/sh
-# teslalinux: choose the app's interface, from the settings page. Called by services/api/api.py
-# (POST /api/appInterface) through one sudoers rule, like teslalinux-set-keyboard.
+# teslalinux: choose the app's interface and its car map's colours, from the settings page. Called by
+# services/api/api.py (POST /api/appInterface) through one sudoers rule, like teslalinux-set-keyboard.
 #   teslalinux-set-app-interface phone   the app's own phone screens, streamed as the display (the default)
 #   teslalinux-set-app-interface car     the app's car interface (Car App Library): ATL's car-app host
 #                                        gives the app the display as its map surface and the car page
 #                                        draws the app's templates over it (/sockets/carapp)
-# Writes /etc/teslalinux/interface.env (TESLALINUX_APP_INTERFACE, read by teslalinux-atl.service and
-# the launcher) and restarts only the app, only when the choice changed: the interface is chosen
-# when the app starts.
+#   teslalinux-set-app-interface map graphite|muted|app
+#                                        the car map's colours: "graphite" has ATL serve the app its own
+#                                        map palette recoloured, for verified app versions only
+#                                        (docs/MAP-COLOURS.md); "muted" recolours the stream in the car
+#                                        page; "app" leaves the app's colours alone
+# Writes /etc/teslalinux/interface.env (TESLALINUX_APP_INTERFACE and TESLALINUX_MAP_COLOURS, read by
+# teslalinux-atl.service and the launcher) and restarts only the app, only when what it starts with
+# changed: the interface, or the map colours to or from "graphite" ("muted" and "app" are the page's).
 set -eu
-[ $# -eq 1 ] || { echo "usage: teslalinux-set-app-interface phone|car" >&2; exit 2; }
-case "$1" in
-	phone|car) MODE=$1 ;;
-	*) echo "teslalinux-set-app-interface: unknown interface '$1' (phone or car)" >&2; exit 2 ;;
-esac
+usage() { echo "usage: teslalinux-set-app-interface phone|car | map graphite|muted|app" >&2; exit 2; }
 F=/etc/teslalinux/interface.env
+MODE=phone
+MAP=
+if [ -r "$F" ]; then
+	MODE=$(sed -n 's/^TESLALINUX_APP_INTERFACE=//p' "$F" | tail -1)
+	MAP=$(sed -n 's/^TESLALINUX_MAP_COLOURS=//p' "$F" | tail -1)
+fi
+case "$MODE" in phone|car) ;; *) MODE=phone ;; esac
+case "$MAP" in graphite|muted|app) ;; *) MAP= ;; esac
+OLD_MODE=$MODE OLD_MAP=$MAP
+case "${1:-}" in
+	phone|car) [ $# -eq 1 ] || usage; MODE=$1 ;;
+	map)
+		[ $# -eq 2 ] || usage
+		case "$2" in
+			graphite|muted|app) MAP=$2 ;;
+			*) echo "teslalinux-set-app-interface: unknown map colours '$2' (graphite, muted or app)" >&2; exit 2 ;;
+		esac ;;
+	*) [ $# -eq 1 ] && echo "teslalinux-set-app-interface: unknown interface '$1' (phone or car)" >&2; usage ;;
+esac
 NEW=$(printf '# teslalinux app interface (teslalinux-set-app-interface, from the settings page)\nTESLALINUX_APP_INTERFACE=%s\n' "$MODE")
+[ -n "$MAP" ] && NEW=$(printf '%s\nTESLALINUX_MAP_COLOURS=%s\n' "$NEW" "$MAP")
 [ -r "$F" ] && [ "$(cat "$F")" = "$NEW" ] && exit 0
 printf '%s\n' "$NEW" >"$F.tmp" && chmod 0644 "$F.tmp" && mv -f "$F.tmp" "$F"
+# the app starts with the interface and, in the car interface, with the map overlay (or without it)
+[ "$MODE" != "$OLD_MODE" ] || [ "$MODE" = car -a "$MAP" != "$OLD_MAP" -a \( "$MAP" = graphite -o "$OLD_MAP" = graphite \) ] || exit 0
 if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl is-active -q teslalinux-atl.service && systemctl restart teslalinux-atl.service
 elif command -v rc-service >/dev/null 2>&1; then

@@ -46,7 +46,10 @@
     if (!element) {
       element = document.createElement("div");
       element.setAttribute("role", "status");
-      element.style.cssText = "position:fixed;left:12px;bottom:12px;z-index:110;max-width:min(520px,calc(100vw - 24px));" +
+      // placed by css/app.css: above the app pages' bottom bar while they are open, and centred in
+      // Car mode, where the left edge holds the app's cards (the trip card's End drive button)
+      element.style.cssText = "position:fixed;left:var(--cert-warning-left,12px);transform:var(--cert-warning-transform,none);" +
+        "bottom:var(--cert-warning-bottom,12px);z-index:110;max-width:min(520px,calc(100vw - 24px));" +
         "display:flex;align-items:center;gap:10px;padding:8px 10px 8px 14px;border-radius:12px;" +
         "background:rgba(40,40,40,0.92);color:#fff;font:14px/1.35 Roboto,Arial,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.35)";
       const label = document.createElement("span");

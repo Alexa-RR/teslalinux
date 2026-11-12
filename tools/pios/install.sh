@@ -482,6 +482,11 @@ step_files() {
   put_file "$P/host/tls/teslalinux-tls" /usr/local/bin/teslalinux-tls 0755
   install -m 0644 "$P/services/gps/gps.py" "$P/services/audio/audio.py" "$P/services/api/api.py" "$P/services/api/tlprops.py" "$LIB/"
   install -m 0644 "$P/tools/atl-vm/mk-android-tzdata.py" "$LIB/mk-android-tzdata.py"
+  # the car map's Graphite colours: ATL's file overlay manifest with its verified app versions, and
+  # the tool that checks a new version (docs/MAP-COLOURS.md)
+  install -d -m 0755 "$LIB/appstyle"
+  install -m 0644 "$P/host/appstyle/waze-map-graphite.json" "$LIB/appstyle/"
+  install -m 0755 "$P/tools/appstyle/mapskin.py" "$LIB/appstyle/"
   install -m 0755 "$P/tools/apps/install-app.sh" "$P/tools/apps/apk-info.py" "$LIB/apps/"
   install -m 0644 "$P/tools/apps/apk_verify.py" "$LIB/apps/"
   install -m 0644 "$P/host/local/check.py" "$P/services/display/test/ws-client.py" "$LIB/check/"
