@@ -3,7 +3,7 @@
 # build VM, into /opt/teslalinux (out/pios-plan/PLAN.md, section 1). Runs as `atl` in the guest.
 #
 #   build-dist.sh [all]          every step in order, skipping steps already done for the same pins
-#   build-dist.sh STEP...        only these: vixl wolfssl bionic art coreoj opensles atl
+#   build-dist.sh STEP...        only these: vixl wolfssl bionic art coreoj wolfjsse opensles atl
 #                                wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay
 #   build-dist.sh --force STEP   redo a step although its stamp says done
 #   build-dist.sh status         which steps are done, for which pins
@@ -162,8 +162,9 @@ step_art() {
   local cstd="HOST_GLOBAL_CONLYFLAGS=-std=gnu2x"
   make -j "$JOBS" ____PREFIX="$PREFIX" ____LIBDIR=lib "$cstd"
   make ____PREFIX="$PREFIX" ____INSTALL_ETC="$PREFIX/etc" ____LIBDIR=lib "$cstd" install
-  # a fresh core-oj-hostdex.jar: the coreoj step patches it again (its .orig is the one to start from)
-  rm -f "$PREFIX/lib/java/dex/art/core-oj-hostdex.jar.orig"
+  # a fresh core-oj-hostdex.jar and wolfssljni-hostdex.jar: the coreoj and wolfjsse steps patch them
+  # again (their .orig is the one to start from)
+  rm -f "$PREFIX/lib/java/dex/art/core-oj-hostdex.jar.orig" "$PREFIX/lib/java/dex/art/wolfssljni-hostdex.jar.orig"
 }
 # the ALPN API in libcore's core-oj-hostdex.jar: tools/atl-vm/patch-core-oj.sh, which ran on the Mac
 # against the VM, as a build step (same sources, same result: classes.dex = the new classes,
@@ -190,6 +191,33 @@ step_coreoj() {
   python3 "$DEBVM_PATCHES/core-oj-alpn.py" assemble "$jar.orig" "$w/tl-ssl.dex" "$w/core-oj-hostdex.jar"
   install -m 0755 "$w/core-oj-hostdex.jar" "$jar"
   # this user's ART cache holds a boot image compiled from the old jar
+  rm -f "$HOME"/.cache/art/*/*boot* "$HOME"/.cache/art/*/*api-impl* 2>/dev/null || true
+}
+# the wolfSSL JSSE provider's SSLParameters bridge (WolfSSLJDK8Helper), which art_standalone leaves out
+# of wolfssljni-hostdex.jar: without it the ALPN list OkHttp sets through SSLParameters is dropped and
+# every OkHttp client speaks HTTP/1.1 (patches/wolfjsse-sslparameters.py explains). Built against
+# libcore's SSLParameters with the ALPN API (the pinned file the coreoj step also uses), put in front of
+# the jar's own dex like core-oj's.
+step_wolfjsse() {
+  local jar="$PREFIX/lib/java/dex/art/wolfssljni-hostdex.jar" w="$B/wolfjsse" want got
+  local wsrc="$SRCDIR/art_standalone/external/wolfssljni/src/java/com/wolfssl/provider/jsse"
+  local wcls="$SRCDIR/art_standalone/out/host/common/obj/JAVA_LIBRARIES/wolfssljni-hostdex_intermediates/classes.jar"
+  [[ -f "$jar" && -f "$wcls" && -d "$wsrc" ]] || die "no wolfssljni jar, classes or sources (step art first)"
+  [[ -f "$jar.orig" ]] || cp -p "$jar" "$jar.orig"
+  rm -rf "$w"; mkdir -p "$w/libcore/javax/net/ssl" "$w/src/com/wolfssl/provider/jsse" "$w/classes"
+  curl -fsSL --retry 3 "$LIBCORE_URL/+/$LIBCORE_COMMIT/ojluni/src/main/java/javax/net/ssl/SSLParameters.java?format=TEXT" | base64 -d > "$w/libcore/javax/net/ssl/SSLParameters.java"
+  want=$(tr ' ' '\n' <<<"$LIBCORE_SSL_SHA256" | sed -n "s/^SSLParameters=//p")
+  got=$(sha256sum "$w/libcore/javax/net/ssl/SSLParameters.java" | cut -d' ' -f1)
+  [[ "$got" == "$want" ]] || die "libcore SSLParameters.java sha256 $got != pinned $want"
+  python3 "$DEBVM_PATCHES/wolfjsse-sslparameters.py" "$wsrc" "$w/src/com/wolfssl/provider/jsse"
+  # libcore's SSLParameters only resolves names (-implicit:none): the runtime class is core-oj's
+  javac -g -nowarn -source 1.8 -target 1.8 -encoding UTF-8 -Xlint:-options -implicit:none \
+    -bootclasspath "$PREFIX/lib/java/core-all_classes.jar" -sourcepath "$w/libcore" -cp "$wcls" \
+    -d "$w/classes" "$w"/src/com/wolfssl/provider/jsse/*.java
+  java -jar "$PREFIX/lib/java/dx.jar" --dex --core-library --output="$w/tl-wolfjsse.dex" "$w/classes"
+  python3 "$DEBVM_PATCHES/core-oj-alpn.py" assemble "$jar.orig" "$w/tl-wolfjsse.dex" "$w/wolfssljni-hostdex.jar"
+  install -m 0755 "$w/wolfssljni-hostdex.jar" "$jar"
+  # the jar is on the boot class path: the boot image in this user's ART cache is stale
   rm -f "$HOME"/.cache/art/*/*boot* "$HOME"/.cache/art/*/*api-impl* 2>/dev/null || true
 }
 step_opensles() {
@@ -287,7 +315,7 @@ step_tlplay() {
   install -m 0755 "$CARGO_TARGET_DIR/release/tlplay" "$PREFIX/bin/tlplay"
 }
 
-ALL=(vixl wolfssl bionic art coreoj opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay)
+ALL=(vixl wolfssl bionic art coreoj wolfjsse opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay)
 pins_of() { # what a step's stamp records: its pins plus the hash of the patches it applies
   case "$1" in
     vixl) echo "$VIXL_URL $VIXL_MESON_PATCH_SHA256" ;;
@@ -297,6 +325,8 @@ pins_of() { # what a step's stamp records: its pins plus the hash of the patches
     # the unpatched jar's hash too: a rebuilt art step installs a new one (and drops the .orig)
     coreoj) local j="$PREFIX/lib/java/dex/art/core-oj-hostdex.jar.orig"
       echo "$LIBCORE_COMMIT $(find "$BOOTCP" "$DEBVM_PATCHES/core-oj-alpn.py" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum | cut -c1-16) $( [[ -f $j ]] && sha256sum "$j" | cut -c1-16 || echo none)" ;;
+    wolfjsse) local j="$PREFIX/lib/java/dex/art/wolfssljni-hostdex.jar.orig"
+      echo "$ART_COMMIT $LIBCORE_COMMIT $(sha256sum "$DEBVM_PATCHES/wolfjsse-sslparameters.py" "$DEBVM_PATCHES/core-oj-alpn.py" 2>/dev/null | sha256sum | cut -c1-16) $( [[ -f $j ]] && sha256sum "$j" | cut -c1-16 || echo none)" ;;
     opensles) echo "$OPENSLES_COMMIT" ;;
     atl) echo "$ATL_REPO $ATL_COMMIT $R8_VERSION" ;;
     wayland) echo "$WAYLAND_TAG" ;;
