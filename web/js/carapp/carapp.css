@@ -943,6 +943,10 @@
 .carapp-graphite:not(.carapp-night) .carapp-step.compact .carapp-icon:not(.tinted),
 .carapp-graphite:not(.carapp-night) .carapp-pill .carapp-icon:not(.tinted),
 .carapp-graphite:not(.carapp-night) .carapp-icon.lanes:not(.tinted) { filter: invert(1) hue-rotate(180deg); }
+/* a button icon the app tints near-white for dark car screens (Waze's map buttons): on the light
+   tiles it takes the button's own content colour, as a host does with a tint that fails its
+   contrast check (carapp-renderer.js action) */
+.carapp-graphite:not(.carapp-night) .carapp-icon.light-tint { background-color: currentColor !important; }
 
 .carapp-graphite .carapp-card.travel.trip {
   width: var(--card-width);

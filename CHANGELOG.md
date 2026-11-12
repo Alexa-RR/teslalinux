@@ -67,6 +67,12 @@ light by day and dark by night, in the Inter typeface.
   live map, with the keyboard under it; lists have thin dividers between rows.
 - The choice is kept by the browser, like the display settings, and applies at once.
 
+![Graphite by day with Graphite map colours: the map and its frosted button column, search with live results, the route preview with alternate routes](docs/media/car-graphite-search.gif)
+
+![Graphite on a simulated drive in Tel Aviv, sped up: the turn card with lanes, the trip card with the arrival time, then the destination](docs/media/car-graphite-navigation.gif)
+
+![Graphite from day to night during a drive: the panels and Waze's map switch together](docs/media/car-graphite-night.gif)
+
 ### Day and night
 
 *Settings > Waze interface > Day and night.*

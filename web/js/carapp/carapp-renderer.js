@@ -132,6 +132,14 @@
     return "rgba(" + ((v >>> 16) & 0xff) + "," + ((v >>> 8) & 0xff) + "," + (v & 0xff) + "," + a.toFixed(3) + ")";
   }
 
+  /** whether a CSS rgb()/rgba() colour is near white (relative luminance, WCAG) */
+  function isNearWhite(css) {
+    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(css || "");
+    if (!m) return false;
+    const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    return 0.2126 * lin(+m[1]) + 0.7152 * lin(+m[2]) + 0.0722 * lin(+m[3]) > 0.7;
+  }
+
   function hexToCss(hex) {
     // #aarrggbb (aapt) to rgba()
     if (!hex || hex[0] !== "#" || hex.length !== 9) return hex || "transparent";
@@ -541,6 +549,13 @@
         b.style.backgroundColor = bg;
       }
       let ic = this.icon(a.icon, "--action-icon", "currentColor");
+      // a near-white tint on a button without a fill of its own: graphite by day puts such buttons
+      // on light frosted tiles, where a tint made for the car's dark theme (Waze tints its map
+      // buttons white in both variants) would vanish; there, like a car host whose tint fails the
+      // contrast check against the background, the button's content colour is used (carapp.css)
+      if (ic && !bg && ic.classList.contains("tinted") && isNearWhite(ic.style.backgroundColor)) {
+        ic.classList.add("light-tint");
+      }
       if (!ic && a.type === ACTION_APP_ICON) {
         // the app's own icon (the host's channel sends it as icon 0)
         b.classList.add("app-icon");
