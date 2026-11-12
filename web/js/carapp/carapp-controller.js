@@ -117,6 +117,10 @@
 
     applyLook() {
       if (this.renderer) this.renderer.setLook(this.lookStyle, this.isNight());
+      // the page's own buttons over the map (#home-controls) follow the look too (carapp.css)
+      const graphite = this.mode === "car" && this.lookStyle === "graphite";
+      document.body.classList.toggle("carapp-page-graphite", graphite);
+      document.body.classList.toggle("carapp-page-night", graphite && this.isNight());
       this.applyMapColours();
     }
 
@@ -155,8 +159,9 @@
         if (e.detail && e.detail !== this.mode) global.location.reload();
       });
       if (mode !== "car") return;
-      // the map colours for the display's renderer, whether it starts before or after this
-      this.applyMapColours();
+      // the page's buttons in the look, and the map colours for the display's renderer, whether it
+      // starts before or after this
+      this.applyLook();
       let style;
       try {
         style = await (await fetch("./js/carapp/host-style.json")).json();

@@ -126,7 +126,9 @@ Changes from upstream:
   buttons) and "Graphite" (frosted light or dark cards with hairline dividers, a single turn card
   with lanes and the next step, a trip card with an "End drive" foot, the map buttons as frosted
   tile columns, the search as a card over the live map; `.carapp-graphite` in `carapp.css`, a few
-  structural branches in the renderer). Graphite follows day and night: the driver's choice
+  structural branches in the renderer; the page's own mute and settings buttons, `#home-controls`,
+  follow it as a frosted chip through `carapp-page-graphite`/`carapp-page-night` on the body).
+  Graphite follows day and night: the driver's choice
   (Settings > Waze interface > Day and night, `teslalinux.carDayNight`, sent to the car-app host
   as `dayNight`, so the app's map switches too) or, on Automatic, the host's `dayNight` state.
   With Graphite, "Map colours: Muted" (the default; `teslalinux.carMapColours`) shows the app's

@@ -58,8 +58,9 @@ in its own rounded dark style, sized for a touch screen at arm's length.
 
 *Settings > Waze interface > Car interface style.*
 
-Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels,
-light by day and dark by night, in the Inter typeface.
+Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels
+with a soft edge, light by day and dark by night (the page's own mute and settings buttons too), in
+the Inter typeface.
 
 - Driving: one turn card with the lanes and the step after it, and a trip card with the arrival
   time, the minutes and distance left, and End drive.

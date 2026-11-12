@@ -18,7 +18,7 @@
           {
             "title": "Graphite, a second look for the car interface",
             "shortDescription": "Settings > Waze interface > Car interface style.",
-            "descriptionMarkdown": "Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels, light by day and dark by night, in the Inter typeface.\n\n• Driving: one turn card with the lanes and the step after it, and a trip card with the arrival time, the minutes and distance left, and End drive.\n• The map buttons stand in slim frosted columns at the right edge; search opens as a card over the live map, with the keyboard under it; lists have thin dividers between rows.\n• The choice is kept by the browser, like the display settings, and applies at once."
+            "descriptionMarkdown": "Rounded (the default) keeps the dark rounded panels. Graphite is flat and quieter: frosted panels with a soft edge, light by day and dark by night (the page's own mute and settings buttons too), in the Inter typeface.\n\n• Driving: one turn card with the lanes and the step after it, and a trip card with the arrival time, the minutes and distance left, and End drive.\n• The map buttons stand in slim frosted columns at the right edge; search opens as a card over the live map, with the keyboard under it; lists have thin dividers between rows.\n• The choice is kept by the browser, like the display settings, and applies at once."
           },
           {
             "title": "Day and night",

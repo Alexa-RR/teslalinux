@@ -34,11 +34,18 @@ the APK into its data folder (`/var/lib/tesla/android/waze/base.apk_/`). `libwaz
   Graphite; `services/api/api.py` reports in `GET /api/appInterface` `mapSkin` whether it applies to
   the installed Waze (the same versionCode + sha256 check), and the settings page warns when it does not.
 
-The palette comes from the Graphite tokens and the mockup's map: land `#E4E5E7` / `#2F3032`, buildings
-and stations `#DADBDE` / `#353639`, parks `#D4DCD2` / `#2B332D`, water `#B4BAC2` / `#1C1D20`, roads white
-(day) or near-black greys (night), labels neutral greys, route `#2F64E8`, the alternative and preview
-routes in light or dark blues. Every replacement keeps the file's length (stat() still describes the
-file on disk).
+The palette comes from the Graphite tokens and the mockup's map: land `#D9DADD` / `#2F3032` (by day a
+shade darker than the panels, so the white roads stand out), buildings and stations `#CDCED2` /
+`#353639`, parks `#C8D2C6` / `#2B332D`, water `#A8AFB9` / `#1C1D20`, roads white (day) or near-black
+greys (night), labels dark (`#505257`, strong `#333438`) by day and light greys by night, route
+`#2F64E8`, the alternative and preview routes in light or dark blues. By day `global_color_mod`, the
+tint Waze fades the 3D view's distance into, is the land colour instead of white, so the horizon does
+not wash out. Every replacement keeps the file's length (stat() still describes the file on disk).
+
+Not in the palette file, so Waze's own colours stay: the position arrow (a textured 3D model,
+`skins/default/cars/arrow_model.obj` + `arrow_texture_normal.png`) and the route preview's ETA bubbles
+("11 min / Best": libwaze puts the colour into its label request, `EtaLabelRequest.labelData.backgroundColor`,
+purple by day and cyan by night, and Waze's Java side draws the bitmap with it).
 
 ## When Waze updates
 

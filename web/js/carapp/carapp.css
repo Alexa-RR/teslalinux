@@ -650,9 +650,9 @@
   font-display: swap;
 }
 
-.carapp-root.carapp-graphite {
+.carapp-root.carapp-graphite, body.carapp-page-graphite #home-controls {
   /* day */
-  --gr-card: rgba(250, 250, 251, 0.86);
+  --gr-card: rgba(250, 250, 251, 0.9);
   --gr-card-solid: #f4f4f5;
   --gr-tile: rgba(20, 20, 30, 0.055);
   --gr-tile-strong: rgba(20, 20, 30, 0.09);
@@ -668,7 +668,8 @@
   --gr-blue-text: #2d61e6;
   --gr-orange: #e08a00;
   --gr-toggle-off: #d0d1d5;
-  --gr-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 18px rgba(0, 0, 0, 0.08);
+  /* a hairline ring and a soft drop: light cards over the light map read as floating cards */
+  --gr-shadow: 0 0 0 1px rgba(16, 18, 24, 0.09), 0 1px 3px rgba(16, 18, 24, 0.1), 0 8px 24px rgba(16, 18, 24, 0.14);
   --gr-blur: blur(24px) saturate(1.2);
   /* the rounded look's names, so its shared rules draw in these colours */
   --surface: var(--gr-card);
@@ -682,7 +683,7 @@
   font-family: "Inter Car", "Roboto", Arial, sans-serif;
   color: var(--gr-text);
 }
-.carapp-root.carapp-graphite.carapp-night {
+.carapp-root.carapp-graphite.carapp-night, body.carapp-page-graphite.carapp-page-night #home-controls {
   --gr-card: rgba(38, 38, 40, 0.88);
   --gr-card-solid: #242426;
   --gr-tile: rgba(255, 255, 255, 0.07);
@@ -745,6 +746,19 @@
   -webkit-backdrop-filter: var(--gr-blur);
   backdrop-filter: var(--gr-blur);
 }
+/* the page's own buttons over the display's top right corner (mute, settings: #home-controls,
+   css/app.css): a frosted chip like the cards, light by day and dark by night (the controller sets
+   carapp-page-graphite and carapp-page-night on the body in Car mode with this look) */
+body.carapp-page-graphite #home-controls {
+  background: var(--gr-card);
+  box-shadow: var(--gr-shadow);
+  -webkit-backdrop-filter: var(--gr-blur);
+  backdrop-filter: var(--gr-blur);
+}
+body.carapp-page-graphite .home-control-button { color: var(--gr-icon); }
+body.carapp-page-graphite .home-control-button:hover { background: var(--gr-sel); }
+body.carapp-page-graphite .home-control-button.update,
+body.carapp-page-graphite .home-control-button.update .home-control-icon { color: var(--gr-orange); }
 .carapp-graphite .carapp-card.content { padding: 0; }
 .carapp-graphite .disabled { opacity: 0.4; }
 
