@@ -318,6 +318,22 @@
         dense: false,
       });
       this._appendTile({
+        icon: "aspect_ratio",
+        title: "Panel size",
+        subtitle: "The size of the panels and buttons drawn over the map (turn card, search, lists), at once. Waze's map keeps its own size (Map size)",
+        trailing: this._createSelect(
+          [
+            { value: "smallest", label: "Smallest" },
+            { value: "smaller", label: "Smaller" },
+            { value: "default", label: "Default" },
+            { value: "larger", label: "Larger" },
+          ],
+          look.panelSize || "default",
+          async (value) => car.setLook({ panelSize: value }),
+        ),
+        dense: false,
+      });
+      this._appendTile({
         icon: "format_size",
         title: "Map size",
         subtitle: "The size of Waze's street names, symbols and position arrow on the map, at once; its speedometer follows when Waze next starts. The panels on this screen keep their size",

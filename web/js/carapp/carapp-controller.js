@@ -30,6 +30,11 @@
   const LOOK_MAP_SIZE_KEY = "teslalinux.carMapSize";
   const MAP_SIZE_SCALES = { smaller: 0.85, default: 1, larger: 1.25, largest: 1.5 };
   const MAP_SIZES = Object.keys(MAP_SIZE_SCALES);
+  // The size of the panels drawn here (cards, lists, buttons): a scale on the density they are
+  // laid out at; the app's map is not affected. Kept by this browser, applied at once.
+  const LOOK_PANEL_SIZE_KEY = "teslalinux.carPanelSize";
+  const PANEL_SIZE_SCALES = { smallest: 0.7, smaller: 0.85, default: 1, larger: 1.15 };
+  const PANEL_SIZES = Object.keys(PANEL_SIZE_SCALES);
 
   function readPref(key, allowed, fallback) {
     try {
@@ -62,14 +67,22 @@
       this.dayNight = readPref(LOOK_DAY_NIGHT_KEY, DAY_NIGHT, "auto");
       this.mapColours = readPref(LOOK_MAP_KEY, PAGE_MAP_COLOURS, "muted");
       this.mapSize = readPref(LOOK_MAP_SIZE_KEY, MAP_SIZES, "default");
+      this.panelSize = readPref(LOOK_PANEL_SIZE_KEY, PANEL_SIZES, "default");
       // whether the graphite map palette applies to the installed app (/api/appInterface "mapSkin")
       this.mapSkin = null;
       this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
     }
 
-    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin, mapSize}. */
+    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin, mapSize, panelSize}. */
     getLook() {
-      return { style: this.lookStyle, dayNight: this.dayNight, mapColours: this.mapColours, mapSkin: this.mapSkin, mapSize: this.mapSize };
+      return {
+        style: this.lookStyle,
+        dayNight: this.dayNight,
+        mapColours: this.mapColours,
+        mapSkin: this.mapSkin,
+        mapSize: this.mapSize,
+        panelSize: this.panelSize,
+      };
     }
 
     /** the device's map colours state (/api/appInterface), from start() or the settings page */
@@ -104,6 +117,13 @@
         this.mapSize = look.mapSize;
         writePref(LOOK_MAP_SIZE_KEY, look.mapSize);
         this.send({ type: "mapScale", scale: MAP_SIZE_SCALES[this.mapSize] });
+      }
+      if (look && PANEL_SIZES.indexOf(look.panelSize) >= 0 && look.panelSize !== this.panelSize) {
+        this.panelSize = look.panelSize;
+        writePref(LOOK_PANEL_SIZE_KEY, look.panelSize);
+        // the panels are laid out again at the new density; the map area they leave free follows
+        this.renderer = null;
+        this.draw();
       }
       let saved = Promise.resolve();
       if (look && MAP_COLOURS.indexOf(look.mapColours) >= 0) {
@@ -392,7 +412,8 @@
           send: (msg) => this.send(msg),
           icon: (id) => this.icons.get(id) || null,
           iconIsGlyph: (id) => this.mono.get(id) === true,
-          density: this.surface.dpi,
+          // the display's density, scaled by the panel size chosen in the settings
+          density: this.surface.dpi * PANEL_SIZE_SCALES[this.panelSize],
         });
         this.renderer.listen(this.popupsEl);
         this.renderer.setLook(this.lookStyle, this.isNight());

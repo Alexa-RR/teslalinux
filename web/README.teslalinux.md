@@ -154,6 +154,10 @@ Changes from upstream:
   here keep the display's density (`surface.dpi`; the map's is `surface.mapDpi`). The browser keeps
   the choice and sends it while the host reports none set since the app started (`mapScale` state
   with `set` false); once a page has set one, every page adopts the host's, so all agree.
+  "Panel size" (`teslalinux.carPanelSize`: Smallest, Smaller, Default, Larger = 0.7, 0.85, 1, 1.15)
+  sizes the panels drawn here: the renderer lays them out at `surface.dpi` times that factor (both
+  looks size everything from that density), redrawn at once, and the map area they leave free goes
+  to the app again. Kept by this browser only; the app's map is not affected.
 * `fonts/Inter-Regular-car.woff2`, `fonts/Inter-Bold-car.woff2` (new): the Graphite look's text
   face, Inter 4.001 by The Inter Project Authors (SIL Open Font License 1.1, `fonts/Inter-OFL.txt`,
   github.com/rsms/inter), the static Regular and Bold cut to Latin, Latin-1 and Latin Extended-A

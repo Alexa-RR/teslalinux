@@ -19,6 +19,15 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### Panel size
+
+*Settings > Waze interface > Panel size, in Car mode.*
+
+The panels and buttons the car page draws over the map (turn card, trip card, search, lists, the
+route preview, the map buttons) can now be smaller, or a little larger: Smallest, Smaller, Default
+or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels
+leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice.
+
 ### Map size
 
 *Settings > Waze interface > Map size, in Car mode.*
