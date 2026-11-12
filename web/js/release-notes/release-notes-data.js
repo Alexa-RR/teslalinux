@@ -8,7 +8,7 @@
   TAHtml.releaseNotesData = {
     "versions": [
       {
-        "versionName": "v0.2.0",
+        "versionName": "v0.2.0 · 2026-11-12",
         "changelogItems": [
           {
             "title": "Car interface",

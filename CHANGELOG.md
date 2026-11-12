@@ -15,7 +15,7 @@ Each "### Topic" is one card on the car page; its first line, in italics, is the
 Date a version's heading ("- YYYY-MM-DD" instead of "- Unreleased") when its tag is pushed.
 -->
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-11-12
 
 The car interface: in Car mode Waze shows the screens it was made for car displays, drawn by the car
 page in large, rounded panels over Waze's own map. Phone mode (Waze as on a phone) stays the default.
@@ -360,7 +360,7 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[0.2.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.2...HEAD
+[0.2.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Alexa-RR/teslalinux/releases/tag/v0.1.0
