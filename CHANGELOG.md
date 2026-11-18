@@ -37,6 +37,8 @@ before was tested in the build VM, which hid all of these.*
 - Waze waited on IPv6 connections that lead nowhere on some networks (a home router with only a
   local IPv6 prefix) and gave up. The Pi now uses IPv4 only.
 - The car's position is sent to Waze from the start (it was off until switched on in Settings).
+- In Phone mode, the map beside search results, a place card or a route stayed black for 3 to 7
+  seconds every time it opened. It now shows within a second.
 
 ### The hotspot and the car page come up sooner
 
@@ -98,6 +100,15 @@ Tools, tests and docs:
   in ATL: Waze 5.27 calls `getSplashScreen()` while it starts and ended with `NoSuchMethodError`.
   No starting window is drawn on this platform, so no splash screen is ever handed over; exit
   animation listeners behave as in AOSP for an activity started without one.
+- EGL in ATL (`src/libandroid/egl.c`): `eglGetCurrentSurface` and framebuffer 0 follow the
+  context's real binding. ATL's record of the surface a context draws to was only written when one
+  of its own window surfaces became current; making the context current with a pbuffer, or
+  destroying the surface, left it behind. Waze's map engine takes `eglGetCurrentSurface` as the
+  fallback surface it makes current between windows, so after a map view was recreated (Phone mode:
+  search, place card, route) it got the destroyed one: `EGL_BAD_SURFACE` on every frame, and the
+  new view's map black for about 3 s. Framebuffer 0 could also bind a freed surface's buffers.
+  Pbuffers (Wayland has none: a window surface stands in) of the default 0x0 size get one pixel
+  instead of failing, and their window and `wl_surface` are destroyed with them.
 - Pi installer (`tools/pios/install.sh`, also `host/phase1-pios/provision.sh`):
   - `teslalinux-ap-addr.service` binds to the Wi-Fi device (`BindsTo=`/`WantedBy=` its `.device`)
     instead of running in `sysinit.target`: on a Pi 4, brcmfmac creates wlan0 about 1.5 s after the
