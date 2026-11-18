@@ -39,6 +39,9 @@ before was tested in the build VM, which hid all of these.*
 - The car's position is sent to Waze from the start (it was off until switched on in Settings).
 - In Phone mode, the map beside search results, a place card or a route stayed black for 3 to 7
   seconds every time it opened. It now shows within a second.
+- In Phone mode, "Connect calendar" froze Waze: the screen stayed on its last picture and nothing
+  answered. Screens that open over Waze's map without covering it (Waze's permission and calendar
+  screens) now leave the map running underneath, as on a phone.
 
 ### The hotspot and the car page come up sooner
 
@@ -109,6 +112,18 @@ Tools, tests and docs:
   new view's map black for about 3 s. Framebuffer 0 could also bind a freed surface's buffers.
   Pbuffers (Wayland has none: a window surface stands in) of the default 0x0 size get one pixel
   instead of failing, and their window and `wl_surface` are destroyed with them.
+- Translucent and floating activities in ATL (`windowIsTranslucent`, `windowIsFloating`; AOSP
+  `ActivityRecord.occludesParent`): the activity below stays visible, started and paused (it was
+  stopped, and restarted with onStart afterwards), and its window stays on the screen under theirs
+  (their decor is a layer over its page; a floating one is centred, dims with
+  `backgroundDimEnabled`, and finishes on a touch outside with `windowCloseOnTouchOutside`, which
+  is now read from the theme). Waze's `RequestPermissionActivity` and `CalendarApprovedActivity`
+  are translucent and floating: "Connect calendar" stopped `MainActivity`, Waze took that for going
+  to the background and stopped its map, and the screen kept its last frame. An activity that
+  finishes in `onCreate` is now destroyed (it never got onDestroy).
+  `tools/debian/atl-tests/lifecycle/`: results of activities that finish at once, a translucent
+  activity over another, and the started-activity count; `embed/mkapk.py` takes more activities
+  and their framework themes.
 - Pi installer (`tools/pios/install.sh`, also `host/phase1-pios/provision.sh`):
   - `teslalinux-ap-addr.service` binds to the Wi-Fi device (`BindsTo=`/`WantedBy=` its `.device`)
     instead of running in `sysinit.target`: on a Pi 4, brcmfmac creates wlan0 about 1.5 s after the

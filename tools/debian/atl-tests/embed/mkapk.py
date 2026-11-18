@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""mkapk.py OUT.apk CLASSES.dex PACKAGE ACTIVITY: a minimal unsigned APK for ATL runtime tests.
+"""mkapk.py OUT.apk CLASSES.dex PACKAGE ACTIVITY [ACTIVITY...]: a minimal unsigned APK for ATL runtime tests.
 
 Writes a binary AndroidManifest.xml (Android's compiled XML format, as aapt writes it) declaring
-PACKAGE with one exported launcher ACTIVITY, and stores it with CLASSES.dex. There are no
+PACKAGE with the first ACTIVITY as its exported launcher activity and any further ones as plain
+activities (NAME:0xTHEME gives one a framework theme), and stores it with CLASSES.dex. There are no
 resources: the tests build their views in code. ATL needs no signature for an app it is given.
 """
 import struct
@@ -12,13 +13,14 @@ import zipfile
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 # attribute resource ids (frameworks/base/core/res/res/values/public.xml)
 ATTR_IDS = {
+    "theme": 0x01010000,
     "label": 0x01010001,
     "name": 0x01010003,
     "exported": 0x01010010,
     "minSdkVersion": 0x0101020C,
     "targetSdkVersion": 0x01010270,
 }
-TYPE_STRING, TYPE_INT_DEC, TYPE_INT_BOOLEAN = 0x03, 0x10, 0x12
+TYPE_REFERENCE, TYPE_STRING, TYPE_INT_DEC, TYPE_INT_BOOLEAN = 0x01, 0x03, 0x10, 0x12
 
 
 class StringPool:
@@ -45,7 +47,7 @@ class StringPool:
         return struct.pack("<HHIIIIII", 0x0001, header, header + len(body), len(self.strings), 0, 0x100, start, 0) + body
 
 
-def manifest(package, activity):
+def manifest(package, activity, others=()):
     # the attribute names with resource ids come first in the pool, in the order of the map
     names = list(ATTR_IDS)
     pool = StringPool(names)
@@ -59,6 +61,8 @@ def manifest(package, activity):
             name_idx = pool.idx(aname)
             if kind == TYPE_STRING:
                 raw = data = pool.idx(value)
+            elif kind == TYPE_REFERENCE:
+                raw, data = 0xFFFFFFFF, value
             elif kind == TYPE_INT_BOOLEAN:
                 raw, data = 0xFFFFFFFF, 0xFFFFFFFF if value else 0
             else:
@@ -86,6 +90,14 @@ def manifest(package, activity):
     end("category")
     end("intent-filter")
     end("activity")
+    for other in others:
+        # NAME or NAME:0xTHEME (a framework theme, e.g. 0x01030010 Theme.Translucent.NoTitleBar)
+        name, _, theme = other.partition(":")
+        attrs = [("name", True, TYPE_STRING, name)]
+        if theme:
+            attrs.append(("theme", True, TYPE_REFERENCE, int(theme, 16)))
+        start("activity", attrs)
+        end("activity")
     end("application")
     end("manifest")
     nodes.append(struct.pack("<HHIIIII", 0x0101, 16, 24, 1, 0xFFFFFFFF, prefix, uri))
@@ -99,7 +111,7 @@ def manifest(package, activity):
 def main():
     out, dex, package, activity = sys.argv[1:5]
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("AndroidManifest.xml", manifest(package, activity))
+        z.writestr("AndroidManifest.xml", manifest(package, activity, sys.argv[5:]))
         z.write(dex, "classes.dex")
 
 
