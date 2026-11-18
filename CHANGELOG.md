@@ -19,6 +19,39 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### Waze on a real Raspberry Pi
+
+*The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything
+before was tested in the build VM, which hid all of these.*
+
+- Waze 5.27, the version a new install and the daily update now download, closed about 15 seconds
+  after every start. It runs again.
+- The screen stayed black: the Pi's hardware picture encoder never answered, and the stream
+  stopped for good. It now gets the picture in a form it can read, and if it ever fails, the Pi
+  switches to its processor for the picture instead of stopping.
+- Waze could not reach any of its servers ("certificate verify failed"), and once it could, it
+  crashed on its second connection to a server. Apps now make secure connections with Android's
+  own component for them (Conscrypt), as on a phone: they work, a connection to a server already
+  seen is set up in about half the time and a third of the processor time, and the faster
+  encryption for the Pi's processor is used.
+- Waze waited on IPv6 connections that lead nowhere on some networks (a home router with only a
+  local IPv6 prefix) and gave up. The Pi now uses IPv4 only.
+- The car's position is sent to Waze from the start (it was off until switched on in Settings).
+
+### The hotspot and the car page come up sooner
+
+*Measured on a Raspberry Pi 4 with a fresh Raspberry Pi OS install.*
+
+- The car hotspot could come up without its address (172.16.0.1): the address was set before the
+  Wi-Fi chip was ready, so the car could join the network but not reach the page. It now waits
+  for the Wi-Fi chip.
+- The Pi boots in 12 seconds instead of 22; the hotspot is up about 8 seconds after power-on and
+  the car page right after it, instead of about 21.
+- Waze's first start after an install no longer builds the runtime's core library image again.
+- An LTE stick that works as a network card (a Huawei HiLink stick such as the E3372) got no
+  address on a Pi set up with Raspberry Pi Imager, so the Pi had no mobile internet and kept
+  resetting the stick. It now connects by itself (tested: E3372 on 4G).
+
 ### Panel size
 
 *Settings > Waze interface > Panel size, in Car mode.*
@@ -61,13 +94,94 @@ Tools, tests and docs:
 
 #### Fixed
 
+- `Activity.getSplashScreen()`, `android.window.SplashScreen` and `SplashScreenView` (AOSP, API 31)
+  in ATL: Waze 5.27 calls `getSplashScreen()` while it starts and ended with `NoSuchMethodError`.
+  No starting window is drawn on this platform, so no splash screen is ever handed over; exit
+  animation listeners behave as in AOSP for an activity started without one.
+- Pi installer (`tools/pios/install.sh`, also `host/phase1-pios/provision.sh`):
+  - `teslalinux-ap-addr.service` binds to the Wi-Fi device (`BindsTo=`/`WantedBy=` its `.device`)
+    instead of running in `sysinit.target`: on a Pi 4, brcmfmac creates wlan0 about 1.5 s after the
+    unit ran, so `ip addr` failed and hostapd served a network without an address. An earlier
+    install's `sysinit.target` link is replaced (`systemctl reenable`).
+  - `NetworkManager-wait-online` stays disabled: enabling `NetworkManager.service` turned it back on
+    (its `[Install]` has `Also=NetworkManager-wait-online.service`), which put dnsmasq
+    (`Requires=network-online.target` in Debian's unit) and nginx about 14 s into the boot.
+  - The Imager's netplan connections (`/etc/netplan/90-NM-*.yaml`) become NetworkManager keyfiles
+    with the same UUIDs and settings (both are backed up and restored by `teslalinux rollback` and
+    `uninstall`): Pi OS's NetworkManager (Ubuntu's netplan patches) wrote each one back to YAML at
+    every start, each time with `netplan generate` and a systemd daemon-reload, 5 s of the boot.
+    NetworkManager now starts in 3.7 s instead of 9.
+  - A NetworkManager profile for USB modems that are network cards
+    (`teslalinux-usb-modem.nmconnection`: `match.driver` cdc_ether, cdc_ncm, huawei_cdc_ncm,
+    rndis_host, DHCP, `multi-connect`, autoconnect priority 10). NetworkManager makes no automatic
+    profile for a new wired device while another profile without an interface name could take it,
+    and the Imager's Ethernet profile has none, so a HiLink stick stayed "disconnected" and
+    teslalinux-uplink's recovery power-cycled it in a loop.
+  - hostapd, dnsmasq and nginx start without waiting for `network.target` /
+    `network-online.target` (that is, for NetworkManager): copies of Debian's units with only those
+    removed in `/etc/systemd/system`, regenerated from the vendor units on every run. Hotspot at
+    7.7 s and nginx at 8.2 s after power-on instead of 11.
+  - IPv4 only: `disable_ipv6` on every interface but loopback, and `ipv6.method=disabled` as
+    NetworkManager's default and in its wired, Wi-Fi and mobile profiles. A LAN that advertises an
+    IPv6 default route with only a ULA prefix made IPv6 connections hang or fail
+    (`NoRouteToHostException`), and Waze's first request (GeoConfig) gave up without trying IPv4.
+  - `teslalinux-android-cacerts`: the system CAs as `/etc/ssl/certs/android`, Conscrypt's system
+    CA store (AOSP's layout: one PEM per CA, named by `openssl x509 -subject_hash_old`), run by the
+    installer and from `/etc/ca-certificates/update.d/`; `teslalinux doctor` checks it.
+  - ART's boot image is built at ATL's image location (`dalvikvm -Ximage:`): it was cached under
+    dalvikvm's own path, so the app's first start built a second one.
+- tacomp's V4L2 M2M encoder (`m2m-jpeg`, `m2m-h264`) on a Pi 4:
+  - It is given the frame's pixels (the GPU read-back the CPU path uses) for its own MMAP buffers,
+    not the output buffer's dmabuf: the codec (`bcm2835-codec`, vb2-dma-contig) needs contiguous,
+    linear memory and V3D render buffers are neither; it took them and never produced a picture.
+  - The pixel formats are the codec's: `AB24` for B G R X memory, `BGR4` for R G B X (it has no
+    `XR24`, and its firmware reads these two with red and blue the other way round from their V4L2
+    definitions).
+  - The encode loop waits at most 2 s for a picture (it waited forever, so one stuck frame stopped
+    the stream for good); a failed encoder hands over to the CPU path.
+- The car's position is on by default (`persist.tesla-android.gps.is_active`, upstream's default
+  is 0): the app is a navigator, and a fresh install gave Waze no position until GPS was switched
+  on in Settings.
+- art_standalone runs dex2oat for an app with its class loader context
+  (`tools/debvm/patches/art_standalone-dex2oat-context.py`): its first-launch compile left the
+  context out, so the oat file never matched the app's class loader, ART rejected it on every
+  start (an app class that duplicates a framework class, as Waze has, fails the collision check)
+  and ran the extracted dex without compiled code; the stale file also counted as up to date and
+  was never rebuilt. APKs without code (resource splits) are no longer sent to dex2oat.
+- Conscrypt (AOSP android-15.0.0_r36, with its BoringSSL) is ART's TLS provider, as on Android,
+  instead of the wolfSSL JSSE provider art_standalone bundles: build steps `boringssl` and
+  `conscrypt` (pins in `versions.env`), `tools/debvm/patches/art_standalone-conscrypt.py` (AOSP's
+  provider list, Conscrypt on the boot class path in place of wolfssljni), `conscrypt-platform.py`
+  (the CA store directory, as `ANDROID_ROOT` stays unset; the file-descriptor socket by default:
+  the SSLEngine-based one AOSP defaults to costs twice the CPU here,
+  `-Dcom.android.org.conscrypt.useEngineSocketByDefault=true` goes back), `conscrypt-aconfig.py`,
+  and `conscrypt-libandroidio.cpp` (AOSP's libandroidio on libjavacore's close monitor, so closing
+  a socket from another thread, OkHttp's cancel, wakes a blocked read: 0.3 s instead of the 10 s
+  timeout). In ATL: AOSP's `X509TrustManagerExtensions` (it returned the chain unchecked), and
+  `android.net.ssl.SSLSockets` and the Conscrypt classes come from the boot class path. wolfJSSE
+  failed on a Pi: it trusted no CA (it reads only a Java keystore, which needs a JRE), and it hands
+  one cached `SSLSession` to every connection that resumes a server and re-points it at the newest,
+  so OkHttp read a null cipher suite and null peer certificates and Waze 5.27 crashed; it never
+  actually resumed, even with session tickets built in. Measured on a Pi 4 (loopback, per
+  connection): full handshake 7.5 ms / 5.4 ms CPU (wolfJSSE 13.0 / 10.1), resumed 4.2 / 2.2
+  (wolfJSSE never resumed), 149 of 150 parallel connections resumed; AES-128-GCM 41 MB/s (16),
+  ChaCha20 preferred where there is no AES hardware (the Pi 4's CPU has none).
+  `tools/debian/tls-check/run.sh`: provider, h2, sequential and parallel resumption, cancel, trust
+  manager extensions and the CA store.
 - HTTP/2: apps that set ALPN through `SSLParameters` (OkHttp 5, so Waze) always fell back to
-  HTTP/1.1, because art_standalone builds the wolfSSL JSSE provider without its `SSLParameters`
-  bridge (`WolfSSLJDK8Helper`) and drops the failure silently. A new build step (`wolfjsse` in
-  `tools/debvm/build-dist.sh`, `tools/debvm/patches/wolfjsse-sslparameters.py`) adds it, and fixes
-  `WolfSSLParametersHelper.decoupleParams`, so ClientHellos offer h2 like a phone's. Measured on
-  the map's tile host: one connection instead of five, same throughput (Waze's own limit of five
-  requests per host is what bounds it).
+  HTTP/1.1 (art_standalone builds the wolfSSL JSSE provider without its `SSLParameters` bridge and
+  drops the failure silently). Conscrypt negotiates h2 (`tls-check` checks it through OkHttp's own
+  calls); measured on the map's tile host: one connection instead of five. The `wolfjsse` build
+  step (`tools/debvm/patches/wolfjsse-sslparameters.py`, the bridge and a `decoupleParams` fix)
+  keeps the wolfSSL provider, still in the dist for apps that ask for it by name, correct too.
+- Release builds always started cold ("Cache not found", 5% ccache hits, art_standalone alone
+  10 minutes): a run can only restore caches of its own ref and of the default branch, and every
+  release is a new tag. `release.yml` now also builds (and publishes nothing) on pushes to main that
+  change what it compiles, which keeps a cache tag builds can use. `build-dist.sh` puts every
+  compile through ccache itself when it is installed, so the build VM (which had none) and CI build
+  the same way; `guest-provision.sh` installs it in both modes. The art step also rebuilds when
+  wolfSSL's version or flags change (it compiles wolfssljni's JNI library against wolfSSL's
+  headers).
 
 ## [0.2.0] - 2026-11-12
 

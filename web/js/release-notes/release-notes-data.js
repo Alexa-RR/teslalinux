@@ -11,6 +11,16 @@
         "versionName": "Unreleased",
         "changelogItems": [
           {
+            "title": "Waze on a real Raspberry Pi",
+            "shortDescription": "",
+            "descriptionMarkdown": "The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything before was tested in the build VM, which hid all of these.\n\n• Waze 5.27, the version a new install and the daily update now download, closed about 15 seconds after every start. It runs again.\n• The screen stayed black: the Pi's hardware picture encoder never answered, and the stream stopped for good. It now gets the picture in a form it can read, and if it ever fails, the Pi switches to its processor for the picture instead of stopping.\n• Waze could not reach any of its servers (\"certificate verify failed\"), and once it could, it crashed on its second connection to a server. Apps now make secure connections with Android's own component for them (Conscrypt), as on a phone: they work, a connection to a server already seen is set up in about half the time and a third of the processor time, and the faster encryption for the Pi's processor is used.\n• Waze waited on IPv6 connections that lead nowhere on some networks (a home router with only a local IPv6 prefix) and gave up. The Pi now uses IPv4 only.\n• The car's position is sent to Waze from the start (it was off until switched on in Settings)."
+          },
+          {
+            "title": "The hotspot and the car page come up sooner",
+            "shortDescription": "Measured on a Raspberry Pi 4 with a fresh Raspberry Pi OS install.",
+            "descriptionMarkdown": "• The car hotspot could come up without its address (172.16.0.1): the address was set before the Wi-Fi chip was ready, so the car could join the network but not reach the page. It now waits for the Wi-Fi chip.\n• The Pi boots in 12 seconds instead of 22; the hotspot is up about 8 seconds after power-on and the car page right after it, instead of about 21.\n• Waze's first start after an install no longer builds the runtime's core library image again.\n• An LTE stick that works as a network card (a Huawei HiLink stick such as the E3372) got no address on a Pi set up with Raspberry Pi Imager, so the Pi had no mobile internet and kept resetting the stick. It now connects by itself (tested: E3372 on 4G)."
+          },
+          {
             "title": "Panel size",
             "shortDescription": "Settings > Waze interface > Panel size, in Car mode.",
             "descriptionMarkdown": "The panels and buttons the car page draws over the map (turn card, trip card, search, lists, the route preview, the map buttons) can now be smaller, or a little larger: Smallest, Smaller, Default or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice."
