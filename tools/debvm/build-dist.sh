@@ -68,6 +68,14 @@ JOBS="${JOBS:-$(nproc)}"
 mkdir -p "$SRCDIR" "$LOGS" "$STAMPS"
 export JAVA_HOME="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")}"
 export PATH="$JAVA_HOME/bin:$PREFIX/bin:$PATH"
+# every C/C++ compile through ccache when it is installed (guest-provision.sh): Debian's masquerade
+# links come first in PATH, so make (art_standalone's HOST_CC := gcc), meson and autotools all use it.
+# A step's sources are cleaned before it builds (git clean), so without it every changed pin, patch
+# or flag rebuilt the whole step; with it, only the files whose preprocessed input changed compile.
+if [[ -z "${CCACHE_DISABLE:-}" && -d /usr/lib/ccache ]] && command -v ccache >/dev/null; then
+  export PATH="/usr/lib/ccache:$PATH"
+  export CCACHE_DIR="${CCACHE_DIR:-$BHOME/.ccache}" CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-5G}"
+fi
 # root in a container has no sudo; the VM's atl user has passwordless sudo
 asroot() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
 # the Pi 4's CPU (versions.env): meson and the C compiler calls take CFLAGS/CXXFLAGS from the
@@ -104,6 +112,18 @@ fetch_git() {
   # NOCLEAN=1 keeps the previous build tree (an incremental retry after a fix, e.g. art_standalone)
   [[ "${NOCLEAN:-0}" == 1 ]] || git -C "$d" clean -q -fdx
   log "$name at $(git -C "$d" rev-parse --short=12 HEAD) ($ref)"
+}
+# an AOSP project at a full commit id: only that commit, shallow (a plain clone of an AOSP project
+# brings every branch and tag of Android with it)
+fetch_git_commit() {
+  local name=$1 repo=$2 commit=$3 d="$SRCDIR/$1"
+  if [[ ! -d "$d/.git" ]] || [[ "$(git -C "$d" remote get-url origin 2>/dev/null)" != "$repo" ]]; then
+    rm -rf "$d"; git init -q "$d"; git -C "$d" remote add origin "$repo"
+  fi
+  git -C "$d" cat-file -e "$commit^{commit}" 2>/dev/null || git -C "$d" fetch -q --depth 1 origin "$commit"
+  git -C "$d" checkout -q -f "$commit"
+  [[ "${NOCLEAN:-0}" == 1 ]] || git -C "$d" clean -q -fdx
+  log "$name at $(git -C "$d" rev-parse --short=12 HEAD)"
 }
 meson_build() { # srcdir prefix [meson options...]
   local s=$1 p=$2; shift 2
@@ -153,6 +173,8 @@ step_art() {
   fetch_git art_standalone "$ART_REPO" "$ART_COMMIT"
   cd "$SRCDIR/art_standalone"
   python3 "$DEBVM_PATCHES/art_standalone-gcc14.py"
+  python3 "$DEBVM_PATCHES/art_standalone-dex2oat-context.py"
+  python3 "$DEBVM_PATCHES/art_standalone-conscrypt.py"
   # Alpine: make ____PREFIX=/usr ____LIBDIR=lib, then make ... install. Build and install with
   # the same prefix (art-standalone.pc is not regenerated when the prefix changes between the two).
   # C sources here are written for C23 (bool/true/false without <stdbool.h>, e.g. liblog's
@@ -217,6 +239,68 @@ step_wolfjsse() {
   java -jar "$PREFIX/lib/java/dx.jar" --dex --core-library --output="$w/tl-wolfjsse.dex" "$w/classes"
   python3 "$DEBVM_PATCHES/core-oj-alpn.py" assemble "$jar.orig" "$w/tl-wolfjsse.dex" "$w/wolfssljni-hostdex.jar"
   install -m 0755 "$w/wolfssljni-hostdex.jar" "$jar"
+  # the jar is on the boot class path: the boot image in this user's ART cache is stale
+  rm -f "$HOME"/.cache/art/*/*boot* "$HOME"/.cache/art/*/*api-impl* 2>/dev/null || true
+}
+# --- ART's TLS and crypto provider: AOSP's Conscrypt on AOSP's BoringSSL, as on Android ---
+# (art_standalone-conscrypt.py registers it in libcore and on the default boot class path)
+# BoringSSL as AOSP's external/boringssl builds it (its generated top-level CMakeLists.txt, the same
+# source lists as Android.bp): static, position independent, for libjavacrypto.so only
+step_boringssl() {
+  fetch_git_commit boringssl "$BORINGSSL_REPO" "$BORINGSSL_COMMIT"
+  local o="$B/boringssl"
+  rm -rf "$o"
+  cmake -S "$SRCDIR/boringssl" -B "$o" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_C_FLAGS="$CPU_CFLAGS" -DCMAKE_CXX_FLAGS="$CPU_CFLAGS"
+  ninja -C "$o" -j "$JOBS" crypto ssl
+}
+# AOSP's platform Conscrypt (Android.bp: java_library "conscrypt" = repackaged/common + repackaged/platform
+# + publicapi + generated NativeConstants and aconfig flags; cc_library_shared "libjavacrypto" with
+# -DJNI_JARJAR_PREFIX=com/android/; the runtime library libandroidio it dlopen()s)
+step_conscrypt() {
+  local c="$SRCDIR/conscrypt" bs="$SRCDIR/boringssl" bo="$B/boringssl" art="$SRCDIR/art_standalone" w="$B/conscrypt"
+  local dexdir="$PREFIX/lib/java/dex/art" core="$PREFIX/lib/java/core-all_classes.jar" e r p want got f
+  [[ -f "$bo/libcrypto.a" && -f "$bo/libssl.a" ]] || die "no BoringSSL in $bo (step boringssl first)"
+  [[ -f "$core" && -d "$dexdir/natives" && -d "$art/libnativehelper/include" ]] || die "no ART core jars, natives or art_standalone tree (step art first)"
+  fetch_git_commit conscrypt "$CONSCRYPT_REPO" "$CONSCRYPT_COMMIT"
+  python3 "$DEBVM_PATCHES/conscrypt-platform.py" "$c" "$CONSCRYPT_SYSTEM_CACERTS"
+  rm -rf "$w"; mkdir -p "$w/gen/com/android/org/conscrypt" "$w/ann" "$w/libcore/javax/net/ssl" "$w/classes"
+  # native: AOSP's flags (conscrypt_global/libjavacrypto-defaults), BoringSSL linked in and hidden
+  local cxx=(clang++ -std=gnu++17 -O2 $CPU_CFLAGS -fPIC -Wall -Wextra -Werror -Wunused)
+  "${cxx[@]}" -I"$bs/include" "$c/constants/src/gen/cpp/generate_constants.cc" "$bo/libssl.a" "$bo/libcrypto.a" -lpthread -o "$w/generate_constants"
+  "$w/generate_constants" com.android.org.conscrypt > "$w/gen/com/android/org/conscrypt/NativeConstants.java"
+  # -DANDROID as Soong compiles every module, host ones too (here: ART's FileDescriptor.descriptor and
+  # JNI signatures); HAVE_SYS_UIO_H as art_standalone's Linux AndroidConfig.h says for liblog's headers
+  "${cxx[@]}" -fvisibility=hidden -DANDROID -DHAVE_SYS_UIO_H=1 -DJNI_JARJAR_PREFIX=com/android/ -I"$c/common/src/jni/main/include" \
+    -I"$bs/include" -I"$art/libnativehelper/include" -I"$art/libnativehelper/include/nativehelper" -I"$art/system/core/include" \
+    -shared -o "$w/libjavacrypto.so" "$c"/common/src/jni/main/cpp/conscrypt/*.cc -Wl,--exclude-libs,ALL -Wl,-z,defs \
+    "$bo/libssl.a" "$bo/libcrypto.a" -L"$PREFIX/lib/art" -llog -lpthread -ldl -Wl,-rpath,'$ORIGIN:$ORIGIN/../../../../art'
+  # libjavacrypto dlopen()s libandroidio by name: glibc searches the caller's RUNPATH ($ORIGIN above)
+  "${cxx[@]}" -fvisibility=hidden -I"$art/libnativehelper/include" -shared -o "$w/libandroidio.so" \
+    "$DEBVM_PATCHES/conscrypt-libandroidio.cpp" -Wl,-z,defs -L"$dexdir/natives" -lnativehelper -Wl,-rpath,'$ORIGIN'
+  # Java: compile-only annotations (CLASS/SOURCE retention) and libcore's ALPN API (the coreoj step's
+  # pinned SSLParameters/SSLSocket/SSLEngine) resolve names only (-implicit:none)
+  for e in $CONSCRYPT_ANNOTATIONS; do
+    r=${e%%:*}; p=${e#*:}; want=${p#*=}; p=${p%=*}
+    f="$w/ann/$(sed -E 's|^.*src/main/java/||; s|^java/||' <<<"${p#*/}")"; mkdir -p "$(dirname "$f")"
+    curl -fsSL --retry 3 "https://android.googlesource.com/$r/+/$p?format=TEXT" | base64 -d > "$f"
+    got=$(sha256sum "$f" | cut -d' ' -f1)
+    [[ "$got" == "$want" ]] || die "$r ${p#*/} sha256 $got != pinned $want"
+  done
+  for f in SSLParameters SSLSocket SSLEngine; do
+    curl -fsSL --retry 3 "$LIBCORE_URL/+/$LIBCORE_COMMIT/ojluni/src/main/java/javax/net/ssl/$f.java?format=TEXT" | base64 -d > "$w/libcore/javax/net/ssl/$f.java"
+    want=$(tr ' ' '\n' <<<"$LIBCORE_SSL_SHA256" | sed -n "s/^$f=//p")
+    got=$(sha256sum "$w/libcore/javax/net/ssl/$f.java" | cut -d' ' -f1)
+    [[ "$got" == "$want" ]] || die "libcore $f.java sha256 $got != pinned $want"
+  done
+  python3 "$DEBVM_PATCHES/conscrypt-aconfig.py" "$c/conscrypt.aconfig" "$w/gen"
+  local srcs=(); mapfile -t srcs < <(find "$c/repackaged/common/src/main/java" "$c/repackaged/platform/src/main/java" \
+    "$c/publicapi/src/main/java" "$w/gen" -name '*.java' | sort)
+  javac -g -nowarn -source 1.8 -target 1.8 -encoding UTF-8 -Xlint:-options -implicit:none \
+    -bootclasspath "$core" -sourcepath "$w/ann:$w/libcore" -d "$w/classes" "${srcs[@]}"
+  java -jar "$PREFIX/lib/java/dx.jar" --dex --core-library --min-sdk-version=24 --output="$w/conscrypt-hostdex.jar" "$w/classes"
+  install -m 0644 "$w/conscrypt-hostdex.jar" "$dexdir/conscrypt-hostdex.jar"
+  install -m 0755 "$w/libjavacrypto.so" "$w/libandroidio.so" "$dexdir/natives/"
   # the jar is on the boot class path: the boot image in this user's ART cache is stale
   rm -f "$HOME"/.cache/art/*/*boot* "$HOME"/.cache/art/*/*api-impl* 2>/dev/null || true
 }
@@ -315,18 +399,22 @@ step_tlplay() {
   install -m 0755 "$CARGO_TARGET_DIR/release/tlplay" "$PREFIX/bin/tlplay"
 }
 
-ALL=(vixl wolfssl bionic art coreoj wolfjsse opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay)
+ALL=(vixl wolfssl bionic art coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay)
 pins_of() { # what a step's stamp records: its pins plus the hash of the patches it applies
   case "$1" in
     vixl) echo "$VIXL_URL $VIXL_MESON_PATCH_SHA256" ;;
     wolfssl) echo "$WOLFSSL_TAG $WOLFSSL_FLAGS" ;;
     bionic) echo "$BIONIC_COMMIT $(cat "$BIONIC_PATCH" "$BIONIC_SYSCONF_PY" 2>/dev/null | sha256sum | cut -c1-16)" ;;
-    art) echo "$ART_COMMIT $(cat "$DEBVM_PATCHES"/art_standalone-*.py 2>/dev/null | sha256sum | cut -c1-16)" ;;
+    # wolfSSL's too: art builds wolfssljni's JNI library against libwolfssl's headers (options.h)
+    art) echo "$ART_COMMIT $(cat "$DEBVM_PATCHES"/art_standalone-*.py 2>/dev/null | sha256sum | cut -c1-16) $(printf '%s %s' "$WOLFSSL_TAG" "$WOLFSSL_FLAGS" | sha256sum | cut -c1-16)" ;;
     # the unpatched jar's hash too: a rebuilt art step installs a new one (and drops the .orig)
     coreoj) local j="$PREFIX/lib/java/dex/art/core-oj-hostdex.jar.orig"
       echo "$LIBCORE_COMMIT $(find "$BOOTCP" "$DEBVM_PATCHES/core-oj-alpn.py" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum | cut -c1-16) $( [[ -f $j ]] && sha256sum "$j" | cut -c1-16 || echo none)" ;;
     wolfjsse) local j="$PREFIX/lib/java/dex/art/wolfssljni-hostdex.jar.orig"
       echo "$ART_COMMIT $LIBCORE_COMMIT $(sha256sum "$DEBVM_PATCHES/wolfjsse-sslparameters.py" "$DEBVM_PATCHES/core-oj-alpn.py" 2>/dev/null | sha256sum | cut -c1-16) $( [[ -f $j ]] && sha256sum "$j" | cut -c1-16 || echo none)" ;;
+    boringssl) echo "$BORINGSSL_COMMIT ${TL_CPU_CFLAGS:-}" ;;
+    # BoringSSL's and ART's too: libjavacrypto links the one, compiles against the other's headers
+    conscrypt) echo "$CONSCRYPT_COMMIT $BORINGSSL_COMMIT $ART_COMMIT $LIBCORE_COMMIT $CONSCRYPT_SYSTEM_CACERTS $(printf '%s' "$CONSCRYPT_ANNOTATIONS" | sha256sum | cut -c1-16) $(sha256sum "$DEBVM_PATCHES"/conscrypt-* 2>/dev/null | sha256sum | cut -c1-16)" ;;
     opensles) echo "$OPENSLES_COMMIT" ;;
     atl) echo "$ATL_REPO $ATL_COMMIT $R8_VERSION" ;;
     wayland) echo "$WAYLAND_TAG" ;;

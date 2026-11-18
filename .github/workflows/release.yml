@@ -8,12 +8,24 @@
 #   curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/install.sh | sudo bash -s -- --waze apkpure
 #
 # Triggers: a pushed tag v* (the release is created or updated for it), or by hand (workflow_dispatch)
-# with an optional tag; without one the files are only kept as the run's artifact.
+# with an optional tag; without one the files are only kept as the run's artifact. A push to main that
+# changes what the build compiles runs the build too, publishing nothing: a run can restore only the
+# caches of its own ref and of the default branch, so the ccache and sources a tag build starts from
+# are the ones these main builds keep (every tag is a new ref: tag builds alone always started cold).
 name: release
 
 on:
   push:
     tags: ["v*"]
+    branches: [main]
+    # (not evaluated for tag pushes)
+    paths:
+      - "tools/debvm/**"
+      - "tools/atl-vm/patches/bionic_translation-*"
+      - "tools/atl-vm/patches/atl-waze/bootcp/**"
+      - "services/display/**"
+      - "tools/appupdate/**"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
     inputs:
       tag:
@@ -27,7 +39,8 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}-${{ inputs.tag || 'push' }}
-  cancel-in-progress: false
+  # a newer push to main supersedes a cache build still running; tag builds always finish
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
 
 jobs:
   dist:
@@ -37,7 +50,7 @@ jobs:
       image: debian:trixie
     env:
       DEBIAN_FRONTEND: noninteractive
-      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || inputs.tag }}
       # the whole compiler output goes through ccache (Debian's /usr/lib/ccache masquerade links)
       CCACHE_DIR: /github/home/.ccache
       CCACHE_MAXSIZE: 3G
@@ -84,7 +97,7 @@ jobs:
           TL_REPO: ${{ github.workspace }}
           HOME: /github/home
         run: |
-          export PATH="/usr/lib/ccache:$PATH"
+          # build-dist.sh puts the compilers through ccache (CCACHE_DIR above, kept by the cache step)
           ccache -z
           bash tools/debvm/build-dist.sh all
           bash tools/debvm/build-dist.sh status
@@ -124,13 +137,13 @@ jobs:
   # actions and the gh CLI that GitHub's runner image ships.
   publish:
     needs: dist
-    if: github.event_name == 'push' || inputs.tag != ''
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || inputs.tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
     env:
-      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:

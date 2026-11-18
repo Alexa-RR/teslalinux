@@ -4,8 +4,8 @@
 # llvmpipe), mirroring tools/atl-vm/guest-provision.sh for Alpine. Idempotent. Run as `atl`.
 #
 #   guest-provision.sh         the VM (as atl): build deps + test runtime + /opt/teslalinux for atl
-#   guest-provision.sh --ci    a build container (the release workflow, as root): build deps only,
-#                              plus ccache; reads versions.env from VERSIONS_ENV or next to this script
+#   guest-provision.sh --ci    a build container (the release workflow, as root): build deps only;
+#                              reads versions.env from VERSIONS_ENV or next to this script
 set -eu
 log() { printf '\033[1;35m[debvm]\033[0m %s\n' "$*"; }
 MODE=vm
@@ -41,7 +41,9 @@ inst \
   "$JDK_PKG" dpkg-dev fakeroot
 # tlplay (tools/appupdate, Rust; build-dist.sh step tlplay)
 inst cargo rustc libssl-dev
-if [ $MODE = ci ]; then inst ccache; else inst doas; fi
+# ccache: build-dist.sh puts every compiler call through it (art_standalone alone is ~1,200 sources)
+inst ccache
+if [ $MODE = vm ]; then inst doas; fi
 
 log "ATL stack build deps (ATL doc/Build.md Debian list + art_standalone README + Alpine makedepends)"
 inst \
