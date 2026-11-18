@@ -56,6 +56,9 @@ before was tested in the build VM, which hid all of these.*
   screens) now leave the map running underneath, as on a phone.
 - White was light grey in the picture from the Pi's hardware encoder. The colours are now exact,
   and making each picture takes the Pi half the processor time it did.
+- Waze's map is smoother: about 26 pictures a second instead of 21 at the full 1088x832 (Waze
+  idle on its map). The map now goes to the screen as it is, instead of being drawn again under
+  Waze's panels for every picture.
 
 ### The hotspot and the car page come up sooner
 
@@ -141,6 +144,19 @@ Tools, tests and docs:
   instead of 2.4% a frame), the whole Pi 19% busy instead of 29%. `TACOMP_YUV=0` turns it off.
 - tacomp stops cleanly: it removed none of its listeners before the display was destroyed, and
   wlroots' xdg-shell asserts on that, so every restart ended in an abort and a core dump.
+- SurfaceView frames are offloaded (ATL `libandroid/egl.c`, `widgets/android_view_SurfaceView.c`):
+  each of a surface's buffers is exported once as a dmabuf (`eglExportDMABUFImageMESA`; on the Pi
+  4 ABGR8888 with the Broadcom UIF modifier) and every frame goes to GTK as a `GdkDmabufTexture`,
+  drawn through a `GtkGraphicsOffload`. GTK puts it in a Wayland subsurface below the window (the
+  app's views over it) and stops redrawing the window for each frame; the GL texture path remains
+  for buffers that cannot be exported and frames GTK does not offload, `ATL_SURFACE_OFFLOAD=0`
+  turns it off. `SurfaceHolder.setFormat` is AOSP's (RGB_565, opaque, until the app asks for alpha)
+  and an opaque surface goes as XBGR8888: GTK offloads no texture with alpha below the window.
+  tacomp offers `wp_viewporter`, without which GTK creates no subsurfaces. Measured on a Pi 4 with
+  the V3D job trace (Waze idle on its map, 1088x832): GTK's 11 ms of GPU work a frame is gone,
+  tacomp composites the two layers in 3 ms, 25.6 frames/s instead of 21.2; Waze's own rendering,
+  about 33 ms a frame on the GPU, is now nearly all of it. `SurfaceHolder.setKeepScreenOn` sets the
+  view's keepScreenOn, as AOSP.
 - The app's code is compiled before its first start: `teslalinux-atl --compile` runs ATL's
   `android.atl.TlPrewarm` with the class path and VM options `android-translation-layer` uses, which
   opens api-impl.jar, the app's APKs (ghax.jar first, api-impl's loader as parent, as
