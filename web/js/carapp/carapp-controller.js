@@ -32,6 +32,13 @@
   const MAP_SIZES = Object.keys(MAP_SIZE_SCALES);
   // The size of the panels drawn here (cards, lists, buttons): a scale on the density they are
   // laid out at; the app's map is not affected. Kept by this browser, applied at once.
+  // The map's sharpness: the fraction of the display's pixels the app draws its map in, scaled up
+  // to the display by the car-app host (ATLCarSurface render scale); the app lays it out the same,
+  // so a lower one only looks softer, and moves more smoothly (the Pi's GPU draws fewer pixels).
+  // Kept by this browser and sent to the host when connected and when it changes.
+  const LOOK_MAP_SHARPNESS_KEY = "teslalinux.carMapSharpness";
+  const MAP_SHARPNESS_SCALES = { full: 1, high: 0.9, medium: 0.8, low: 0.7 };
+  const MAP_SHARPNESSES = Object.keys(MAP_SHARPNESS_SCALES);
   const LOOK_PANEL_SIZE_KEY = "teslalinux.carPanelSize";
   const PANEL_SIZE_SCALES = { smallest: 0.7, smaller: 0.85, default: 1, larger: 1.15 };
   const PANEL_SIZES = Object.keys(PANEL_SIZE_SCALES);
@@ -68,6 +75,7 @@
       this.mapColours = readPref(LOOK_MAP_KEY, PAGE_MAP_COLOURS, "muted");
       this.mapSize = readPref(LOOK_MAP_SIZE_KEY, MAP_SIZES, "default");
       this.panelSize = readPref(LOOK_PANEL_SIZE_KEY, PANEL_SIZES, "default");
+      this.mapSharpness = readPref(LOOK_MAP_SHARPNESS_KEY, MAP_SHARPNESSES, "full");
       // whether the graphite map palette applies to the installed app (/api/appInterface "mapSkin")
       this.mapSkin = null;
       this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
@@ -82,6 +90,7 @@
         mapSkin: this.mapSkin,
         mapSize: this.mapSize,
         panelSize: this.panelSize,
+        mapSharpness: this.mapSharpness,
       };
     }
 
@@ -117,6 +126,11 @@
         this.mapSize = look.mapSize;
         writePref(LOOK_MAP_SIZE_KEY, look.mapSize);
         this.send({ type: "mapScale", scale: MAP_SIZE_SCALES[this.mapSize] });
+      }
+      if (look && MAP_SHARPNESSES.indexOf(look.mapSharpness) >= 0 && look.mapSharpness !== this.mapSharpness) {
+        this.mapSharpness = look.mapSharpness;
+        writePref(LOOK_MAP_SHARPNESS_KEY, look.mapSharpness);
+        this.send({ type: "renderScale", scale: MAP_SHARPNESS_SCALES[this.mapSharpness] });
       }
       if (look && PANEL_SIZES.indexOf(look.panelSize) >= 0 && look.panelSize !== this.panelSize) {
         this.panelSize = look.panelSize;
@@ -239,6 +253,7 @@
       // the driver's day or night (the host starts on "auto", the sun, after each app start)
       ws.onopen = () => {
         if (this.dayNight !== "auto") this.send({ type: "dayNight", mode: this.dayNight });
+        if (this.mapSharpness !== "full") this.send({ type: "renderScale", scale: MAP_SHARPNESS_SCALES[this.mapSharpness] });
       };
       ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));
       ws.onclose = () => {

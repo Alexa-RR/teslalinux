@@ -36,6 +36,11 @@
             "descriptionMarkdown": "The panels and buttons the car page draws over the map (turn card, trip card, search, lists, the route preview, the map buttons) can now be smaller, or a little larger: Smallest, Smaller, Default or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice."
           },
           {
+            "title": "Map sharpness",
+            "shortDescription": "Settings > Waze interface > Map sharpness, in Car mode.",
+            "descriptionMarkdown": "Waze's map can be drawn in fewer pixels and scaled up to the screen: Full, 90%, 80% or 70%. Waze lays it out exactly as at full size, so it only looks a little softer, and it moves more smoothly (measured on a Pi 4: about 25 pictures a second at Full, 30 at 80%). The panels drawn over the map stay sharp. Each browser keeps its own choice."
+          },
+          {
             "title": "Map size",
             "shortDescription": "Settings > Waze interface > Map size, in Car mode.",
             "descriptionMarkdown": "Waze's street names, road signs, report icons, position arrow and speedometer can now be drawn larger (or smaller) on the map, to match the car page's large panels: Smaller, Default, Larger or Largest. The map changes at once, without restarting Waze; the speedometer, which Waze sizes only when it creates it, follows the next time Waze starts. The panels on the screen keep their size. The browser keeps the choice, and every car page that is open follows the latest one."

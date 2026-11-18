@@ -350,6 +350,22 @@
         ),
         dense: false,
       });
+      this._appendTile({
+        icon: "hd",
+        title: "Map sharpness",
+        subtitle: "Full draws Waze's map in every pixel of the display. A lower one draws it in fewer pixels and scales it up: a little softer, and smoother on the move. Waze's panels stay sharp",
+        trailing: this._createSelect(
+          [
+            { value: "full", label: "Full" },
+            { value: "high", label: "90%" },
+            { value: "medium", label: "80%" },
+            { value: "low", label: "70%" },
+          ],
+          look.mapSharpness || "full",
+          async (value) => car.setLook({ mapSharpness: value }),
+        ),
+        dense: false,
+      });
       // the map colours are the device's (they change what Waze draws): this state's, fresher than
       // the one the car interface read when the page loaded
       if (car.setDeviceMapColours) car.setDeviceMapColours(state);

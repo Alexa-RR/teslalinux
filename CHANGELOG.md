@@ -96,6 +96,15 @@ route preview, the map buttons) can now be smaller, or a little larger: Smallest
 or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels
 leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice.
 
+### Map sharpness
+
+*Settings > Waze interface > Map sharpness, in Car mode.*
+
+Waze's map can be drawn in fewer pixels and scaled up to the screen: Full, 90%, 80% or 70%. Waze
+lays it out exactly as at full size, so it only looks a little softer, and it moves more smoothly
+(measured on a Pi 4: about 25 pictures a second at Full, 30 at 80%). The panels drawn over the map
+stay sharp. Each browser keeps its own choice.
+
 ### Map size
 
 *Settings > Waze interface > Map size, in Car mode.*
@@ -135,6 +144,14 @@ In ATL (the fork):
   button in the phone interface does not reach a recognizer yet: a tap on it calls no Android API.
 
 In teslalinux:
+
+- Car-app host render scale (`{"type":"renderScale","scale":S}` from the car page, 0.5 to 1): the
+  map surface's buffers are that fraction of the display's size (`SurfaceHolder.setFixedSize`, now
+  as AOSP, with `setSizeFromLayout`), scaled up by GTK or the compositor, and the app gets that
+  size with its density scaled alike, so its layout is unchanged; gestures and the visible area
+  reach it in its surface's pixels. A new scale gives the app a new surface (the old one destroyed),
+  as a host replacing its surface does: the app keeps drawing into the window surface it made.
+  SurfaceView keeps its view's size apart from its surface's (`tlViewSize`).
 
 - `host/teslalinux-set-gpu-speed` (root, one sudoers rule; `GET/POST /api/gpuSpeed`): the V3D clock
   as a marked block of the firmware's `config.txt` after the installer's (`v3d_freq=600`, or
