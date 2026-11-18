@@ -106,7 +106,7 @@ class Upstream(unittest.TestCase):
         self.assertEqual(set(cfg), set(api.CONFIGURATION_KEYS))
         self.assertTrue(all(isinstance(v, int) for v in cfg.values()))
         # upstream defaults (vendor.mk) where the env file does not override them
-        self.assertEqual(cfg["persist.tesla-android.gps.is_active"], 0)
+        self.assertEqual(cfg["persist.tesla-android.gps.is_active"], 1)  # ours: on (tlprops.UPSTREAM_DEFAULTS)
         self.assertEqual(cfg["persist.tesla-android.browser_audio.is_enabled"], 0)
         self.assertEqual(cfg["persist.tesla-android.offline-mode.telemetry.is_enabled"], 1)
         self.assertEqual(cfg["persist.tesla-android.softap.channel"], 44)

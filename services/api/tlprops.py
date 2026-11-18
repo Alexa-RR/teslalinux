@@ -52,7 +52,10 @@ UPSTREAM_DEFAULTS = {
     OFFLINE: "1", OFFLINE_TELEMETRY: "1", OFFLINE_FIRMWARE: "1",
     VD_WIDTH: "1088", VD_HEIGHT: "832", VD_REFRESH: "30", VD_QUALITY: "70", VD_DENSITY: "200",
     VD_PRESET: "0", VD_RENDERER: "0", VD_REAR: "0", VD_REAR_PRIO: "0",
-    AUDIO_ENABLED: "0", AUDIO_VOLUME: "100", VD_RESPONSIVE: "0", VD_H264: "0", GPS_ACTIVE: "0",
+    AUDIO_ENABLED: "0", AUDIO_VOLUME: "100", VD_RESPONSIVE: "0", VD_H264: "0",
+    # not upstream's "0": here the app is a navigator, and the car's position reaches it only while
+    # the page sends the browser's geolocation (a fresh install without it showed Waze with no fix)
+    GPS_ACTIVE: "1",
     # not in vendor.mk: no USB GPS receiver support on this platform (upstream sets it from its
     # USB networking initialiser when one is plugged in), the compositor is always headless
     GPS_HW: "0", HEADLESS: "1",
