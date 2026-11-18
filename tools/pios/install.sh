@@ -189,7 +189,7 @@ inputs() {
     user) echo "-" ;;
     files) hash_paths "$PAYLOAD/host" "$PAYLOAD/services" "$PAYLOAD/tools" ;;
     config) echo "$(hash_paths "$PAYLOAD/host/phase1-pios/env" "$ENVF" "${CONFIG:-/nonexistent}") ${SETS[*]:-}" ;;
-    network) hash_paths "$ENVF" "$PAYLOAD/host/phase1-pios/etc" "$PAYLOAD/host/teslalinux-render" ;;
+    network) hash_paths "$ENVF" "$PAYLOAD/host/phase1-pios/etc" "$PAYLOAD/host/teslalinux-render" /usr/lib/systemd/system/{hostapd,dnsmasq,nginx}.service ;;
     tls) hash_paths "$ENVF" "$PAYLOAD/tls" /usr/local/bin/teslalinux-tls ;;
     web) hash_paths "$ENVF" "$PAYLOAD/web" "$PAYLOAD/host/phase1-pios/etc" /etc/teslalinux/tls ;;
     audio) echo "-" ;;
@@ -480,6 +480,11 @@ step_files() {
   put_file "$P/host/phase1-pios/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display 0755
   put_file "$P/host/phase1-pios/teslalinux-atl" /usr/local/bin/teslalinux-atl 0755
   put_file "$P/host/tls/teslalinux-tls" /usr/local/bin/teslalinux-tls 0755
+  # the system CAs in Android's layout, where the apps' TLS provider (Conscrypt) reads them
+  # (host/teslalinux-android-cacerts), kept current after every update-ca-certificates
+  put_file "$P/host/teslalinux-android-cacerts" /usr/local/bin/teslalinux-android-cacerts 0755
+  put_str /etc/ca-certificates/update.d/teslalinux-android-cacerts 0755 '#!/bin/sh\n# teslalinux: the system CAs as /etc/ssl/certs/android for the apps (teslalinux-android-cacerts)\nexec /usr/local/bin/teslalinux-android-cacerts >/dev/null\n'
+  /usr/local/bin/teslalinux-android-cacerts || warn "the apps' CA store was not written (teslalinux-android-cacerts)"
   install -m 0644 "$P/services/gps/gps.py" "$P/services/audio/audio.py" "$P/services/api/api.py" "$P/services/api/tlprops.py" "$LIB/"
   install -m 0644 "$P/tools/atl-vm/mk-android-tzdata.py" "$LIB/mk-android-tzdata.py"
   # the car map's Graphite colours: ATL's file overlay manifest with its verified app versions, and
@@ -576,18 +581,85 @@ print(json.dumps({"lte": lte}))' | /usr/local/bin/teslalinux-network apply boot 
   fi
 }
 
+# NetworkManager keyfiles of wired, Wi-Fi and mobile profiles: [ipv6] method=disabled (see step_network)
+nm_ipv6_py() { # check|apply FILE: check exits 3 when the profile still has IPv6 on
+  python3 - "$@" <<'PY'
+import configparser, sys
+mode, f = sys.argv[1], sys.argv[2]
+p = configparser.ConfigParser(interpolation=None, strict=False)
+p.optionxform = str
+p.read(f)
+if p.get("connection", "type", fallback="") not in ("ethernet", "802-3-ethernet", "wifi", "802-11-wireless", "gsm", "bluetooth"):
+    sys.exit(0)
+if p.get("ipv6", "method", fallback="") == "disabled":
+    sys.exit(0)
+if mode == "check":
+    sys.exit(3)
+if not p.has_section("ipv6"):
+    p.add_section("ipv6")
+p.set("ipv6", "method", "disabled")
+with open(f, "w") as out:
+    p.write(out, space_around_delimiters=False)
+PY
+}
+nm_ipv6_off() { # FILE...
+  local f
+  for f in "$@"; do
+    [[ -f "$f" ]] || continue
+    nm_ipv6_py check "$f" && continue
+    track "$f"
+    nm_ipv6_py apply "$f" || { warn "could not turn IPv6 off in $f"; continue; }
+    chmod 0600 "$f"
+  done
+}
+
 step_network() {
   local ap sub
   ap=$(cfg AP_IFACE); sub=$(cfg AP_SUBNET)
   track /etc/hostapd/hostapd.conf /etc/dnsmasq.conf /etc/nftables.conf
   /usr/local/bin/teslalinux-render --root / --layout pios --env "$ENVF" --only net
   put_str /etc/NetworkManager/conf.d/teslalinux-unmanaged.conf 0644 "[keyfile]\nunmanaged-devices=interface-name:$ap\n"
+  # USB modems that are network cards (HiLink sticks, phones over USB tethering: the network drivers
+  # of teslalinux-uplink's MODEM_DRIVERS) get DHCP from a profile of their own. NetworkManager's own
+  # automatic profile is not made while another wired profile could take the device, and the Imager's
+  # Ethernet profile names no interface, so the stick stayed without an address. The higher
+  # autoconnect priority wins over such a profile; teslalinux-uplink picks the default route itself.
+  put_text /etc/NetworkManager/system-connections/teslalinux-usb-modem.nmconnection 0600 <<'EOF'
+[connection]
+id=teslalinux-usb-modem
+uuid=a95b6979-4948-4f46-b7c7-bdcb626e7caf
+type=ethernet
+autoconnect=true
+autoconnect-priority=10
+multi-connect=3
+
+[match]
+driver=cdc_ether;cdc_ncm;huawei_cdc_ncm;rndis_host;
+
+[ipv4]
+method=auto
+route-metric=700
+
+[ipv6]
+method=disabled
+EOF
+  # IPv4 only. The stack needs no IPv6, and a network that advertises an IPv6 route leading nowhere
+  # (a home router with only a local fd00:: prefix) makes apps that try IPv6 first hang or fail: Waze's
+  # first request (GeoConfig) got NoRouteToHost / timeouts on IPv6 and Waze exited, without trying IPv4.
+  # With no IPv6 address on any interface, name lookups return IPv4 addresses only. Loopback keeps
+  # IPv6 (Java's sockets are dual-stack); NetworkManager would switch IPv6 back on for every profile
+  # that asks for it, so its default and our profiles say disabled.
+  put_str /etc/NetworkManager/conf.d/teslalinux-ipv6.conf 0644 '[connection]\nipv6.method=disabled\n'
+  nm_ipv6_off /etc/NetworkManager/system-connections/*.nmconnection
+  if nmcli -t -f RUNNING general 2>/dev/null | grep -qx running; then nmcli connection reload >/dev/null 2>&1 || true; fi
   put_text /etc/systemd/system/teslalinux-ap-addr.service 0644 <<EOF
 [Unit]
 Description=teslalinux: static address on $ap
-Before=hostapd.service dnsmasq.service
 DefaultDependencies=no
+# the Wi-Fi driver (brcmfmac on the Pi) creates $ap only after sysinit: wait for the device itself
+BindsTo=sys-subsystem-net-devices-$ap.device
 After=sys-subsystem-net-devices-$ap.device
+Before=hostapd.service dnsmasq.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
@@ -595,10 +667,49 @@ ExecStart=/usr/sbin/rfkill unblock wlan
 ExecStart=/usr/sbin/ip addr replace $sub.1/24 dev $ap
 ExecStart=/usr/sbin/ip link set $ap up
 [Install]
-WantedBy=sysinit.target
+WantedBy=sys-subsystem-net-devices-$ap.device
 EOF
-  put_str /etc/sysctl.d/90-teslalinux.conf 0644 'net.ipv4.ip_forward=1\nnet.core.rmem_max=8388608\nnet.core.wmem_max=8388608\n'
+  put_str /etc/sysctl.d/90-teslalinux.conf 0644 'net.ipv4.ip_forward=1\nnet.core.rmem_max=8388608\nnet.core.wmem_max=8388608\nnet.ipv6.conf.all.disable_ipv6=1\nnet.ipv6.conf.default.disable_ipv6=1\nnet.ipv6.conf.lo.disable_ipv6=0\n'
+  sysctl -q -p /etc/sysctl.d/90-teslalinux.conf >/dev/null 2>&1 || true
   if [[ -e /etc/sysctl.d/91-teslalinux-vm.conf ]]; then track /etc/sysctl.d/91-teslalinux-vm.conf; rm -f /etc/sysctl.d/91-teslalinux-vm.conf; fi
+  # hostapd, dnsmasq and nginx serve the car on the hotspot and need no uplink, but Debian's units
+  # order them after network.target / network-online.target, that is after NetworkManager (about 4 s
+  # on a Pi 4, its netplan regeneration included): the hotspot and the page came up at 11 s although
+  # the hotspot's address is set at 6.7 s. A drop-in cannot take an After= away, so these are the
+  # vendor units with only those targets removed, regenerated from them on every run (the step's
+  # inputs include them); uninstall removes them and the vendor units apply again.
+  local u vendor tmp
+  for u in hostapd dnsmasq nginx; do
+    tmp=$(mktemp)
+    vendor=/usr/lib/systemd/system/$u.service
+    [[ -f $vendor ]] || vendor=/lib/systemd/system/$u.service
+    [[ -f $vendor ]] || continue
+    python3 - "$vendor" > "$tmp" <<'PY'
+import re, sys
+src = sys.argv[1]
+drop = {"network.target", "network-online.target"}
+out = ["# teslalinux (tools/pios/install.sh): %s without network.target / network-online.target" % src,
+       "# (the car's hotspot needs no uplink); regenerated from it on every install run"]
+section = ""
+for line in open(src).read().splitlines():
+    m = re.match(r"\s*\[(.+)\]\s*$", line)
+    if m:
+        section = m.group(1)
+    elif section == "Unit":
+        m = re.match(r"(After|Before|Wants|Requires|BindsTo|PartOf|Requisite)=(.*)$", line)
+        if m:
+            units = [w for w in m.group(2).split() if w not in drop]
+            if not units:
+                continue
+            line = "%s=%s" % (m.group(1), " ".join(units))
+    out.append(line)
+print("\n".join(out))
+PY
+    # a masked unit (Pi OS ships hostapd masked) is a /dev/null link at this very path
+    if [[ -L /etc/systemd/system/$u.service ]]; then unit_set unmask "$u.service"; fi
+    put_file "$tmp" "/etc/systemd/system/$u.service" 0644
+    rm -f "$tmp"
+  done
   put_str /etc/systemd/system/dnsmasq.service.d/teslalinux.conf 0644 '[Unit]\nAfter=teslalinux-ap-addr.service\nWants=teslalinux-ap-addr.service\n'
   put_str /etc/systemd/system/hostapd.service.d/teslalinux.conf 0644 '[Unit]\nAfter=teslalinux-ap-addr.service\nWants=teslalinux-ap-addr.service\n[Service]\nRestart=always\nRestartSec=1\n'
   # LTE: ModemManager off the critical path
@@ -781,8 +892,13 @@ step_prewarm() {
   rm -rf "$TESLA_HOME/.cache/art"
   install -d -o tesla -g tesla "$TESLA_HOME/.cache" "$TESLA_HOME/android-data"
   log "  building ART's boot image as tesla"
+  # -Ximage: the location ATL's runtime uses. ART names the cached image after the image location;
+  # dalvikvm alone derives it from its own real path (/opt/teslalinux.d/<dist>/bin/../lib/art/..),
+  # ATL from where libart.so was loaded (/opt/teslalinux/lib/art/..), so without this the app's first
+  # start built a second image of its own (checked on a Pi 4: ATL takes this one as it is)
   runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
-    ANDROID_DATA="$TESLA_HOME/android-data" timeout 1800 "$PREFIX/bin/dalvikvm" >/dev/null 2>&1 || true
+    ANDROID_DATA="$TESLA_HOME/android-data" timeout 1800 "$PREFIX/bin/dalvikvm" \
+    "-Ximage:$PREFIX/lib/art/../java/dex/art/oat/boot.art" >/dev/null 2>&1 || true
   if ls "$TESLA_HOME"/.cache/art/*/*boot*.art >/dev/null 2>&1; then
     log "  boot image ready ($(du -sh "$TESLA_HOME/.cache/art" | cut -f1))"
   else
@@ -801,6 +917,33 @@ step_trim() {
   [[ ${#units[@]} -eq 0 ]] || unit_set disable "${units[@]}"
   # cloud-init (Raspberry Pi Imager's first-boot settings) has done its work by now
   if [[ -d /etc/cloud && ! -e /etc/cloud/cloud-init.disabled ]]; then track /etc/cloud/cloud-init.disabled; touch /etc/cloud/cloud-init.disabled; fi
+  # Pi OS's NetworkManager (Ubuntu's netplan patches) writes every netplan-defined connection (the
+  # Imager's Ethernet and Wi-Fi) back to /etc/netplan at each start, and each write runs netplan
+  # generate and a systemd daemon-reload: about 5 s of a Pi 4 boot, in front of network.target and so
+  # of hostapd, dnsmasq and nginx. The same connections as keyfiles (same UUID and settings) skip it;
+  # NetworkManager writes connections made later (nmcli) as keyfiles too.
+  local y uuid src name dst moved=0
+  if compgen -G '/etc/netplan/90-NM-*.yaml' >/dev/null; then
+    netplan generate 2>/dev/null || true
+    for y in /etc/netplan/90-NM-*.yaml; do
+      uuid=${y##*/90-NM-}; uuid=${uuid%.yaml}
+      src=$(grep -lx "uuid=$uuid" /run/NetworkManager/system-connections/netplan-*.nmconnection 2>/dev/null | head -1 || true)
+      if [[ -z "$src" ]]; then warn "netplan connection $uuid has no generated keyfile; left in netplan"; continue; fi
+      name=$(sed -n 's/^id=netplan-//p' "$src" | head -1 | tr -c 'A-Za-z0-9._\n-' '_' || true)
+      dst=/etc/NetworkManager/system-connections/${name:-$uuid}.nmconnection
+      [[ -e "$dst" ]] && dst=/etc/NetworkManager/system-connections/${name:-x}-$uuid.nmconnection
+      track "$dst" "$y"
+      (umask 077; sed 's/^id=netplan-/id=/' "$src" > "$dst")
+      nm_ipv6_off "$dst"  # IPv4 only (step_network)
+      rm -f "$y"
+      moved=$((moved + 1))
+    done
+    if ((moved)); then
+      netplan generate 2>/dev/null || true
+      nmcli connection reload >/dev/null 2>&1 || true
+      log "  NetworkManager: $moved netplan connection(s) now keyfiles in /etc/NetworkManager/system-connections"
+    fi
+  fi
   # journald in RAM, small: no fs sync at boot, less SD wear
   put_str /etc/systemd/journald.conf.d/teslalinux.conf 0644 '[Journal]\nStorage=volatile\nRuntimeMaxUse=16M\n'
   # udev settle is a common 1-3 s sink; nothing here waits for it
@@ -884,11 +1027,19 @@ enable_uart=0"
 step_enable() {
   systemctl daemon-reload
   systemctl unmask hostapd >/dev/null 2>&1 || true
-  local en=(teslalinux-ap-addr.service hostapd.service dnsmasq.service nftables.service NetworkManager.service
+  # reenable: an earlier install linked the address unit into sysinit.target, before wlan0 exists
+  unit_set reenable teslalinux-ap-addr.service
+  local en=(hostapd.service dnsmasq.service nftables.service NetworkManager.service
     ModemManager.service nginx.service systemd-timesyncd.service "${UNITS[@]}"
     teslalinux-appupdate.timer teslalinux-appupdate-boot.service teslalinux-appupdate-health.service)
   [[ $TRIM == 1 ]] && en+=(teslalinux-cpufreq.service)
   unit_set enable "${en[@]}"
+  # NetworkManager.service's [Install] has Also=NetworkManager-wait-online.service, so enabling it
+  # undoes the trim: network-online.target then waits for NetworkManager (about 14 s on a Pi 4) and
+  # dnsmasq (Requires=network-online.target in Debian's unit) and nginx come up only after it
+  if [[ $TRIM == 1 && "$(unit_state NetworkManager-wait-online.service)" == enabled ]]; then
+    unit_set disable NetworkManager-wait-online.service
+  fi
   if [[ -n "$(tls_base_url)" ]]; then unit_set enable teslalinux-tls-fetch.timer; fi
   # an earlier provisioning's certificate daemon unit; the timer replaces it
   if [[ -f /etc/systemd/system/teslalinux-tls.service ]]; then
@@ -998,6 +1149,8 @@ doctor_static() {
   elif [[ -f "$STATE_DIR/appupdate/pending/base.apk" ]]; then ok "Waze staged; installs at the next start"
   else meh "Waze is not installed (car page upload, --apk or --waze apkpure)"; fi
   if ls "$TESLA_HOME"/.cache/art/*/*boot*.art >/dev/null 2>&1; then ok "ART boot image"; else info "no ART boot image yet (the first app start builds it)"; fi
+  if /usr/local/bin/teslalinux-android-cacerts --check >/dev/null 2>&1; then ok "apps' CA store (/etc/ssl/certs/android)"
+  else bad "apps' CA store missing or stale: every app HTTPS connection fails (teslalinux-android-cacerts)"; fi
   grep -q '^# >>> teslalinux' "$(boot_dir)/config.txt" && ok "boot config block" || meh "no teslalinux block in $(boot_dir)/config.txt"
 }
 

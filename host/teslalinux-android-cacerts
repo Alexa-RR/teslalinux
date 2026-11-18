@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""teslalinux-android-cacerts: the system's trusted CAs in Android's layout, for the apps' TLS.
+
+  teslalinux-android-cacerts [--certs DIR] [--out DIR] [--check]
+
+ART's TLS provider is Conscrypt, as on Android (tools/debvm/build-dist.sh, step conscrypt). Its
+default TrustManager trusts the CAs of the AndroidCAStore key store (TrustedCertificateStore), which
+reads a directory of one PEM file per CA named <hash>.<n>: <hash> is OpenSSL's X509_NAME_hash_old of
+the CA's subject (the first four bytes of the MD5 of its DER encoding, little-endian, eight hex
+digits) and <n> counts CAs whose subjects hash alike, from 0. On Android that directory is
+/system/etc/security/cacerts (from AOSP's system/ca-certificates); here it is the build's
+CONSCRYPT_SYSTEM_CACERTS, /etc/ssl/certs/android (tools/debvm/patches/conscrypt-platform.py).
+Without it no server certificate verifies and every HTTPS connection an app makes fails.
+
+This fills it from every CA in /etc/ssl/certs/*.pem (what update-ca-certificates links there:
+Debian's ca-certificates plus /usr/local/share/ca-certificates), each certificate once. It runs from
+the installer and from /etc/ca-certificates/update.d/ (after every update-ca-certificates). Files are
+replaced one at a time and atomically, only when their content changes, and files of CAs no longer
+trusted are removed; nothing else in the directory is touched. CAs a user adds on the device stay
+where Android keeps them, $ANDROID_DATA/misc/keychain/cacerts-added.
+"""
+import argparse
+import base64
+import glob
+import hashlib
+import os
+import re
+import sys
+import tempfile
+
+PEM = re.compile(rb"-----BEGIN CERTIFICATE-----\s*(.+?)\s*-----END CERTIFICATE-----", re.S)
+NAME = re.compile(r"^[0-9a-f]{8}\.[0-9]+$")
+
+
+def der_tlv(data, off):
+    """(tag, header_length, content_length) of the DER element at OFF"""
+    tag = data[off]
+    ln = data[off + 1]
+    if ln < 0x80:
+        return tag, 2, ln
+    n = ln & 0x7F
+    if n == 0 or n > 4:
+        raise ValueError("unsupported DER length")
+    return tag, 2 + n, int.from_bytes(data[off + 2:off + 2 + n], "big")
+
+
+def subject_der(cert):
+    """the DER encoding of a certificate's subject Name, as it is in the certificate"""
+    tag, h, _ = der_tlv(cert, 0)          # Certificate SEQUENCE
+    if tag != 0x30:
+        raise ValueError("not a certificate")
+    off = h
+    tag, h, _ = der_tlv(cert, off)        # tbsCertificate SEQUENCE
+    if tag != 0x30:
+        raise ValueError("no tbsCertificate")
+    off += h
+    fields = []
+    for _ in range(6):                    # [version], serial, signature, issuer, validity, subject
+        tag, h, ln = der_tlv(cert, off)
+        fields.append((tag, off, h + ln))
+        off += h + ln
+    if fields[0][0] != 0xA0:              # no explicit version (v1): subject is the fifth field
+        fields.insert(0, None)
+    tag, start, total = fields[5]
+    if tag != 0x30:
+        raise ValueError("no subject")
+    return cert[start:start + total]
+
+
+def name_hash_old(name_der):
+    """OpenSSL's X509_NAME_hash_old: the first four bytes of MD5(DER), little-endian"""
+    md = hashlib.md5(name_der).digest()
+    return "%08x" % int.from_bytes(md[:4], "little")
+
+
+def pem_of(der):
+    b = base64.b64encode(der)
+    lines = [b[i:i + 64] for i in range(0, len(b), 64)]
+    return b"-----BEGIN CERTIFICATE-----\n" + b"\n".join(lines) + b"\n-----END CERTIFICATE-----\n"
+
+
+def wanted(certs_dir):
+    """{file name: PEM bytes} for every CA certificate in CERTS_DIR/*.pem, each once"""
+    seen, out = set(), {}
+    for path in sorted(glob.glob(os.path.join(certs_dir, "*.pem"))):
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            continue  # a dangling link (a CA removed from ca-certificates.conf)
+        for m in PEM.finditer(data):
+            der = base64.b64decode(b"".join(m.group(1).split()))
+            if der in seen:
+                continue
+            try:
+                h = name_hash_old(subject_der(der))
+            except (ValueError, IndexError):
+                print("teslalinux-android-cacerts: skipped an unreadable certificate in %s" % path, file=sys.stderr)
+                continue
+            seen.add(der)
+            n = 0
+            while "%s.%d" % (h, n) in out:
+                n += 1
+            out["%s.%d" % (h, n)] = pem_of(der)
+    return out
+
+
+def current(out_dir):
+    """{file name: bytes} of the <hash>.<n> files now in OUT_DIR"""
+    got = {}
+    for name in os.listdir(out_dir) if os.path.isdir(out_dir) else ():
+        if NAME.match(name):
+            try:
+                with open(os.path.join(out_dir, name), "rb") as f:
+                    got[name] = f.read()
+            except OSError:
+                got[name] = None
+    return got
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--certs", default="/etc/ssl/certs")
+    ap.add_argument("--out", default="/etc/ssl/certs/android")
+    ap.add_argument("--check", action="store_true", help="exit 1 when the directory is missing or stale")
+    a = ap.parse_args()
+    want = wanted(a.certs)
+    if not want:
+        print("teslalinux-android-cacerts: no CA certificates in %s/*.pem" % a.certs, file=sys.stderr)
+        return 1
+    have = current(a.out)
+    stale = sorted(n for n in have if n not in want)
+    changed = sorted(n for n in want if have.get(n) != want[n])
+    if not stale and not changed:
+        print("teslalinux-android-cacerts: %s up to date (%d CAs)" % (a.out, len(want)))
+        return 0
+    if a.check:
+        print("teslalinux-android-cacerts: %s missing or stale" % a.out)
+        return 1
+    os.makedirs(a.out, mode=0o755, exist_ok=True)
+    for name in changed:
+        fd, tmp = tempfile.mkstemp(prefix=".cacert.", dir=a.out)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(want[name])
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(a.out, name))
+        except BaseException:
+            os.unlink(tmp)
+            raise
+    for name in stale:
+        os.unlink(os.path.join(a.out, name))
+    print("teslalinux-android-cacerts: %s: %d CAs (%d written, %d removed)" % (a.out, len(want), len(changed), len(stale)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

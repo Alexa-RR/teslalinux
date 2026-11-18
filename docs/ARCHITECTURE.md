@@ -247,10 +247,21 @@ What the car needs first (hotspot, DNS, nginx, the launcher page) does not depen
 * ART builds its boot image on the app's first start; `install.sh` builds it at install time unless
   `--no-prewarm` is given, so the first start in the car does not pay for it.
 
-No boot time has been measured on Pi hardware yet: `systemd-analyze` and
-`systemd-analyze critical-chain hostapd.service` on the Pi, and `tools/debian/app-starttime.sh`
-(seconds from an app restart to the first frame and to Waze's "map ready") are the measurements to
-take there. Times measured in the VMs are software rendering (llvmpipe), not the Pi.
+* The hotspot's address unit binds to the Wi-Fi device: the Pi 4's brcmfmac creates wlan0 about
+  6 s after power-on, after sysinit.
+* Raspberry Pi OS's NetworkManager carries Ubuntu's netplan patches: every netplan-defined
+  connection is written back to YAML at each start, each time with `netplan generate` and a systemd
+  daemon-reload (about 1.8 s each on a Pi 4). The installer turns the Imager's netplan connections
+  into keyfiles, which leaves one generate and reload per start (about 2 s, unconditional in the
+  patch). hostapd, dnsmasq and nginx still start after `network.target` (their Debian units order
+  them so), that is after NetworkManager.
+
+Measured on a Pi 4 (4 GB, Pi OS trixie, SD card), Nov 17: `systemd-analyze` 2.2 s kernel + 9.7 s
+userspace = 11.9 s (21.6 s before the fixes above), hostapd at 11.0 s and nginx at 11.4 s after
+power-on, tacomp at 6.6 s. `systemd-analyze critical-chain nginx.service` and
+`tools/debian/app-starttime.sh` (seconds from an app restart to the first frame and to Waze's
+"map ready") are the measurements to repeat. Times measured in the VMs are software rendering
+(llvmpipe), not the Pi.
 
 ## 9. What we keep from upstream, verbatim
 

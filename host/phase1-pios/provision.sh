@@ -71,9 +71,11 @@ EOF
 cat > /etc/systemd/system/teslalinux-ap-addr.service <<EOF
 [Unit]
 Description=teslalinux: static address on $AP_IFACE
-Before=hostapd.service dnsmasq.service
 DefaultDependencies=no
+# the Wi-Fi driver (brcmfmac on the Pi) creates $AP_IFACE only after sysinit: wait for the device itself
+BindsTo=sys-subsystem-net-devices-$AP_IFACE.device
 After=sys-subsystem-net-devices-$AP_IFACE.device
+Before=hostapd.service dnsmasq.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
@@ -81,7 +83,7 @@ ExecStart=/usr/sbin/rfkill unblock wlan
 ExecStart=/usr/sbin/ip addr replace $AP_SUBNET.1/24 dev $AP_IFACE
 ExecStart=/usr/sbin/ip link set $AP_IFACE up
 [Install]
-WantedBy=sysinit.target
+WantedBy=sys-subsystem-net-devices-$AP_IFACE.device
 EOF
 cat > /etc/sysctl.d/90-teslalinux.conf <<'EOF'
 net.ipv4.ip_forward=1
@@ -199,7 +201,9 @@ cp "$REPO/host/phase1-pios/etc/usb_modeswitch.d/"* /etc/usb_modeswitch.d/ 2>/dev
 mkdir -p /etc/systemd/system/ModemManager.service.d
 printf '[Unit]\nAfter=hostapd.service nginx.service\n' > /etc/systemd/system/ModemManager.service.d/late.conf
 systemctl enable ModemManager NetworkManager
-# NetworkManager: any new ethernet-like modem (cdc_ether/ncm/rndis) gets DHCP automatically. Nothing to do.
+# NetworkManager: ethernet-like modems (cdc_ether/ncm/rndis) get DHCP from tools/pios/install.sh's
+# teslalinux-usb-modem profile; NetworkManager's automatic profile is not made while another wired
+# profile without an interface name (the Imager's) could take the device.
 
 # ---------------------------------------------------------------------------------------------
 if [[ $TRIM -eq 1 ]]; then
