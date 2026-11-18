@@ -20,6 +20,23 @@ APKS=("$APP_DIR/base.apk")
 for f in "$APP_DIR"/split_config.*.apk; do [[ -f "$f" ]] && APKS+=("$f"); done
 [[ -f "${APKS[0]}" ]] || { echo "teslalinux-atl: no base.apk in $APP_DIR (run tools/apps/install-app.sh)" >&2; exit 1; }
 
+# ---- --compile: the app's code compiled now instead of at its next start (the installer after an
+# install or a runtime update, teslalinux-appupdate after an app update). ART compiles an app when its
+# class loader first opens it, minutes for Waze on a Pi 4; android.atl.TlPrewarm (ATL) opens the same
+# APKs in the same class loaders with the VM options android-translation-layer uses (its class path
+# derived from libart's directory as main.c derives it), so the start after this finds the result
+# ready. Run as the app's user, with the unit's environment (the compiled code goes to $HOME/.cache/art).
+if [[ "${1:-}" == --compile ]]; then
+  export ANDROID_APP_DATA_DIR="$DATA_DIR" ANDROID_DATA="${ANDROID_DATA:-$HOME/android-data}" ANDROID_LOG_TAGS="${ANDROID_LOG_TAGS:-*:w}"
+  export PATH="$ATL_PREFIX/bin:$PATH" LD_LIBRARY_PATH="$ATL_PREFIX/lib:${LD_LIBRARY_PATH:-}"
+  mkdir -p "$DATA_DIR" "$HOME/.cache/art" "$ANDROID_DATA"
+  DEX="$ATL_PREFIX/lib/art/../java/dex"
+  exec dalvikvm "-Ximage:$DEX/art/oat/boot.art" -Xusejit:true \
+    "-Djava.class.path=$DEX/android_translation_layer/api-impl.jar:$DEX/android_translation_layer/framework-res.apk" \
+    "-Djava.library.path=$DEX/android_translation_layer/natives" \
+    android.atl.TlPrewarm "${APKS[@]}"
+fi
+
 # the compositor socket (tacomp.service) must be up; the unit orders us after it, this is the guard
 for _ in $(seq 1 100); do [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] && break; sleep 0.1; done
 [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] || { echo "teslalinux-atl: no compositor socket $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" >&2; exit 1; }
@@ -41,6 +58,9 @@ unset LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER MESA_GL_VERSION_OVERRIDE MESA_GLES_VE
 export ATL_UGLY_ENABLE_LOCATION=1 ATL_FORCE_FULLSCREEN=1 ATL_DISABLE_WINDOW_DECORATIONS=1
 export ATL_LOCATION_SOURCE="${ATL_LOCATION_SOURCE:-tesla:127.0.0.1:9997}"
 export ATL_DENSITY_DPI="$DENSITY"
+# the app's speech recognizer is the car page's browser (its microphone and speech recognition):
+# ATL serves /sockets/speech here (nginx route), the page answers the app's requests with the text
+export ATL_SPEECH_CHANNEL_PORT="${ATL_SPEECH_CHANNEL_PORT:-9994}"
 # the VM's debug knobs stay off in the car; TESLALINUX_ATL_DEBUG=1 in /etc/teslalinux/atl.env keeps the
 # ATL_DEBUG_* / ANDROID_LOG_TAGS set there (view dumps, touch traces: tools/atl-vm/tap.sh-style debugging)
 if [[ "${TESLALINUX_ATL_DEBUG:-0}" != 1 ]]; then

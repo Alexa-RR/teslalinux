@@ -550,6 +550,31 @@ def snapshot_data(vc):
     return dst
 
 
+def compile_app():
+    """The installed APKs compiled before the app starts (the launcher's --compile: android.atl.TlPrewarm
+    opens them in the class loaders the app runs in): the first start after an update is then as quick
+    as any other, instead of minutes of ART compiling on a Pi 4. Best effort: otherwise that first
+    start compiles them. APPUPDATE_LAUNCHER="" leaves it to the first start."""
+    launcher = E("APPUPDATE_LAUNCHER", "/usr/local/bin/teslalinux-atl")
+    if not launcher or not os.access(launcher, os.X_OK):
+        return False
+    home = os.environ.get("HOME", "")
+    if os.geteuid() == 0 and APP_USER:
+        import pwd
+        home = pwd.getpwnam(APP_USER).pw_dir
+    cmd = as_app_user(["env", "-i", "HOME=%s" % home, "PATH=/usr/bin:/bin",
+                       "ATL_PREFIX=%s" % E("APPUPDATE_ATL_PREFIX", "/opt/teslalinux"),
+                       "TESLALINUX_APP_DIR=%s" % os.path.join(APPS_DIR, PKG), launcher, "--compile"])
+    t0 = time.time()
+    try:
+        run(cmd, timeout=1800)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        log("compiling the app failed (%s); its first start compiles it" % e)
+        return False
+    log("app compiled in %d s" % (time.time() - t0))
+    return True
+
+
 def install_pending(st, now):
     """Swap the staged set in (install-app.sh: .new, rename, .old kept). The app must not be running."""
     pend = st["pending"]
@@ -561,6 +586,8 @@ def install_pending(st, now):
                        "--abi", ABI, "--density", dens, "--lang", lang, "--no-restart"])
     run(cmd, timeout=1800)
     n = clear_art_cache()
+    compiled = compile_app()
+    now = int(time.time())  # the health window starts after the compile, with the app's start
     after = installed_info()
     if not after or int(after["versionCode"]) != int(pend["versionCode"]):
         raise RuntimeError("install-app.sh finished but %s is not installed" % pend["versionCode"])
@@ -576,8 +603,9 @@ def install_pending(st, now):
     with open(HEALTH_ENV, "w") as f:
         f.write("# teslalinux-appupdate: the launch after an update is checked for %s\nANDROID_LOG_TAGS=%s\n"
                 % (HEALTH_MARKER, HEALTH_LOG_TAGS))
-    event(st, "installed", "installed %s (%s), was %s; ART cache cleared (%d files); health check next"
-          % (after.get("versionName"), after["versionCode"], before["versionCode"] if before else "none", n), now)
+    event(st, "installed", "installed %s (%s), was %s; ART cache cleared (%d files)%s; health check next"
+          % (after.get("versionName"), after["versionCode"], before["versionCode"] if before else "none", n,
+             ", compiled" if compiled else ""), now)
 
 
 def rollback(st, reason, now):

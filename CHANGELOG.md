@@ -19,6 +19,18 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### Voice search
+
+*In Hebrew or English, with the microphone and speech recognition of the browser the car page is
+open in.*
+
+- In the car interface, the search field has a microphone button: speak a place, the words appear
+  as they are heard and Waze searches when you stop speaking. It works while the car moves, when
+  typing is off.
+- Settings > Waze interface: "Voice language" (Hebrew or English, kept by each browser) and "Test
+  the microphone", which listens once and shows what it heard. A browser without speech
+  recognition says so there.
+
 ### Waze on a real Raspberry Pi
 
 *The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything
@@ -42,6 +54,8 @@ before was tested in the build VM, which hid all of these.*
 - In Phone mode, "Connect calendar" froze Waze: the screen stayed on its last picture and nothing
   answered. Screens that open over Waze's map without covering it (Waze's permission and calendar
   screens) now leave the map running underneath, as on a phone.
+- White was light grey in the picture from the Pi's hardware encoder. The colours are now exact,
+  and making each picture takes the Pi half the processor time it did.
 
 ### The hotspot and the car page come up sooner
 
@@ -53,6 +67,9 @@ before was tested in the build VM, which hid all of these.*
 - The Pi boots in 12 seconds instead of 22; the hotspot is up about 8 seconds after power-on and
   the car page right after it, instead of about 21.
 - Waze's first start after an install no longer builds the runtime's core library image again.
+- Waze's first start after an install or a Waze update no longer spends about three minutes
+  preparing Waze's code: the installer and the updater do it beforehand (measured: 199 s during the
+  install, none at the first start).
 - An LTE stick that works as a network card (a Huawei HiLink stick such as the E3372) got no
   address on a Pi set up with Raspberry Pi Imager, so the Pi had no mobile internet and kept
   resetting the stick. It now connects by itself (tested: E3372 on 4G).
@@ -89,6 +106,20 @@ In ATL (the fork):
   again (`onSurfaceDestroyed`, `onSurfaceAvailable` at the new dpi, the visible and stable areas), as
   a host does when it replaces its surface. The `surface` message carries `mapDpi`; the host reports
   the scale as state (`{"type":"mapScale","scale":S,"set":B}`) so that every page agrees.
+- Speech recognition: the default `SpeechRecognizer` is the car page's browser
+  (`android/speech/TlSpeechChannel.java`, a WebSocket on `ATL_SPEECH_CHANNEL_PORT`, 9994 behind
+  nginx's `/sockets/speech`; protocol in docs/UPSTREAM-NOTES.md "Speech recognition").
+  `isRecognitionAvailable` is true while a page that can recognise speech is connected; a session
+  gets `onReadyForSpeech`, `onBeginningOfSpeech`, `onEndOfSpeech`, partial results, results with
+  confidences, and the page's errors as `SpeechRecognizer.ERROR_*`; segmented sessions end with
+  `onSegmentResults` and `onEndOfSegmentedSession` (added, API 33, with `RecognizerIntent`'s audio
+  source and segmented-session extras; a request with the caller's own audio gets `ERROR_CLIENT`).
+  Old language codes (`iw`, `in`, `ji`) become BCP 47 ones. `android.atl.ATLWebSocketServer`: the
+  WebSocket server it runs on. PackageManager lists it for `android.speech.RecognitionService` as a
+  framework service under the class name of Google's recognition service (Waze accepts no other, as
+  microG names its services after Google's; nothing of Google's runs or is contacted), and
+  `queryIntentServicesAsUser` answers for the one user (it returned null). Waze's own microphone
+  button in the phone interface does not reach a recognizer yet: a tap on it calls no Android API.
 
 Tools, tests and docs:
 
@@ -99,6 +130,26 @@ Tools, tests and docs:
 
 #### Fixed
 
+- tacomp converts each frame to JPEG's full-range YUV 4:2:0 on the GPU before reading it back
+  (`yuv_readback`: one pass into an RGBA target a quarter as wide and 1.5 times as tall whose bytes
+  are the I420 planes, chroma averaged over each 2x2 block by linear filtering), for the hardware
+  JPEG encoder (`YU12` input) and for libjpeg-turbo (`tjCompressFromYUV`); H.264 keeps RGB. The
+  Pi's codec converted RGB input to limited-range YCbCr whatever the V4L2 colorspace said (its
+  driver never passes one to the firmware), and browsers decode a JPEG as full range: white came out
+  233. Now 255, the CPU encoder's colours within 1. The read-back is 1.5 bytes a pixel instead of
+  4: measured on a Pi 4 with Waze idle and one viewer, tacomp 23% of a core instead of 54% (1.1%
+  instead of 2.4% a frame), the whole Pi 19% busy instead of 29%. `TACOMP_YUV=0` turns it off.
+- tacomp stops cleanly: it removed none of its listeners before the display was destroyed, and
+  wlroots' xdg-shell asserts on that, so every restart ended in an abort and a core dump.
+- The app's code is compiled before its first start: `teslalinux-atl --compile` runs ATL's
+  `android.atl.TlPrewarm` with the class path and VM options `android-translation-layer` uses, which
+  opens api-impl.jar, the app's APKs (ghax.jar first, api-impl's loader as parent, as
+  `ATLLoadedApp.loadFromPath`) and gstub.jar in the class loaders the app runs in, so art_standalone's
+  dex2oat makes what the first start would have made (checked on a Pi 4: no dex2oat for Waze or the
+  runtime at its next start). The installer runs it after the boot image (`step_prewarm`),
+  `teslalinux-appupdate` after installing an update, before the health window starts.
+  `TlPrewarm` ends with `System.exit`: dalvikvm's DestroyJavaVM runs libjavacore's `JNI_OnUnload` on
+  the runtime's shutdown thread, where `JavaVM::GetEnv` fails and it aborts.
 - `Activity.getSplashScreen()`, `android.window.SplashScreen` and `SplashScreenView` (AOSP, API 31)
   in ATL: Waze 5.27 calls `getSplashScreen()` while it starts and ended with `NoSuchMethodError`.
   No starting window is drawn on this platform, so no splash screen is ever handed over; exit

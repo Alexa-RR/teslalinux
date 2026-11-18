@@ -903,6 +903,21 @@ step_prewarm() {
     log "  boot image ready ($(du -sh "$TESLA_HOME/.cache/art" | cut -f1))"
   else
     warn "no boot image was built now; the app's first start builds it"
+    return 0
+  fi
+  # then the runtime's own code and the app's, as their first start would compile them (the launcher's
+  # --compile: android.atl.TlPrewarm in the same class loaders); about 3 minutes for Waze on a Pi 4,
+  # which the first start in the car no longer spends
+  if [[ -f /var/lib/teslalinux/apps/com.waze/base.apk ]]; then
+    log "  compiling Waze as tesla"
+    local t0=$SECONDS out
+    if out=$(runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH=/usr/bin:/bin ATL_PREFIX="$PREFIX" \
+          timeout 1800 /usr/local/bin/teslalinux-atl --compile 2>&1); then
+      log "  Waze compiled in $((SECONDS - t0)) s"
+    else
+      printf '%s\n' "$out" | tail -5 | sed 's/^/  /'
+      warn "Waze was not compiled now; its first start compiles it"
+    fi
   fi
 }
 
