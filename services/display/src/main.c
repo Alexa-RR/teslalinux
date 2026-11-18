@@ -90,6 +90,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 
@@ -1813,6 +1814,10 @@ int main(int argc, char **argv)
 	}
 	wlr_compositor_create(s.display, 6, s.renderer);
 	wlr_subcompositor_create(s.display);
+	/* wp_viewporter: GTK puts a widget's dmabuf frames in a subsurface of their own (graphics
+	 * offload: ATL's SurfaceView, the app's map) only with subsurfaces and viewporter; without it
+	 * every frame of the map was drawn into the app's window again on the GPU */
+	wlr_viewporter_create(s.display);
 	wlr_data_device_manager_create(s.display);
 	s.output_layout = wlr_output_layout_create(s.display);
 	s.scene = wlr_scene_create();
