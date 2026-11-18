@@ -5,6 +5,15 @@ HTML/JS client that runs in the Tesla browser. Served by nginx from `/var/www/te
 
 Changes from upstream:
 * `js/core/shared.js`: endpoints derive from `location.host` instead of `device.teslaandroid.com`.
+* Voice search (`js/speech/speech.js`, new, one `<script defer>` line in `index.html`; a
+  `speechWebSocket` endpoint in `js/core/shared.js`, started from `js/core/app.js`): this browser's
+  microphone and speech recognition (the Web Speech API) in Hebrew or English. It answers the app's
+  speech recognizer over `/sockets/speech` (Waze's own microphone button in the phone interface;
+  protocol in docs/UPSTREAM-NOTES.md "Speech recognition"), and the car interface's search field has
+  a microphone button (`js/carapp/carapp-renderer.js` `voiceButton`, `carapp.css`) that fills the
+  field as the words are heard and searches when the driver stops speaking; it stays on while typing
+  is off on the move. Settings, Waze interface: "Voice language" (kept by this browser) and "Test the
+  microphone"; in a browser without speech recognition a tile says so and the buttons are left out.
 * `js/core/cert-warning.js` (new, one `<script defer>` line in `index.html`): a small dismissable
   notice, bottom left, when the car's TLS certificate is a placeholder, has fewer than 14 days left,
   or its last update failed or was rejected. It reads the new read-only `GET /api/certificate`

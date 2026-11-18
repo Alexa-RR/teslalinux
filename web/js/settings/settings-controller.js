@@ -281,6 +281,7 @@
       this._appendDescription(
         "The car interface is the one Waze shows on car screens: the map fills the display, with turn cards, a search screen and large buttons on top. Your saved places and settings are the same in both.",
       );
+      this._renderVoiceTiles();
       // the car interface's look: kept by this browser (js/carapp/carapp-controller.js), applied
       // at once; the day/night choice also switches Waze's map
       const car = global.TLCarApp;
@@ -387,6 +388,77 @@
       this.content.appendChild(mapNotice);
       this.content.appendChild(mapWarning);
       this._showMapColoursWarning(mapWarning, car.getLook());
+    }
+
+    /**
+     * Voice search (js/speech/speech.js): this browser's microphone and speech recognition, for
+     * the car interface's search and for Waze's own microphone button in the phone interface. The
+     * language is this browser's; the test listens once and shows what it heard, or why not.
+     */
+    _renderVoiceTiles() {
+      const speech = global.TLSpeech;
+      if (!speech) return;
+      if (!speech.supported()) {
+        this._appendTile({
+          icon: "mic_off",
+          title: "Voice search: not available in this browser",
+          subtitle: "This browser has no speech recognition, so the microphone buttons do nothing here",
+          dense: false,
+        });
+        return;
+      }
+      this._appendTile({
+        icon: "translate",
+        title: "Voice language",
+        subtitle: "The language you speak to Waze's microphone and the car interface's search",
+        trailing: this._createSelect(speech.LANGUAGES, speech.language(), async (value) => speech.setLanguage(value)),
+        dense: false,
+      });
+      const result = utils.createElement("div", "settings-description", "");
+      result.hidden = true;
+      const button = this._createActionButton("Test");
+      let session = null;
+      button.addEventListener("click", () => {
+        if (session) {
+          session.stop();
+          return;
+        }
+        result.hidden = false;
+        result.textContent = "Listening… say a place";
+        button.textContent = "Stop";
+        const done = (text) => {
+          session = null;
+          button.textContent = "Test";
+          result.textContent = text;
+        };
+        session = speech.listen({
+          partial: true,
+          onPartial: (texts) => {
+            result.textContent = "Heard: " + (texts[0] || "");
+          },
+          onResult: (texts) => done("Heard: " + texts[0]),
+          onError: (error) =>
+            done(
+              {
+                "no-match": "Nothing recognised. Try again a little louder.",
+                "no-speech": "No speech heard. Is the microphone on?",
+                "not-allowed": "The microphone is blocked: allow it for this page in the browser.",
+                "service-not-allowed": "This browser does not offer speech recognition to pages.",
+                "audio-capture": "No microphone found.",
+                network: "Speech recognition could not reach its service (it needs the internet).",
+                "language-not-supported": "This browser cannot recognise the chosen language.",
+              }[error] || "Speech recognition failed (" + error + ").",
+            ),
+        });
+      });
+      this._appendTile({
+        icon: "mic",
+        title: "Test the microphone",
+        subtitle: "Listens once in the voice language and shows what it heard",
+        trailing: button,
+        dense: false,
+      });
+      this.content.appendChild(result);
     }
 
     /**

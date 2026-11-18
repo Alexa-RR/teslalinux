@@ -986,7 +986,83 @@
         }
       });
       wrap.appendChild(bar);
+      const mic = this.voiceButton(bar);
+      if (mic) wrap.appendChild(mic);
       return wrap;
+    }
+
+    /**
+     * The car host's microphone button (js/speech/speech.js): the browser listens in the voice
+     * language chosen in Settings, the words fill the field as they are heard (the app suggests as
+     * for typing) and the search is sent when the driver stops speaking. Voice stays available
+     * while typing is off (UX restriction NO_KEYBOARD): it is how a moving car searches.
+     */
+    voiceButton(bar) {
+      const speech = global.TLSpeech;
+      if (!speech || !speech.supported()) return null;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "carapp-search-mic";
+      b.setAttribute("aria-label", "Search by voice");
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      const p = document.createElementNS(ns, "path");
+      p.setAttribute("d", "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z");
+      p.setAttribute("fill", "currentColor");
+      svg.appendChild(p);
+      b.appendChild(svg);
+      let session = null;
+      const send = (submit) => {
+        if (bar.dataset.cb) this.ctx.send({ type: "search", cb: Number(bar.dataset.cb), text: bar.value, submit });
+      };
+      const end = () => {
+        session = null;
+        b.classList.remove("listening");
+      };
+      const hint = (text) => {
+        bar.placeholder = text;
+        global.setTimeout(() => this.applySearchRestriction(bar), 2500);
+      };
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (session) {
+          session.stop();
+          return;
+        }
+        b.classList.add("listening");
+        bar.placeholder = "Listening…";
+        session = speech.listen({
+          partial: true,
+          maxResults: 1,
+          onPartial: (texts) => {
+            bar.value = texts[0] || "";
+            send(false);
+          },
+          onResult: (texts) => {
+            end();
+            bar.value = texts[0] || "";
+            this.applySearchRestriction(bar);
+            send(true);
+          },
+          onError: (error) => {
+            end();
+            const say = {
+              "no-match": "Didn't catch that",
+              "no-speech": "Didn't hear anything",
+              "not-allowed": "The microphone is blocked in this browser",
+              "service-not-allowed": "This browser has no speech recognition",
+              "audio-capture": "No microphone",
+              network: "Speech recognition needs the internet",
+              "language-not-supported": "This language is not available here",
+            }[error];
+            if (say) hint(say);
+            else this.applySearchRestriction(bar);
+          },
+        });
+      });
+      return b;
     }
 
     /** the search field on or off by the keyboard restriction, with the matching hint */

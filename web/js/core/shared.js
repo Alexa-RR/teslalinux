@@ -62,6 +62,7 @@
       audioWebSocket: wsScheme + "://" + host + "/sockets/audio",
       displayWebSocket: wsScheme + "://" + host + "/sockets/display",
       gpsWebSocket: wsScheme + "://" + host + "/sockets/gps",
+      speechWebSocket: wsScheme + "://" + host + "/sockets/speech",
       touchscreenWebSocket: wsScheme + "://" + host + "/sockets/touchscreen",
     };
   };

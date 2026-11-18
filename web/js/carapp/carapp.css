@@ -317,9 +317,28 @@
 }
 .carapp-search::placeholder { color: var(--on-surface-dim); }
 .carapp-search::-webkit-search-cancel-button { -webkit-appearance: none; }
-/* typing is off while the car moves (UX restriction NO_KEYBOARD) */
-.carapp-search-box.off { opacity: 0.7; }
+/* typing is off while the car moves (UX restriction NO_KEYBOARD); voice stays on */
+.carapp-search-box.off .carapp-search,
+.carapp-search-box.off .carapp-search-glyph { opacity: 0.7; }
 .carapp-search-box.off .carapp-search { cursor: not-allowed; }
+/* the car host's microphone (voice search, js/speech/speech.js) */
+.carapp-search-mic {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  margin-inline-end: calc(-1 * var(--pad-4));
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--on-surface-dim);
+  cursor: pointer;
+}
+.carapp-search-mic svg { width: var(--action-icon); height: var(--action-icon); }
+.carapp-search-mic.listening { color: var(--on-accent, #fff); background: var(--accent); animation: carapp-listening 1.2s ease-in-out infinite; }
+@keyframes carapp-listening { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent); } }
 
 /* ---- navigation (detailed_step_view, compact_step_view, travel_estimate_view) ---- */
 .carapp-step.detailed { display: flex; align-items: center; gap: var(--pad-3); }

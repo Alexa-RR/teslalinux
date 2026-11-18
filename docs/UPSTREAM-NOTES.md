@@ -16,6 +16,7 @@ frontend in `web/` works unchanged.
 | `/stream` | 9090 | dead upstream endpoint, drop |
 | `/sockets/keyboard` | 127.0.0.1:9996 | teslalinux only: device keyboard (tacomp) |
 | `/sockets/carapp` | 127.0.0.1:9995 | teslalinux only: the app's car templates, JSON text (ATL's car-app host) |
+| `/sockets/speech` | 127.0.0.1:9994 | teslalinux only: speech recognition by the page for the app, JSON text (ATL) |
 
 Headers upstream sends: `Cross-Origin-Embedder-Policy: credentialless`,
 `Cross-Origin-Opener-Policy: same-origin` (SharedArrayBuffer/wasm for Broadway), `Cache-Control: no-store`
@@ -138,6 +139,33 @@ Page to host:
   again: the change applies live, without restarting the app (Waze 5.25 redraws its map text,
   signs, icons and position arrow at once; its speedometer keeps the size it was created with
   until Waze next starts). The page's panels keep the display's density.
+
+## Speech recognition (`/sockets/speech`, port 9994; teslalinux only, no upstream counterpart)
+
+The device has no microphone and no speech recognizer; the driver's browser has both (the Web
+Speech API). ATL's default `SpeechRecognizer` (`android/speech/TlSpeechChannel.java`, served while
+`ATL_SPEECH_CHANNEL_PORT` is set; `teslalinux-atl` sets 9994) hands the app's recognition requests
+to the page (`web/js/speech/speech.js`) and the page answers with the text. JSON text frames:
+
+- page → ATL: `{"type":"hello","recognition":B}` on connect (whether this browser has speech
+  recognition; `SpeechRecognizer.isRecognitionAvailable` is true while such a page is connected,
+  the newest one gets the requests). Per session `N`: `{"type":"ready","id":N}` (the microphone is
+  open: `onReadyForSpeech`), `{"type":"speechStart","id":N}`, `{"type":"speechEnd","id":N}`,
+  `{"type":"partial","id":N,"texts":[...]}`, `{"type":"results","id":N,"texts":[...],
+  "confidences":[...]}` (-1: unknown), or `{"type":"error","id":N,"error":E}` with the Web Speech
+  API's error names plus `no-match` (it ended without text) and `busy`. ATL maps them to
+  `SpeechRecognizer.ERROR_*` (`no-speech` → `ERROR_SPEECH_TIMEOUT`, `not-allowed` →
+  `ERROR_INSUFFICIENT_PERMISSIONS`, `network` → `ERROR_NETWORK`, ...); a page that disconnects ends
+  its sessions with `ERROR_SERVER_DISCONNECTED`.
+- ATL → page: `{"type":"listen","id":N,"lang":TAG,"partial":B,"maxResults":M}` (`lang` is the
+  app's `EXTRA_LANGUAGE`, else the device locale, as a BCP 47 tag; the page uses it when it is one
+  of the voice languages it offers, Hebrew or English, else the browser's choice in Settings),
+  `{"type":"stop","id":N}` (`stopListening`: end the audio, deliver the result),
+  `{"type":"cancel","id":N}`.
+
+In the car interface the page is the car's host, and the host's microphone button (in the search
+field) does voice search itself: it listens the same way and sends the text as the template's
+`search` message, with no app involvement.
 
 ## Config API (`/api`, port 8081)
 

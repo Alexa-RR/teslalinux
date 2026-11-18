@@ -190,6 +190,11 @@
     });
     gpsController.initialize();
 
+    // teslalinux: the app's speech recognizer is this browser (js/speech/speech.js)
+    if (TAHtml.SpeechController) {
+      new TAHtml.SpeechController({ socketUrl: flavor.speechWebSocket }).initialize();
+    }
+
     const touchscreenController = new TAHtml.TouchscreenController({
       touchLayer: elements.touchLayer,
       socketUrl: flavor.touchscreenWebSocket,
