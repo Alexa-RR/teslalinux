@@ -1959,6 +1959,56 @@
         dense: false,
       });
       await this._appendAppRestartTile(token);
+      await this._appendGpuSpeedTile(token);
+    }
+
+    // teslalinux: the Pi's GPU clock (teslalinux-set-gpu-speed through /api/gpuSpeed). Waze's map is
+    // limited by the GPU; faster clocks need cooling, and apply at the next restart.
+    async _appendGpuSpeedTile(token) {
+      let st;
+      try {
+        st = await this.apiClient.fetchGpuSpeed();
+      } catch (_error) {
+        return;
+      }
+      if (token !== this._renderToken || this.activeSectionId !== "device") {
+        return;
+      }
+      const describe = (s) => {
+        const now = [];
+        if (s.gpuMHz) now.push("GPU at " + s.gpuMHz + " MHz");
+        if (s.temperatureC) now.push(Math.round(s.temperatureC) + " \u00b0C");
+        if (s.throttled && s.throttled !== "0x0") now.push("the Pi has slowed itself down (heat or power)");
+        return (s.pendingRestart ? "Applies at the next restart. " : "") + (now.length ? "Now: " + now.join(", ") : "Now: not measured");
+      };
+      this._appendDivider();
+      const select = this._createSelect(
+        [
+          { value: "standard", label: "Standard (500 MHz)" },
+          { value: "faster", label: "Faster (600 MHz)" },
+          { value: "fastest", label: "Fastest (700 MHz)" },
+        ],
+        st.speed,
+        async (value) => {
+          try {
+            st = await this.apiClient.setGpuSpeed(value);
+            subtitle.textContent = describe(st);
+          } catch (_error) {
+            subtitle.textContent = "Not saved (service error)";
+          }
+        },
+      );
+      this._appendTile({
+        icon: "speed",
+        title: "GPU speed",
+        subtitle: describe(st),
+        trailing: select,
+        dense: false,
+      });
+      const subtitle = this.content.lastElementChild.querySelector(".settings-tile-subtitle");
+      this._appendDescription(
+        "How fast the Pi's graphics chip runs. Waze's map is drawn by it, so a faster clock makes the map smoother. Faster needs a heatsink, Fastest a heatsink and a fan (it also raises the chip's voltage a little). A Pi that gets too hot slows itself down, so without cooling a faster setting only adds heat. Applies at the next restart.",
+      );
     }
 
     // teslalinux: restart the app (Waze under ATL) without touching the display stream or the page.

@@ -474,7 +474,7 @@ step_files() {
   cp -r "$P/host/phase1-pios/etc/." /usr/share/teslalinux/templates/
   install -m 0644 "$P/host/phase1-pios/env" /usr/share/teslalinux/env.template
   for f in teslalinux-render teslalinux-restart-app teslalinux-set-locale teslalinux-set-keyboard teslalinux-set-app-interface teslalinux-network \
-           teslalinux-system-update teslalinux-uplink teslalinux-dexopt; do
+           teslalinux-system-update teslalinux-uplink teslalinux-dexopt teslalinux-set-gpu-speed; do
     put_file "$P/host/$f" "/usr/local/bin/$f" 0755
   done
   put_file "$P/host/phase1-pios/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display 0755
@@ -495,7 +495,7 @@ step_files() {
   install -m 0755 "$P/tools/apps/install-app.sh" "$P/tools/apps/apk-info.py" "$LIB/apps/"
   install -m 0644 "$P/tools/apps/apk_verify.py" "$LIB/apps/"
   install -m 0644 "$P/host/local/check.py" "$P/services/display/test/ws-client.py" "$LIB/check/"
-  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update\n'
+  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update, /usr/local/bin/teslalinux-set-gpu-speed\n'
   visudo -cq -f /etc/sudoers.d/teslalinux || die "sudoers check failed for /etc/sudoers.d/teslalinux"
   for f in "${UNITS[@]}" teslalinux-tls-fetch.service teslalinux-tls-fetch.timer; do
     put_file "$P/host/phase1-pios/etc/systemd/$f" "/etc/systemd/system/$f" 0644

@@ -1,0 +1,86 @@
+#!/bin/bash
+# teslalinux: the Pi's GPU (V3D) clock, chosen on the settings page (Settings > Device > GPU speed).
+#
+#   teslalinux-set-gpu-speed standard|faster|fastest   choose; applies at the next restart
+#   teslalinux-set-gpu-speed status                    JSON: the choice, whether it waits for a
+#                                                      restart, the GPU clock now, temperature, throttling
+#
+# The app's map is limited by the GPU (docs/ARCHITECTURE.md §8): Waze's own drawing takes most of a
+# frame at the stock 500 MHz. Faster clocks heat the chip more; the firmware lowers the clocks by
+# itself at its temperature limits (soft throttling from 80 C), so a hot Pi only loses the gain.
+#   standard  500 MHz, the Pi 4's own
+#   faster    600 MHz at the stock voltage (Tesla Android's suggested "gpu_freq=600"); a heatsink
+#   fastest   700 MHz with over_voltage=2 (as Tesla Android's guide); a heatsink and a fan
+# The choice is /etc/teslalinux/gpu.env and a marked block of the firmware's config.txt (after the
+# installer's own block; tools/pios/install.sh keeps it).
+set -euo pipefail
+
+ENV_FILE="${TESLALINUX_GPU_ENV:-/etc/teslalinux/gpu.env}"
+BOOT=/boot/firmware; [[ -f "$BOOT/config.txt" ]] || BOOT=/boot
+CFG="${TESLALINUX_BOOT_CONFIG:-$BOOT/config.txt}"
+BEGIN="# >>> teslalinux gpu (teslalinux-set-gpu-speed rewrites this block) >>>"
+END="# <<< teslalinux gpu <<<"
+
+current() {
+	local s=standard
+	[[ -r "$ENV_FILE" ]] && s=$(sed -n 's/^TESLALINUX_GPU_SPEED=//p' "$ENV_FILE" | tail -n 1)
+	case "$s" in standard|faster|fastest) echo "$s" ;; *) echo standard ;; esac
+}
+
+# the config.txt lines of a choice
+lines_for() {
+	case "$1" in
+		standard) ;;
+		faster) printf '[pi4]\nv3d_freq=600\n[all]\n' ;;
+		fastest) printf '[pi4]\nv3d_freq=700\nover_voltage=2\n[all]\n' ;;
+	esac
+}
+
+# the choice the firmware booted with (vcgencmd get_config: what config.txt said at the last boot)
+booted() {
+	local f
+	f=$(vcgencmd get_config v3d_freq 2>/dev/null | sed -n 's/^v3d_freq=//p')
+	case "$f" in
+		700) echo fastest ;;
+		600) echo faster ;;
+		*) echo standard ;;
+	esac
+}
+
+status() {
+	local mhz="" temp="" thr=""
+	if command -v vcgencmd >/dev/null; then
+		mhz=$(vcgencmd measure_clock v3d 2>/dev/null | sed -n 's/.*=\([0-9]*\)$/\1/p')
+		[[ -n "$mhz" ]] && mhz=$((mhz / 1000000))
+		temp=$(vcgencmd measure_temp 2>/dev/null | sed -n "s/temp=\([0-9.]*\).*/\1/p")
+		thr=$(vcgencmd get_throttled 2>/dev/null | sed -n 's/throttled=//p')
+	fi
+	local chosen now=standard
+	chosen=$(current)
+	command -v vcgencmd >/dev/null && now=$(booted)
+	printf '{"speed":"%s","pendingRestart":%s,"gpuMHz":%s,"temperatureC":%s,"throttled":%s}\n' \
+		"$chosen" "$([[ "$chosen" != "$now" ]] && echo true || echo false)" \
+		"${mhz:-null}" "${temp:-null}" "$([[ -n "$thr" ]] && echo "\"$thr\"" || echo null)"
+}
+
+set_speed() {
+	local speed="$1" tmp
+	install -d -m 0755 "$(dirname "$ENV_FILE")"
+	printf '# teslalinux-set-gpu-speed (Settings > Device > GPU speed)\nTESLALINUX_GPU_SPEED=%s\n' "$speed" > "$ENV_FILE.tmp"
+	mv "$ENV_FILE.tmp" "$ENV_FILE"
+	tmp=$(mktemp)
+	awk -v b="$BEGIN" -v e="$END" '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$CFG" > "$tmp"
+	if [[ "$speed" != standard ]]; then
+		{ printf '%s\n' "$BEGIN"; lines_for "$speed"; printf '%s\n' "$END"; } >> "$tmp"
+	fi
+	if ! cmp -s "$tmp" "$CFG"; then
+		cat "$tmp" > "$CFG.new" && sync && mv "$CFG.new" "$CFG" && sync
+	fi
+	rm -f "$tmp"
+}
+
+case "${1:-}" in
+	status) status ;;
+	standard|faster|fastest) set_speed "$1"; status ;;
+	*) echo "usage: teslalinux-set-gpu-speed standard|faster|fastest|status" >&2; exit 2 ;;
+esac

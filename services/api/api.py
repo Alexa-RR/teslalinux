@@ -34,6 +34,12 @@ The app updater (tools/appupdate/teslalinux-appupdate, docs/APP-UPDATES.md), new
                                into `teslalinux-appupdate receive-upload` (root, sudoers); answers its
                                verification result as JSON {ok, state, message}
 
+The GPU speed (new routes only):
+* GET  /api/gpuSpeed   {"speed": "standard"|"faster"|"fastest", "pendingRestart": B, "gpuMHz": N,
+                       "temperatureC": T, "throttled": "0x..."} (teslalinux-set-gpu-speed status)
+* POST /api/gpuSpeed   JSON {"speed": ...}: teslalinux-set-gpu-speed (one sudoers rule) writes the
+                       choice and the firmware's config.txt; it applies at the next restart
+
 The keyboard (new routes only):
 * GET  /api/keyboard   {"mode": "builtin" | "device"}: the app's own on-screen keyboard, or the keyboard
                        of the device showing the page (the page then types through tacomp's
@@ -97,6 +103,8 @@ RESTART_APP = os.environ.get("TESLALINUX_RESTART_APP", "/usr/local/bin/teslalinu
 # teslalinux extension: the device's language/region and time zone (settings page, "Language & region")
 SET_LOCALE = os.environ.get("TESLALINUX_SET_LOCALE", "/usr/local/bin/teslalinux-set-locale")
 SET_KEYBOARD = os.environ.get("TESLALINUX_SET_KEYBOARD", "/usr/local/bin/teslalinux-set-keyboard")
+SET_GPU_SPEED = os.environ.get("TESLALINUX_SET_GPU_SPEED", "/usr/local/bin/teslalinux-set-gpu-speed")
+GPU_SPEEDS = ("standard", "faster", "fastest")
 KEYBOARD_ENV = os.environ.get("TESLALINUX_KEYBOARD_ENV", "/etc/teslalinux/keyboard.env")
 KEYBOARD_MODES = ("builtin", "device")
 SET_APP_INTERFACE = os.environ.get("TESLALINUX_SET_APP_INTERFACE", "/usr/local/bin/teslalinux-set-app-interface")
@@ -153,9 +161,10 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
                   ("quality", tp.VD_QUALITY), ("isRearDisplayEnabled", tp.VD_REAR),
                   ("isRearDisplayPrioritised", tp.VD_REAR_PRIO))
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
-              "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan"}
+              "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan",
+              "gpuSpeed"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
-                                  "locale", "keyboard", "appInterface", "network", "systemUpdate"}
+                                  "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed"}
 
 
 def props():
@@ -562,6 +571,30 @@ def set_locale(loc, tz):
                 print("teslalinux-api: %s failed: %s" % (SET_LOCALE, e), flush=True)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------- GPU speed
+
+def gpu_speed_state():
+    """GET /api/gpuSpeed: teslalinux-set-gpu-speed status (readable without root)"""
+    try:
+        out = subprocess.run([SET_GPU_SPEED, "status"], capture_output=True, text=True, timeout=10).stdout
+        st = json.loads(out)
+        if isinstance(st, dict) and st.get("speed") in GPU_SPEEDS:
+            return st
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return {"speed": "standard", "pendingRestart": False, "gpuMHz": None, "temperatureC": None, "throttled": None}
+
+
+def set_gpu_speed(speed):
+    """POST /api/gpuSpeed: the root helper writes the choice and config.txt (next restart)"""
+    cmd = ["sudo", "-n", SET_GPU_SPEED] if APPLY_SUDO and os.geteuid() != 0 else [SET_GPU_SPEED]
+    with _apply_lock:
+        try:
+            subprocess.run(cmd + [speed], check=False, timeout=60, capture_output=True)
+        except (OSError, subprocess.SubprocessError) as e:
+            print("teslalinux-api: %s failed: %s" % (SET_GPU_SPEED, e), flush=True)
 
 
 # ---------------------------------------------------------------------------- keyboard
@@ -1379,6 +1412,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(app_state())
         if route == "locale":
             return self._json(locale_state())
+        if route == "gpuSpeed":
+            return self._json(gpu_speed_state())
         if route == "keyboard":
             return self._json(keyboard_state())
         if route == "appInterface":
@@ -1443,6 +1478,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error()
             set_locale(loc, tz)
             return self._ok()
+        if route == "gpuSpeed":
+            try:
+                req = json.loads(body.decode("utf-8") or "null")
+            except (ValueError, UnicodeDecodeError):
+                return self._error()
+            if not isinstance(req, dict) or req.get("speed") not in GPU_SPEEDS:
+                return self._error()
+            set_gpu_speed(req["speed"])
+            return self._json(gpu_speed_state())
         if route == "keyboard":
             try:
                 req = json.loads(body.decode("utf-8") or "null")

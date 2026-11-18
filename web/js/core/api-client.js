@@ -51,6 +51,15 @@
       return this._postJson(this.apiBaseUrl + "/keyboard", { mode });
     }
 
+    // teslalinux: the GPU clock (standard | faster | fastest; services/api/api.py, next restart)
+    fetchGpuSpeed() {
+      return this._fetchJson(this.apiBaseUrl + "/gpuSpeed");
+    }
+
+    setGpuSpeed(speed) {
+      return this._postJson(this.apiBaseUrl + "/gpuSpeed", { speed });
+    }
+
     // teslalinux: the app's interface ("phone" | "car"; services/api/api.py)
     fetchAppInterface() {
       return this._fetchJson(this.apiBaseUrl + "/appInterface");

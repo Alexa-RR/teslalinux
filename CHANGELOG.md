@@ -31,6 +31,16 @@ open in.*
   the microphone", which listens once and shows what it heard. A browser without speech
   recognition says so there.
 
+### GPU speed
+
+*Settings > Device > GPU speed.*
+
+Waze's map is drawn by the Pi's graphics chip, and that is what limits how smoothly it moves. The
+chip can now run faster: Standard (500 MHz, the Pi's own), Faster (600 MHz, needs a heatsink) or
+Fastest (700 MHz, needs a heatsink and a fan; it also raises the chip's voltage a little). The
+choice applies at the next restart; the tile shows the chip's clock and temperature now, and says
+when the Pi has slowed itself down because of heat.
+
 ### Waze on a real Raspberry Pi
 
 *The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything
@@ -123,6 +133,14 @@ In ATL (the fork):
   microG names its services after Google's; nothing of Google's runs or is contacted), and
   `queryIntentServicesAsUser` answers for the one user (it returned null). Waze's own microphone
   button in the phone interface does not reach a recognizer yet: a tap on it calls no Android API.
+
+In teslalinux:
+
+- `host/teslalinux-set-gpu-speed` (root, one sudoers rule; `GET/POST /api/gpuSpeed`): the V3D clock
+  as a marked block of the firmware's `config.txt` after the installer's (`v3d_freq=600`, or
+  `v3d_freq=700` with `over_voltage=2`, the values Tesla Android's guide used), the choice in
+  `/etc/teslalinux/gpu.env`; `status` reports the clock the firmware booted with
+  (`vcgencmd get_config`), the clock now, the temperature and the throttling flags.
 
 Tools, tests and docs:
 

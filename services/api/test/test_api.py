@@ -59,7 +59,13 @@ with open(os.path.join(TMP, "mapskin.json"), "w") as f:
     json.dump({"overlays": [{"package": "com.waze", "path": "skins/day.lua", "replace": [["0xFAFCFA", "0xE4E5E7"]],
                              "verified": [{"versionCode": 1030736, "versionName": "5.25.0.1",
                                            "sha256": hashlib.sha256(SKIN).hexdigest()}]}]}, f)
+BOOT_CONFIG = b"arm_64bit=1\n# >>> teslalinux (tools/pios/install.sh rewrites this block) >>>\n[pi4]\nboot_delay=0\n[all]\n# <<< teslalinux <<<\n"
+with open(os.path.join(TMP, "config.txt"), "wb") as f:
+    f.write(BOOT_CONFIG)
 os.environ.update({
+    "TESLALINUX_SET_GPU_SPEED": os.path.join(REPO, "host", "teslalinux-set-gpu-speed"),
+    "TESLALINUX_GPU_ENV": os.path.join(TMP, "gpu.env"),
+    "TESLALINUX_BOOT_CONFIG": os.path.join(TMP, "config.txt"),
     "TESLALINUX_SET_APP_INTERFACE": os.path.join(TMP, "set-app-interface"),
     "TESLALINUX_INTERFACE_ENV": os.path.join(TMP, "interface.env"),
     "TESLALINUX_APP_DIR": os.path.join(TMP, "apps"),
@@ -287,6 +293,34 @@ class AppInterface(unittest.TestCase):
             time.sleep(0.05)
         with open(IFACE_LOG) as f:
             self.assertEqual(f.read().strip(), "map graphite")
+
+
+class GpuSpeed(unittest.TestCase):
+    """/api/gpuSpeed through host/teslalinux-set-gpu-speed on a copy of the firmware's config.txt"""
+
+    def test_choose_and_back(self):
+        cfg = os.path.join(TMP, "config.txt")
+        st = json.loads(call("gpuSpeed")[2])
+        self.assertEqual(st["speed"], "standard")
+        code, _, body = call("gpuSpeed", "POST", json.dumps({"speed": "fastest"}), "application/json")
+        self.assertEqual(code, 200)
+        st = json.loads(body)
+        self.assertEqual((st["speed"], st["pendingRestart"]), ("fastest", True))  # booted at standard
+        with open(cfg, "rb") as f:
+            text = f.read()
+        self.assertTrue(text.startswith(BOOT_CONFIG))  # the installer's block stays, the GPU block follows
+        self.assertIn(b"v3d_freq=700\nover_voltage=2\n[all]\n# <<< teslalinux gpu <<<", text)
+        call("gpuSpeed", "POST", json.dumps({"speed": "faster"}), "application/json")
+        with open(cfg, "rb") as f:
+            text = f.read()
+        self.assertEqual(text.count(b"teslalinux gpu"), 2)  # one block, replaced
+        self.assertIn(b"v3d_freq=600", text)
+        self.assertNotIn(b"over_voltage", text)
+        call("gpuSpeed", "POST", json.dumps({"speed": "standard"}), "application/json")
+        with open(cfg, "rb") as f:
+            self.assertEqual(f.read(), BOOT_CONFIG)
+        for bad in ({"speed": "turbo"}, {}, []):
+            self.assertEqual(call("gpuSpeed", "POST", json.dumps(bad), "application/json")[0], 500, bad)
 
 
 class Settings(unittest.TestCase):
