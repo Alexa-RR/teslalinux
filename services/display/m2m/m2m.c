@@ -289,6 +289,12 @@ static void _m2m_encoder_prepare(us_m2m_encoder_s *enc, const us_frame_s *frame)
 			// https://github.com/pikvm/ustreamer/issues/169
 			// https://github.com/raspberrypi/linux/pull/5232
 			fmt.fmt.pix_mp.plane_fmt[0].sizeimage = (1024 + 512) << 10; // 1.5Mb
+		} else {
+			// teslalinux: JPEG is full-range YCbCr (JFIF) and browsers decode it so; the Pi 4's codec
+			// otherwise wrote limited range from RGB input (white came out as 232 grey)
+			fmt.fmt.pix_mp.colorspace = V4L2_COLORSPACE_JPEG;
+			fmt.fmt.pix_mp.ycbcr_enc = V4L2_YCBCR_ENC_601;
+			fmt.fmt.pix_mp.quantization = V4L2_QUANTIZATION_FULL_RANGE;
 		}
 		_E_LOG_DEBUG("Configuring OUTPUT format ...");
 		_E_XIOCTL(VIDIOC_S_FMT, &fmt, "Can't set OUTPUT format");
@@ -618,13 +624,27 @@ static int _m2m_encoder_compress_raw(us_m2m_encoder_s *enc, const us_frame_s *sr
 	// Для не-DMA отправка буфера по факту являтся освобождением этого буфера
 	bool input_released = !_RUN(dma);
 
+	// teslalinux: a bounded wait. The encoder answers within milliseconds; one that never does (a
+	// DMA buffer the codec cannot read was the case on the Pi 4) used to keep the caller waiting
+	// forever, and with it every later frame. After 2 s without a picture this is an error: the
+	// caller closes the encoder and falls back.
+	unsigned waited_ms = 0, stale = 0;
 	while (true) {
 		struct pollfd enc_poll = {_RUN(fd), POLLIN, 0};
 
 		_E_LOG_DEBUG("Polling encoder ...");
-		if (poll(&enc_poll, 1, 1000) < 0 && errno != EINTR) {
+		const int polled = poll(&enc_poll, 1, 250);
+		if (polled < 0 && errno != EINTR) {
 			_E_LOG_PERROR("Can't poll encoder");
 			goto error;
+		}
+		if (polled == 0) {
+			waited_ms += 250;
+			if (waited_ms >= 2000) {
+				_E_LOG_ERROR("No picture from the encoder after %u ms", waited_ms);
+				goto error;
+			}
+			continue;
 		}
 
 		if (enc_poll.revents & POLLIN) {
@@ -650,6 +670,10 @@ static int _m2m_encoder_compress_raw(us_m2m_encoder_s *enc, const us_frame_s *sr
 				// так что нужно убедиться, что мы читаем выходной буфер, соответствующий
 				// входному (с тем же таймстампом).
 				_E_LOG_DEBUG("Need to retry OUTPUT buffer due timestamp mismatch");
+				if (++stale > 8) { // teslalinux: bounded, like the wait above
+					_E_LOG_ERROR("Only stale pictures from the encoder");
+					goto error;
+				}
 			} else {
 				us_frame_set_data(dest, _RUN(output_bufs[output_buf.index].data), output_plane.bytesused);
 				dest->key = output_buf.flags & V4L2_BUF_FLAG_KEYFRAME;

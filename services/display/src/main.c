@@ -156,7 +156,6 @@ struct server {
 	struct encode_job *enc_pending, *enc_done;
 	int enc_efd;
 	bool enc_reset;
-	int m2m_unavailable; /* set by the encoder thread when the V4L2 encoder cannot be used */
 	/* the device keyboard: text-input-v3 from the app <-> the page's /sockets/keyboard (TACOMP_IME_PORT).
 	 * The page is told when a text field wants input; what it types comes back as commands, queued by
 	 * the lws thread and applied here on the main thread (wlroots is not thread-safe). */
@@ -230,13 +229,10 @@ static bool h264_has_idr(const unsigned char *d, size_t n)
 /* one frame of the stream, from the encoder thread */
 struct encode_job {
 	struct encode_job *next;
-	struct wlr_buffer *buffer;    /* dmabuf frames: locked by the main thread until the job comes back */
 	const unsigned char *pixels;  /* CPU pixels (`copy`) */
 	unsigned char *copy;          /* the frame's pixels, copied or read back by the main thread */
 	int stride;
 	uint32_t format;
-	bool have_dmabuf;
-	struct wlr_dmabuf_attributes dmabuf;
 	int width, height, fps, quality;
 	char mode[16];                /* TACOMP_ENCODER when the frame was captured ("": CPU JPEG) */
 	bool force_key;               /* H.264: this frame is an IDR */
@@ -454,22 +450,31 @@ static void encode_and_publish(struct server *s, const struct encode_job *j)
 	tjFree(jpeg);
 }
 
-/* ---- the V4L2 M2M path (the Pi): the output buffer's dmabuf straight into the hardware encoder */
+/* ---- the V4L2 M2M path (the Pi): the frame's pixels into the hardware encoder's own buffers.
+ * Not the output buffer's dmabuf: the Pi 4's codec (bcm2835-codec, vb2-dma-contig) needs physically
+ * contiguous, linear memory, and V3D render buffers are neither; the kernel took such a buffer and the
+ * codec never produced a picture (tacomp's encoder thread then waited forever, no frame published).
+ * The pixels come from the GPU read-back the CPU path uses; the encoder copies them into its MMAP
+ * input buffer, which the driver allocates contiguous. */
 #ifdef TACOMP_M2M
 #include <linux/videodev2.h>
 #include "../m2m/m2m.h"
 
 static us_m2m_encoder_s *m2m_enc;
-static us_frame_s *m2m_src, *m2m_dst;
+static us_frame_s *m2m_dst;
 static bool m2m_failed;
 
 static unsigned v4l2_format_for_drm(uint32_t drm_format)
 {
+	/* the formats the Pi 4's codec takes (v4l2-ctl -d /dev/video31 --list-formats-out): of the 32-bit
+	 * ones only 'AB24' and 'BGR4', no 'XR24'/'AR24'. Its firmware reads them with red and blue the
+	 * other way round from their V4L2 definitions (checked on a Pi 4: B G R X memory sent as 'BGR4'
+	 * came out with red and blue swapped), so B G R X goes as 'AB24' and R G B X as 'BGR4'. */
 	switch (drm_format) {
-	case DRM_FORMAT_XRGB8888: return V4L2_PIX_FMT_XBGR32; /* bytes B G R X */
-	case DRM_FORMAT_ARGB8888: return V4L2_PIX_FMT_ABGR32;
-	case DRM_FORMAT_XBGR8888: return V4L2_PIX_FMT_XRGB32 ? V4L2_PIX_FMT_RGBX32 : 0;
-	case DRM_FORMAT_ABGR8888: return V4L2_PIX_FMT_RGBA32;
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888: return V4L2_PIX_FMT_RGBA32; /* bytes B G R X */
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ABGR8888: return V4L2_PIX_FMT_BGR32;  /* bytes R G B X */
 	default: return 0;
 	}
 }
@@ -496,32 +501,32 @@ static bool encode_m2m(struct server *s, const struct encode_job *j)
 		if (!m2m_enc) {
 			wlr_log(WLR_ERROR, "V4L2 M2M encoder unavailable, using the CPU path");
 			m2m_failed = true;
-			__atomic_store_n(&s->m2m_unavailable, 1, __ATOMIC_RELEASE);
 			return false;
 		}
-		if (!m2m_src)
-			m2m_src = us_frame_init();
 		if (!m2m_dst)
 			m2m_dst = us_frame_init();
 	}
-	const struct wlr_dmabuf_attributes attrs = j->dmabuf;
-	unsigned fmt = v4l2_format_for_drm(attrs.format);
+	unsigned fmt = v4l2_format_for_drm(j->format);
 	if (!fmt)
 		return false;
-	m2m_src->dma_fd = attrs.fd[0];
-	m2m_src->width = attrs.width;
-	m2m_src->height = attrs.height;
-	m2m_src->format = fmt;
-	m2m_src->stride = attrs.stride[0];
-	m2m_src->used = (size_t)attrs.stride[0] * attrs.height;
+	/* the job's pixels, borrowed for this call (the encoder copies them into its input buffer) */
+	us_frame_s src = {0};
+	src.data = (uint8_t *)j->pixels; /* only read (the MMAP path copies from it) */
+	src.used = (size_t)j->stride * j->height;
+	src.allocated = src.used;
+	src.dma_fd = -1;
+	src.width = j->width;
+	src.height = j->height;
+	src.format = fmt;
+	src.stride = j->stride;
+	src.online = true;
 	bool h264 = !strcmp(j->mode, "m2m-h264");
 	bool force_key = h264 && j->force_key;
-	if (us_m2m_encoder_compress(m2m_enc, m2m_src, m2m_dst, force_key) != 0) {
+	if (us_m2m_encoder_compress(m2m_enc, &src, m2m_dst, force_key) != 0) {
 		static int warned;
 		if (!warned++)
 			wlr_log(WLR_ERROR, "V4L2 M2M compress failed, using the CPU path");
 		m2m_failed = true;
-		__atomic_store_n(&s->m2m_unavailable, 1, __ATOMIC_RELEASE);
 		return false;
 	}
 	publish_frame(s, m2m_dst->data, m2m_dst->used, h264);
@@ -549,8 +554,6 @@ static void new_display_client(struct server *s)
 /* main thread: give a finished (or dropped) job's buffer back */
 static void job_free(struct encode_job *j)
 {
-	if (j->buffer)
-		wlr_buffer_unlock(j->buffer);
 	free(j->copy);
 	free(j);
 }
@@ -587,14 +590,13 @@ static void encode_job(struct server *s, struct encode_job *j)
 #endif
 #ifdef TACOMP_M2M
 		m2m_close();
-		__atomic_store_n(&s->m2m_unavailable, 0, __ATOMIC_RELEASE);
 #endif
 	}
 #ifdef TACOMP_M2M
-	if (j->have_dmabuf && encode_m2m(s, j))
+	if (!strncmp(j->mode, "m2m", 3) && j->pixels && encode_m2m(s, j))
 		return;
 #endif
-	if (j->pixels) /* (a dmabuf-only frame the hardware encoder refused is dropped; the next carries pixels) */
+	if (j->pixels)
 		encode_and_publish(s, j);
 }
 
@@ -666,15 +668,6 @@ static void capture_frame(struct server *s, struct wlr_buffer *buffer)
 		if (old)
 			wlr_buffer_unlock(old);
 	}
-#ifdef TACOMP_M2M
-	if (!strncmp(j->mode, "m2m", 3) && !__atomic_load_n(&s->m2m_unavailable, __ATOMIC_ACQUIRE) &&
-	    wlr_buffer_get_dmabuf(buffer, &j->dmabuf) && j->dmabuf.n_planes >= 1) {
-		j->have_dmabuf = true;
-		j->buffer = wlr_buffer_lock(buffer); /* the encoder reads the dmabuf */
-		enc_submit(s, j);
-		return;
-	}
-#endif
 	const size_t need = (size_t)s->width * 4 * s->height;
 	void *data;
 	uint32_t format;
