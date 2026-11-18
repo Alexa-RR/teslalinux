@@ -11,7 +11,10 @@
  *
  * Encoding: v1 reads the rendered buffer back on the CPU (pixman renderer in the test VM, GPU
  * readback with gles2) and compresses with libjpeg-turbo. The V4L2 M2M path (m2m/, dmabuf in,
- * H.264 or JPEG out on the Pi) plugs into capture_frame().
+ * H.264 or JPEG out on the Pi) plugs into capture_frame(). For JPEG with gles2, the GPU converts the
+ * frame to full-range YUV 4:2:0 before the read-back (yuv_readback): a JPEG is YCbCr, the read-back
+ * is 1.5 bytes a pixel instead of 4, and the colours are JPEG's own (the Pi's codec converts RGB to
+ * limited range, which browsers decode as full range: white came out 232 grey). TACOMP_YUV=0 turns it off.
  *
  * Frame pacing: a headless output re-arms its frame timer one whole refresh interval after each
  * commit (wlroots backend/headless), so the time spent building and encoding a frame added to every
@@ -67,8 +70,13 @@
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/interfaces/wlr_keyboard.h>
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/dmabuf.h>
+#include <wlr/render/egl.h>
+#include <wlr/render/gles2.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_buffer.h>
@@ -431,6 +439,17 @@ static void encode_and_publish(struct server *s, const struct encode_job *j)
 	if (job_h264(j) && encode_h264_sw(s, j))
 		return;
 #endif
+	unsigned char *jpeg = NULL;
+	unsigned long jpeg_size = 0;
+	if (j->format == DRM_FORMAT_YUV420) { /* yuv_readback: already JPEG's YCbCr, no colour conversion here */
+		if (tjCompressFromYUV(s->tj, j->pixels, j->width, 1, j->height, TJSAMP_420, &jpeg, &jpeg_size, j->quality, TJFLAG_FASTDCT) != 0) {
+			wlr_log(WLR_ERROR, "tjCompressFromYUV: %s", tjGetErrorStr2(s->tj));
+			return;
+		}
+		publish_frame(s, jpeg, jpeg_size, false);
+		tjFree(jpeg);
+		return;
+	}
 	bool ok;
 	int pf = tj_pixel_format(j->format, &ok);
 	if (!ok) {
@@ -439,8 +458,6 @@ static void encode_and_publish(struct server *s, const struct encode_job *j)
 			wlr_log(WLR_ERROR, "unsupported pixel format 0x%08x for JPEG", j->format);
 		return;
 	}
-	unsigned char *jpeg = NULL;
-	unsigned long jpeg_size = 0;
 	if (tjCompress2(s->tj, j->pixels, j->width, j->stride, j->height, pf, &jpeg, &jpeg_size, TJSAMP_420, j->quality,
 	                TJFLAG_FASTDCT | TJFLAG_NOREALLOC * 0) != 0) {
 		wlr_log(WLR_ERROR, "tjCompress2: %s", tjGetErrorStr2(s->tj));
@@ -475,6 +492,7 @@ static unsigned v4l2_format_for_drm(uint32_t drm_format)
 	case DRM_FORMAT_ARGB8888: return V4L2_PIX_FMT_RGBA32; /* bytes B G R X */
 	case DRM_FORMAT_XBGR8888:
 	case DRM_FORMAT_ABGR8888: return V4L2_PIX_FMT_BGR32;  /* bytes R G B X */
+	case DRM_FORMAT_YUV420: return V4L2_PIX_FMT_YUV420;   /* 'YU12', yuv_readback's I420 */
 	default: return 0;
 	}
 }
@@ -513,6 +531,8 @@ static bool encode_m2m(struct server *s, const struct encode_job *j)
 	us_frame_s src = {0};
 	src.data = (uint8_t *)j->pixels; /* only read (the MMAP path copies from it) */
 	src.used = (size_t)j->stride * j->height;
+	if (fmt == V4L2_PIX_FMT_YUV420)
+		src.used = src.used * 3 / 2; /* the U and V planes after the Y plane */
 	src.allocated = src.used;
 	src.dma_fd = -1;
 	src.width = j->width;
@@ -643,6 +663,199 @@ static void enc_submit(struct server *s, struct encode_job *j)
 		enc_release_done(s);
 }
 
+/* ---- yuv_readback: the frame as full-range BT.601 YUV 4:2:0 (I420: the Y plane, then U, then V,
+ * rows packed), converted by the GPU. One pass draws an RGBA target W/4 wide and 3H/2 high whose
+ * bytes are exactly that layout: a target row below H holds four Y samples a texel; above it, each
+ * row holds two chroma rows of W/2 samples (U rows in the first H/4 target rows, V in the next H/4).
+ * A chroma sample is read at the corner of its 2x2 block, where linear filtering averages the four
+ * pixels. JFIF's equations (ITU-T T.871): what browsers assume a JPEG holds. */
+static const char yuv_vs[] =
+	"attribute vec2 pos;\n"
+	"void main() { gl_Position = vec4(pos, 0.0, 1.0); }\n";
+static const char yuv_fs_body[] =
+	"uniform vec2 size;\n" /* W, H of the frame */
+	"vec3 px(vec2 p) { return texture2D(tex, p / size).rgb; }\n"
+	"float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }\n"
+	"void main() {\n"
+	"  float x = floor(gl_FragCoord.x), y = floor(gl_FragCoord.y);\n"
+	"  float w = size.x, h = size.y;\n"
+	"  if (y < h) {\n"
+	"    float x0 = 4.0 * x + 0.5, yy = y + 0.5;\n"
+	"    gl_FragColor = vec4(lum(px(vec2(x0, yy))), lum(px(vec2(x0 + 1.0, yy))), lum(px(vec2(x0 + 2.0, yy))), lum(px(vec2(x0 + 3.0, yy))));\n"
+	"    return;\n"
+	"  }\n"
+	"  float r = y - h;\n"
+	"  bool v = r >= h / 4.0;\n"
+	"  if (v) r -= h / 4.0;\n"
+	"  float cy = 2.0 * r, cx = 4.0 * x;\n"
+	"  if (x >= w / 8.0) { cy += 1.0; cx = 4.0 * (x - w / 8.0); }\n"
+	"  vec3 k = v ? vec3(0.5, -0.418688, -0.081312) : vec3(-0.168736, -0.331264, 0.5);\n"
+	"  float yy = 2.0 * cy + 1.0, x0 = 2.0 * cx + 1.0;\n"
+	"  gl_FragColor = vec4(dot(px(vec2(x0, yy)), k), dot(px(vec2(x0 + 2.0, yy)), k),\n"
+	"                      dot(px(vec2(x0 + 4.0, yy)), k), dot(px(vec2(x0 + 6.0, yy)), k)) + 128.0 / 255.0;\n"
+	"}\n";
+
+struct yuv_gl {
+	bool tried, ok;
+	GLuint prog[2];      /* sampler2D, samplerExternalOES */
+	GLint loc_size[2], loc_tex[2], loc_pos[2];
+	GLuint vbo, fbo, target;
+	int w, h;            /* the target's frame size */
+};
+static struct yuv_gl yuv;
+
+static GLuint yuv_shader(GLenum type, const char *src)
+{
+	GLuint sh = glCreateShader(type);
+	glShaderSource(sh, 1, &src, NULL);
+	glCompileShader(sh);
+	GLint ok = 0;
+	glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+	if (!ok) {
+		char log[512];
+		glGetShaderInfoLog(sh, sizeof log, NULL, log);
+		wlr_log(WLR_ERROR, "yuv shader: %s", log);
+		glDeleteShader(sh);
+		return 0;
+	}
+	return sh;
+}
+
+static GLuint yuv_program(bool external, GLint *loc_size, GLint *loc_tex, GLint *loc_pos)
+{
+	char fs[4096];
+	snprintf(fs, sizeof fs, "%sprecision highp float;\nuniform %s tex;\n%s",
+	         external ? "#extension GL_OES_EGL_image_external : require\n" : "",
+	         external ? "samplerExternalOES" : "sampler2D", yuv_fs_body);
+	GLuint vs = yuv_shader(GL_VERTEX_SHADER, yuv_vs), f = yuv_shader(GL_FRAGMENT_SHADER, fs);
+	if (!vs || !f) {
+		if (vs)
+			glDeleteShader(vs);
+		if (f)
+			glDeleteShader(f);
+		return 0;
+	}
+	GLuint p = glCreateProgram();
+	glAttachShader(p, vs);
+	glAttachShader(p, f);
+	glLinkProgram(p);
+	glDeleteShader(vs);
+	glDeleteShader(f);
+	GLint ok = 0;
+	glGetProgramiv(p, GL_LINK_STATUS, &ok);
+	if (!ok) {
+		glDeleteProgram(p);
+		return 0;
+	}
+	*loc_size = glGetUniformLocation(p, "size");
+	*loc_tex = glGetUniformLocation(p, "tex");
+	*loc_pos = glGetAttribLocation(p, "pos");
+	return p;
+}
+
+/* frame sizes the layout and the codec take: W/8 whole texels of chroma, planes on 16-row bounds */
+static bool yuv_size_ok(int w, int h)
+{
+	return w > 0 && h > 0 && w % 64 == 0 && h % 16 == 0;
+}
+
+/* whether this frame goes to the encoder as YUV: JPEG (hardware or CPU) on the GLES renderer */
+static bool yuv_wanted(struct server *s, const struct encode_job *j)
+{
+	const char *env = getenv("TACOMP_YUV");
+	if (env && !strcmp(env, "0"))
+		return false;
+	if (yuv.tried && !yuv.ok)
+		return false;
+	if (strcmp(j->mode, "m2m-jpeg") && j->mode[0])
+		return false; /* H.264 keeps RGB (its colour description is the encoder's) */
+	return wlr_renderer_is_gles2(s->renderer) && yuv_size_ok(s->width, s->height);
+}
+
+/* main thread, GL: the buffer's frame as I420 into dst (W*H*3/2 bytes); false: use the RGB read-back */
+static bool yuv_readback(struct server *s, struct wlr_buffer *buffer, unsigned char *dst)
+{
+	struct wlr_egl *egl = wlr_gles2_renderer_get_egl(s->renderer);
+	EGLDisplay dpy = wlr_egl_get_display(egl);
+	EGLContext ctx = wlr_egl_get_context(egl);
+	struct wlr_texture *tex = wlr_texture_from_buffer(s->renderer, buffer);
+	if (!tex)
+		return false;
+	struct wlr_gles2_texture_attribs attribs;
+	wlr_gles2_texture_get_attribs(tex, &attribs);
+	if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
+		wlr_texture_destroy(tex);
+		return false;
+	}
+	const int w = s->width, h = s->height;
+	bool ok = false;
+	if (!yuv.tried) {
+		yuv.tried = true;
+		yuv.prog[0] = yuv_program(false, &yuv.loc_size[0], &yuv.loc_tex[0], &yuv.loc_pos[0]);
+		yuv.prog[1] = yuv_program(true, &yuv.loc_size[1], &yuv.loc_tex[1], &yuv.loc_pos[1]);
+		static const GLfloat quad[] = {-1, -1, 1, -1, -1, 1, 1, 1};
+		glGenBuffers(1, &yuv.vbo);
+		glBindBuffer(GL_ARRAY_BUFFER, yuv.vbo);
+		glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STATIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glGenFramebuffers(1, &yuv.fbo);
+		glGenTextures(1, &yuv.target);
+		yuv.ok = yuv.prog[0] != 0;
+		wlr_log(yuv.ok ? WLR_INFO : WLR_ERROR, "YUV read-back %s", yuv.ok ? "on (JPEG from full-range YUV 4:2:0)" : "unavailable: RGB read-back");
+		if (!yuv.ok)
+			goto out;
+	}
+	const int ext = attribs.target == GL_TEXTURE_EXTERNAL_OES;
+	if (!yuv.prog[ext])
+		goto out;
+	if (yuv.w != w || yuv.h != h) {
+		glBindTexture(GL_TEXTURE_2D, yuv.target);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w / 4, h * 3 / 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glBindFramebuffer(GL_FRAMEBUFFER, yuv.fbo);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, yuv.target, 0);
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+			wlr_log(WLR_ERROR, "YUV read-back: incomplete framebuffer, RGB read-back");
+			yuv.ok = false;
+			goto out;
+		}
+		yuv.w = w;
+		yuv.h = h;
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, yuv.fbo);
+	glViewport(0, 0, w / 4, h * 3 / 2);
+	glDisable(GL_BLEND);
+	glDisable(GL_SCISSOR_TEST);
+	glUseProgram(yuv.prog[ext]);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(attribs.target, attribs.tex);
+	glTexParameteri(attribs.target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(attribs.target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(attribs.target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(attribs.target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glUniform1i(yuv.loc_tex[ext], 0);
+	glUniform2f(yuv.loc_size[ext], (GLfloat)w, (GLfloat)h);
+	glBindBuffer(GL_ARRAY_BUFFER, yuv.vbo);
+	glEnableVertexAttribArray(yuv.loc_pos[ext]);
+	glVertexAttribPointer(yuv.loc_pos[ext], 2, GL_FLOAT, GL_FALSE, 0, NULL);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+	glDisableVertexAttribArray(yuv.loc_pos[ext]);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindTexture(attribs.target, 0);
+	glUseProgram(0);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	glReadPixels(0, 0, w / 4, h * 3 / 2, GL_RGBA, GL_UNSIGNED_BYTE, dst);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	ok = glGetError() == GL_NO_ERROR;
+out:
+	eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+	wlr_texture_destroy(tex);
+	return ok;
+}
+
 /* the rendered buffer of this frame, handed to the encoder thread: as a dmabuf for the hardware
  * encoder, CPU-mapped when the renderer draws into shm, else read back here (GL is this thread's) */
 static void capture_frame(struct server *s, struct wlr_buffer *buffer)
@@ -689,6 +902,18 @@ static void capture_frame(struct server *s, struct wlr_buffer *buffer)
 		j->format = format;
 		enc_submit(s, j);
 		return;
+	}
+	if (yuv_wanted(s, j)) {
+		j->copy = malloc((size_t)s->width * s->height * 3 / 2);
+		if (j->copy && yuv_readback(s, buffer, j->copy)) {
+			j->pixels = j->copy;
+			j->stride = s->width; /* the Y plane's; the chroma planes' rows are half of it */
+			j->format = DRM_FORMAT_YUV420;
+			enc_submit(s, j);
+			return;
+		}
+		free(j->copy);
+		j->copy = NULL;
 	}
 	struct wlr_texture *tex = wlr_texture_from_buffer(s->renderer, buffer);
 	j->copy = tex ? malloc(need) : NULL;
@@ -1672,6 +1897,19 @@ int main(int argc, char **argv)
 	if (s.last_buffer)
 		wlr_buffer_unlock(s.last_buffer);
 	wl_display_destroy_clients(s.display);
+	/* wlroots asserts that nothing listens to an object it destroys: ours go first (the stop used to
+	 * abort in wlr_xdg_shell's display-destroy handler, a core dump on every restart) */
+	wl_list_remove(&s.new_toplevel.link);
+	wl_list_remove(&s.new_popup.link);
+	wl_list_remove(&s.new_text_input.link);
+	wl_list_remove(&s.new_output.link);
+	if (s.output)
+		wl_list_remove(&s.output_frame.link);
+	wlr_scene_node_destroy(&s.scene->tree.node);
+	wlr_keyboard_finish(&s.keyboard);
+	wlr_backend_destroy(s.backend);
+	wlr_allocator_destroy(s.allocator);
+	wlr_renderer_destroy(s.renderer);
 	wl_display_destroy(s.display);
 	tjDestroy(s.tj);
 	return 0;

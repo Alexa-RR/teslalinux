@@ -14,7 +14,7 @@ OUT=${1:-$HERE/build}
 mkdir -p "$OUT"
 PROTO=$(pkg-config --variable=pkgdatadir wayland-protocols)
 wayland-scanner server-header "$PROTO/stable/xdg-shell/xdg-shell.xml" "$OUT/xdg-shell-protocol.h"
-PKGS="wlroots-0.20 wayland-server libwebsockets libturbojpeg xkbcommon pixman-1 libdrm"
+PKGS="wlroots-0.20 wayland-server libwebsockets libturbojpeg xkbcommon pixman-1 libdrm egl glesv2"
 M2M=""
 if [ -f /usr/include/linux/videodev2.h ]; then
 	M2M="-DTACOMP_M2M $HERE/m2m/m2m.c $HERE/m2m/frame.c $HERE/m2m/logging.c"
