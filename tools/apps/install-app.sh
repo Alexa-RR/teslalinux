@@ -52,11 +52,40 @@ fi
 [ -f "$STAGE/base.apk" ] || die "bundle has no base.apk"
 
 # 2. choose the splits this device needs (bundletool naming: split_config.<qualifier>.apk)
+# Density: ours first, then the higher buckets nearest first (scaling down looks better than up),
+# then the lower ones nearest first, as teslalinux-appupdate's density_order(). A bundle that has
+# density splits but not ours (APKPure's Waze 5.26+ variants carry mdpi, xxhdpi or xxxhdpi only)
+# must still get one of them: with none, every drawable that lives only in density folders fails
+# to resolve (Resources$NotFoundException, Waze's RenderThread dies on its route markers).
+density_dpi() {
+  case $1 in ldpi) echo 120 ;; mdpi) echo 160 ;; tvdpi) echo 213 ;; hdpi) echo 240 ;; xhdpi) echo 320 ;;
+    xxhdpi) echo 480 ;; xxxhdpi) echo 640 ;; *) echo "" ;; esac
+}
+density_order() {
+  printf '%s\n' "$1"
+  mine=$(density_dpi "$1"); [ -n "$mine" ] || return 0
+  for q in ldpi mdpi hdpi xhdpi xxhdpi xxxhdpi; do [ "$(density_dpi $q)" -gt "$mine" ] && printf '%s\n' "$q"; done
+  for q in xxxhdpi xxhdpi xhdpi hdpi mdpi ldpi; do [ "$(density_dpi $q)" -lt "$mine" ] && printf '%s\n' "$q"; done
+  return 0
+}
 SET="$STAGE/base.apk"
-for q in "$ABI" "$DENSITY" "$LANG_SPLIT"; do
+for q in "$ABI" "$LANG_SPLIT"; do
   f="$STAGE/split_config.$q.apk"
   if [ -f "$f" ]; then SET="$SET $f"; else log "no split for '$q' in bundle (fine if base.apk carries it)"; fi
 done
+GOT_DENSITY=""
+for q in $(density_order "$DENSITY"); do
+  if [ -f "$STAGE/split_config.$q.apk" ]; then GOT_DENSITY=$q; break; fi
+done
+if [ -n "$GOT_DENSITY" ]; then
+  SET="$SET $STAGE/split_config.$GOT_DENSITY.apk"
+  [ "$GOT_DENSITY" = "$DENSITY" ] || log "no split for '$DENSITY' in bundle: using the nearest one, '$GOT_DENSITY'"
+else
+  for f in "$STAGE"/split_config.*dpi.apk; do
+    [ -f "$f" ] && die "bundle has density splits but none of $(density_order "$DENSITY" | tr '\n' ' ')($(basename "$f"))"
+  done
+  log "no density splits in bundle (base.apk carries the drawables)"
+fi
 BASE_ABIS=$(python3 "$INFO" "$STAGE/base.apk" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["abis"]))')
 case " $SET " in *"split_config.$ABI.apk"*) ;; *)
   case " $BASE_ABIS " in *" $(echo "$ABI" | tr _ -) "*) ;; *) die "no native code for $ABI: neither split_config.$ABI.apk nor lib/ in base.apk" ;; esac ;;
@@ -99,9 +128,16 @@ for f in $SET; do cp "$f" "$NEXT/"; done
 printf '{"package":"%s","versionCode":%s,"versionName":"%s","signer":"%s","abi":"%s","apks":"%s"}\n' \
   "$PKG" "$NEW_VC" "$NEW_VN" "$NEW_SIG" "$ABI" "$(for f in $SET; do basename "$f"; done | tr '\n' ' ' | sed 's/ $//')" > "$NEXT/installed.json"
 sync
-rm -rf "$CUR.old"
-[ -d "$CUR" ] && mv "$CUR" "$CUR.old"
+if [ -d "$CUR" ] && [ "${CUR_VC:-}" = "$NEW_VC" ] && [ -d "$CUR.old" ]; then
+  # the same version again (a repaired split set): the rollback target stays the previous version
+  log "same versionCode as installed: keeping $PKG.old (versionCode $(python3 "$INFO" "$CUR.old/base.apk" | python3 -c 'import json,sys; print(json.load(sys.stdin)["versionCode"])')) for rollback"
+  rm -rf "$CUR.replaced"; mv "$CUR" "$CUR.replaced"
+else
+  rm -rf "$CUR.old"
+  [ -d "$CUR" ] && mv "$CUR" "$CUR.old"
+fi
 mv "$NEXT" "$CUR"
+rm -rf "$CUR.replaced"
 sync
 log "installed into $CUR: $(ls "$CUR" | tr '\n' ' ')"
 
