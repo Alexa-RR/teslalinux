@@ -3,7 +3,7 @@
 the Tesla browser uses it (the car's hostname mapped to the VM's forwarded port, so SNI and Host stay
 car.alexahub.dev), for screenshots and taps without a person at the keyboard.
 
-  car-browser.py [--port 8443] [--host car.alexahub.dev] [--size 1280x900] [--chrome PATH] ACTION...
+  car-browser.py [--port 8443] [--host car.alexahub.dev] [--size 1280x900] [--dpr 1] [--chrome PATH] ACTION...
 
 Actions, run in order:
   goto:URL            open URL (default first action: https://HOST/)
@@ -85,7 +85,7 @@ async def run(a):
             cdp = Cdp(ws)
             pump = asyncio.create_task(cdp.pump())
             await cdp.call("Page.enable")
-            await cdp.call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
+            await cdp.call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=a.dpr, mobile=False)
             dw, dh = (int(v) for v in a.display.split("x"))
             actions = a.actions or []
             if not actions or not actions[0].startswith("goto:"):
@@ -161,7 +161,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8443, help="the Mac port forwarded to the guest's 443")
     ap.add_argument("--host", default="car.alexahub.dev")
-    ap.add_argument("--size", default="1280x900", help="browser viewport")
+    ap.add_argument("--size", default="1280x900", help="browser viewport (CSS px)")
+    ap.add_argument("--dpr", type=float, default=1.0, help="devicePixelRatio (a Model 3: --size 773x601 --dpr 1.53, docs/CAR-SCREENS.md)")
     ap.add_argument("--display", default="1088x832", help="the app display size tap: coordinates are in")
     ap.add_argument("--chrome", default=CHROME)
     ap.add_argument("actions", nargs="*")

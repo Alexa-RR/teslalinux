@@ -132,6 +132,7 @@
 
     #display-root {
       position: relative;
+      flex-shrink: 0; /* teslalinux: Native's pixel-for-pixel size may pass the window by a few pixels */
       background: #000;
       box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 18px 60px rgba(0, 0, 0, 0.8);
       overflow: hidden;

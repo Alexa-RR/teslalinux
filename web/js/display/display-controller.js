@@ -205,7 +205,9 @@
       this.resize.timerId = null;
 
       const isH264 = cooldown.renderer !== 0;
-      const density = this._densityForResolutionPreset(cooldown.resolutionPreset, isH264);
+      const density = cooldown.adjustedSize && cooldown.adjustedSize.density > 0
+        ? cooldown.adjustedSize.density // teslalinux: Native's density goes with its size
+        : this._densityForResolutionPreset(cooldown.resolutionPreset, isH264);
 
       const payload = {
         width: cooldown.adjustedSize.width,
@@ -293,6 +295,7 @@
       this.rendererManager.applyDisplaySize(
         this.display.adjustedSize.width,
         this.display.adjustedSize.height,
+        this._nativeCssSize(this.display.adjustedSize, remoteDisplayState),
       );
 
       if (!this.isPaused) {
@@ -347,6 +350,7 @@
             this.rendererManager.applyDisplaySize(
               this.display.adjustedSize.width,
               this.display.adjustedSize.height,
+              this._nativeCssSize(this.display.adjustedSize, this.remoteDisplayState),
             );
           }
 
@@ -467,6 +471,21 @@
       };
     }
 
+    // teslalinux: with Native, a stream the compositor runs at the screen's own size is shown pixel
+    // for pixel (its CSS size); anything else (another preset, a size not applied yet, a window that
+    // changed since) is fitted into the window as upstream does (null)
+    _nativeCssSize(size, remoteDisplayState) {
+      if (!size || !remoteDisplayState
+        || utils.toInt(remoteDisplayState.resolutionPreset, 0) !== constants.NATIVE_RESOLUTION_PRESET) {
+        return null;
+      }
+      const native = utils.nativeDisplaySize(null);
+      if (native.cssWidth === null || native.width !== size.width || native.height !== size.height) {
+        return null;
+      }
+      return { width: native.cssWidth, height: native.cssHeight };
+    }
+
     _calculateOptimalSize(viewSize, options) {
       const isHeadless = Boolean(options.isHeadless);
       if (!isHeadless) {
@@ -475,6 +494,12 @@
 
       const resolutionPreset = utils.toInt(options.resolutionPreset, 0);
       const isH264 = Boolean(options.isH264);
+
+      // teslalinux: Native follows the screen (utils.nativeDisplaySize), whatever the view size
+      if (resolutionPreset === constants.NATIVE_RESOLUTION_PRESET) {
+        const native = utils.nativeDisplaySize(null);
+        return { width: native.width, height: native.height, density: native.density };
+      }
 
       let adjustedResolutionPreset;
       if (isH264) {

@@ -14,6 +14,14 @@ Changes from upstream:
   field as the words are heard and searches when the driver stops speaking; it stays on while typing
   is off on the move. Settings, Waze interface: "Voice language" (kept by this browser) and "Test the
   microphone"; in a browser without speech recognition a tile says so and the buttons are left out.
+* Display, the "Native (screen pixels)" resolution preset (value 5; `js/core/shared.js`
+  `nativeDisplaySize`, `js/display/display-controller.js`, `js/display/display-renderer-manager.js`,
+  `#display-root` `flex-shrink: 0` in `css/app.css`): the stream is the window's size times
+  `devicePixelRatio`, rounded up to 16, and is shown pixel for pixel (the rounding pixels are clipped);
+  the app's density scales with it (1 dp = 1.16 CSS px, what 832p gave on a Model 3), so sizes stay and
+  sharpness improves. Over 1920x1088 it is scaled to fit. For every preset, the H.264 renderers' canvas
+  backing store is now in device pixels (`h264WebCodecs.js`, `h264Brodway.js`): it was in CSS px, so each
+  frame was resampled twice. docs/CAR-SCREENS.md has the numbers.
 * `probe.html` (new, standalone, linked from nowhere): opened in a car's browser, it shows what the
   browser reports about its screen (viewport, `devicePixelRatio`, screen size, pointer, WebCodecs, user
   agent, a device-pixel checkerboard) and sends it as `GET /probe-report?...`, which lands in nginx's

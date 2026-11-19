@@ -20,26 +20,42 @@ function resolveInitialDisplayHeight() {
 }
 
 function resolveViewportSize() {
+  // teslalinux: the box's fractional size (clientWidth rounds: 773.856 CSS px became 774)
+  var box = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : null;
   return {
-    width: toSafeNumber(canvas.clientWidth || window.innerWidth, window.innerWidth || 1),
-    height: toSafeNumber(canvas.clientHeight || window.innerHeight, window.innerHeight || 1),
+    width: box && box.width > 0 ? box.width : toSafeNumber(canvas.clientWidth || window.innerWidth, window.innerWidth || 1),
+    height: box && box.height > 0 ? box.height : toSafeNumber(canvas.clientHeight || window.innerHeight, window.innerHeight || 1),
   };
 }
 
+function toCssSize(value, fallback) {
+  var parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : Math.max(1, Number(fallback) || 1);
+}
+
+// teslalinux: the canvas is laid out in CSS px (cssWidth/cssHeight, fractional for the Native preset)
+// but its backing store (windowWidth/windowHeight, what the worker draws into) is in device pixels:
+// a CSS-px store was enlarged by devicePixelRatio again by the browser (1.53 in a Model 3), so every
+// frame was scaled twice
 function buildRuntimeConfig(overrides) {
   var viewport = resolveViewportSize();
   var config = overrides || {};
+  var dpr = window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+  var cssWidth = toCssSize(config.windowWidth, viewport.width);
+  var cssHeight = toCssSize(config.windowHeight, viewport.height);
   return {
     displayWidth: toSafeNumber(config.displayWidth, resolveInitialDisplayWidth()),
     displayHeight: toSafeNumber(config.displayHeight, resolveInitialDisplayHeight()),
-    windowWidth: toSafeNumber(config.windowWidth, viewport.width),
-    windowHeight: toSafeNumber(config.windowHeight, viewport.height),
+    cssWidth: cssWidth,
+    cssHeight: cssHeight,
+    windowWidth: toSafeNumber(cssWidth * dpr, 1),
+    windowHeight: toSafeNumber(cssHeight * dpr, 1),
   };
 }
 
 function applyCanvasViewport(runtimeConfig) {
-  canvas.style.width = String(runtimeConfig.windowWidth) + "px";
-  canvas.style.height = String(runtimeConfig.windowHeight) + "px";
+  canvas.style.width = String(runtimeConfig.cssWidth) + "px";
+  canvas.style.height = String(runtimeConfig.cssHeight) + "px";
 }
 
 function readTextFromPath(path) {

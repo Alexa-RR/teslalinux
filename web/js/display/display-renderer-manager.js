@@ -32,15 +32,23 @@
       };
     }
 
-    applyDisplaySize(width, height) {
+    // cssSize (teslalinux, the Native preset): the display's exact CSS size, so that each stream pixel
+    // is one screen pixel; the container centres it and clips the rounding pixels beyond the window
+    applyDisplaySize(width, height, cssSize) {
       const safeWidth = Math.max(1, Math.round(width));
       const safeHeight = Math.max(1, Math.round(height));
 
-      const viewport = utils.getViewportSize();
-      const scale = Math.min(viewport.width / safeWidth, viewport.height / safeHeight);
-
-      const cssWidth = Math.max(1, Math.floor(safeWidth * scale));
-      const cssHeight = Math.max(1, Math.floor(safeHeight * scale));
+      let cssWidth;
+      let cssHeight;
+      if (cssSize && cssSize.width > 0 && cssSize.height > 0) {
+        cssWidth = cssSize.width;
+        cssHeight = cssSize.height;
+      } else {
+        const viewport = utils.getViewportSize();
+        const scale = Math.min(viewport.width / safeWidth, viewport.height / safeHeight);
+        cssWidth = Math.max(1, Math.floor(safeWidth * scale));
+        cssHeight = Math.max(1, Math.floor(safeHeight * scale));
+      }
 
       this.displayRoot.style.width = String(cssWidth) + "px";
       this.displayRoot.style.height = String(cssHeight) + "px";
@@ -150,8 +158,10 @@
         return;
       }
 
-      const width = Math.max(1, Math.round(this.displayRoot.clientWidth || global.innerWidth || 1));
-      const height = Math.max(1, Math.round(this.displayRoot.clientHeight || global.innerHeight || 1));
+      // teslalinux: the root's fractional size (Native's pixel-for-pixel CSS size; clientWidth rounds)
+      const box = this.displayRoot.getBoundingClientRect();
+      const width = box.width > 0 ? box.width : Math.max(1, Math.round(this.displayRoot.clientWidth || global.innerWidth || 1));
+      const height = box.height > 0 ? box.height : Math.max(1, Math.round(this.displayRoot.clientHeight || global.innerHeight || 1));
 
       global.updateDisplayRendererConfig({
         displayWidth: this.lastDisplaySize.displayWidth,

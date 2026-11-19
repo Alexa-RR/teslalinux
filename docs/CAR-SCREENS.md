@@ -52,3 +52,15 @@ Raw report (nginx access log, the VM behind the Mac's hotspot, so the client add
   device-px size wants a density 1.53 times the one used for the CSS-px size.
 - 66 CSS px of browser chrome sit above the page in the normal window; fullscreen (the upstream
   youtu.be trick) would give the whole 1254 x 784 CSS px (1920 x 1200 device px).
+
+### What was done about it
+
+- The H.264 renderers' canvas backing store is in device pixels for every preset (it was in CSS px:
+  the frame was shrunk into a 773x564 canvas, then enlarged 1.53 times by the browser).
+- Settings > Display > Resolution > **Native (screen pixels)**: on this car the stream is 1184 x 928 at
+  density 284, shown pixel for pixel (773.86 x 606.54 CSS px; 0.9 and 5.5 CSS px fall outside the
+  window and are clipped). Checked on the car on Nov 19, 2026: sharper; the map's edges still show
+  stair steps (Waze's car-mode map asks for no multisampling). Not the default yet: about 2.2 times
+  the pixels of 832p, so the Pi's frame rate and its encoder at 60 Hz must be measured first.
+- `tools/debian/car-browser.py --size 773x601 --dpr 1.53` emulates this browser in a headless Chrome.
+  Every test browser posts its own display size to the device: restore the car's afterwards.
