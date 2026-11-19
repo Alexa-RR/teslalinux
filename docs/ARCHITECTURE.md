@@ -125,13 +125,22 @@ the output buffer and hands it to an encoder thread:
 
 ```
 ATL (GTK 4, GSK GL on V3D) -> wl_surface.commit
-  -> tacomp: scene -> output buffer (GLES2 on the Pi)
-  -> V4L2 M2M /dev/video11 (H.264) or /dev/video31 (JPEG), dmabuf in; CPU JPEG / x264 where missing
+  -> tacomp: scene -> output buffer (GLES2 on the Pi, into a CMA buffer)
+  -> (event loop) the buffer's GPU fence signals
+  -> V4L2 M2M /dev/video11 (H.264): the same dmabuf by DMA; JPEG (/dev/video31): a GPU YUV read-back;
+     CPU JPEG / x264 where missing
   -> one binary WebSocket message per frame on :9091 (/sockets/display)
 ```
 
-* The V4L2 M2M encoder code is upstream's `encode/m2m.c` (from PiKVM ustreamer), vendored as-is:
-  DMABUF input, forced IDR on client connect, repeated SPS/PPS.
+* The V4L2 M2M encoder code is upstream's `encode/m2m.c` (from PiKVM ustreamer), vendored with our
+  changes marked: DMABUF or MMAP input, forced IDR on client connect, repeated SPS/PPS.
+* The Pi 4 has one V3D GPU queue for the app and the compositor. tacomp's per-frame GPU work is one
+  composite into a contiguous (CMA, dma-heap) buffer that the codec reads as it is. There is no
+  read-back, and no thread waits for the GPU: the frame goes to the encoder when its fence
+  signals. Before (a `glReadPixels` per frame on the main thread), a composite waiting behind the
+  app's queued work stalled the whole compositor. With Waze's map uncapped that showed 11 of the
+  37 frames/s Waze drew; now every frame it commits is shown. Details and numbers in
+  `services/display/README.md` ("CMA output buffers").
 * Frames without damage are not encoded; newest-frame-wins when the encoder is busy.
 * Size, encoder and quality come from the frontend's display state (`POST /api/displayState` →
   `teslalinux-apply-display` → `/etc/teslalinux/display.env`). tacomp applies a new size, encoder or

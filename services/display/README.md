@@ -24,14 +24,47 @@ keyboard with a keymap) and `zwp_text_input_manager_v3` (the device keyboard, be
    (`WLR_RENDERER=gles2` on the Pi, pixman in the VMs), commits, sends the clients their frame
    callbacks, and skips frames without damage.
 3. The committed buffer goes to the encoder thread, so neither the clients nor the compositor loop
-   wait for an encoder. On the Pi the output buffer's dmabuf is a `V4L2_MEMORY_DMABUF` input of
-   `m2m/m2m.c` on `/dev/video11` (H.264) or `/dev/video31` (JPEG); otherwise the frame is read back
-   (CPU map or GLES read-back) and compressed with libjpeg-turbo or x264. Newest-frame-wins: if the
-   encoder is busy, the pending frame is replaced.
+   wait for an encoder or the GPU. On the Pi (H.264) the output buffers are CMA (below) and the
+   committed buffer's dmabuf is a `V4L2_MEMORY_DMABUF` input of `m2m/m2m.c` on `/dev/video11`,
+   handed over once the GPU has drawn it; otherwise the frame is read back (CPU map, GLES read-back,
+   or for JPEG the GPU's YUV conversion) and compressed by the hardware encoder from its own
+   buffers (`/dev/video11` H.264, `/dev/video31` JPEG), libjpeg-turbo or x264. Newest-frame-wins: if
+   the encoder is busy, the pending frame is replaced.
 4. Encoded frames are broadcast: one binary WebSocket message per frame on `TACOMP_DISPLAY_PORT`
    (9091).
 5. On client connect: resend the last encoded JPEG (MJPEG) or force an IDR (H.264), exactly like
    upstream; on a static screen the held last buffer is encoded again as that IDR.
+
+## CMA output buffers (the Pi)
+
+The Pi 4's codec (bcm2835-codec, vb2-dma-contig) reads only physically contiguous, linear memory.
+V3D's own render buffers are neither: queued as a dmabuf they never produced a picture. tacomp
+therefore gives the output swapchain buffers of its own (`cma_alloc` in `src/main.c`): linear 32-bit
+buffers from the dma-heap `/dev/dma_heap/linux,cma` (the `video` group may open it), stride the
+width's 4 bytes on a 64-byte bound, height padded to 16 rows. V3D renders into them (its MMU maps any
+pages, and it draws linear targets) and the codec imports the same dmabuf. `m2m.c` keeps one DMABUF
+slot per buffer, so each is imported once. tacomp checks at start that the renderer can draw into
+such a buffer and otherwise keeps wlroots' allocator. It also turns off wlroots' direct scan-out
+then: a client buffer handed over as it is would be V3D memory again. `TACOMP_CMA=0` turns all of
+this off; `TACOMP_DMA_HEAP` names another heap. If the codec refuses the buffers, tacomp logs it and
+reads frames back from then on.
+
+Nothing waits for the GPU on the main thread. A composite of a client's frame queues behind the
+client's own GPU work (implicit sync on its buffer), so each frame waits in the event loop until its
+dmabuf polls readable (its write fence has signalled), then goes to the encoder; once one frame is
+ready, older ones still waiting are dropped.
+
+Why (measured on a Pi 4 on Nov 20 2026, Waze's car map, 832x608 H.264, `tools/debian/gpu-trace.sh`):
+before, every frame was composited, then read back with `glReadPixels` on the main thread
+(a second GPU job per frame and a CPU copy into the codec's buffer). With Waze's map uncapped
+(`tools/apps/waze-map-pacing.py`), Waze's GPU jobs waited ~56 ms in its own queue. tacomp's composite
+depended on the newest of them, and the read-back blocked tacomp's main thread for all of it: asleep
+928 ms of every second, 7 frames a second built, 11.2 shown while Waze drew 37. With CMA buffers:
+the main thread takes ~0.8 ms a frame, every frame Waze commits is encoded (~27-32 a second),
+and tacomp's GPU share went from 6-7% to 3-4% (no read-back job).
+
+The log line every 300 frames built shows the main thread's time per frame, how long frames waited
+for the GPU, the encoder's time per frame and the time from capture to published frame.
 
 ## Touch path
 
@@ -70,13 +103,14 @@ SIGHUP re-reads `/etc/teslalinux/display.env` and applies a new size, encoder or
 
 ## Source layout
 
-* `m2m/` — vendored verbatim from upstream `android-external-tesla-android-virtual-display/encode/`
-  (PiKVM ustreamer derived, GPL-3.0; see `LICENSE.upstream`). V4L2 M2M encoder, DMABUF input.
+* `m2m/` — vendored from upstream `android-external-tesla-android-virtual-display/encode/`
+  (PiKVM ustreamer derived, GPL-3.0; see `LICENSE.upstream`), our changes marked `teslalinux`
+  (bounded waits, colour range, a DMABUF slot per buffer). V4L2 M2M encoder, MMAP or DMABUF input.
 * `src/main.c` — tacomp (wlroots 0.20 headless output, scene graph, xdg-shell fullscreen toplevel,
   libwebsockets display, touch and keyboard servers, the encoders). First light on the VM:
   Waze under ATL on the `wayland-atl` socket, 23 frames/s at 1280x720 with the pixman renderer, taps
   through the touch socket drive the app. `build.sh` builds it; `test/ws-client.py` exercises it.
-  Still to verify on the Pi: the V4L2 M2M path (dmabuf in, H.264 or JPEG out).
+  On a Pi 4: H.264 from CMA buffers by DMABUF, JPEG from the GPU's YUV read-back.
 
 ## Device keyboard
 

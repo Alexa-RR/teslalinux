@@ -29,6 +29,9 @@ typedef struct {
 	size_t	allocated;
 } us_m2m_buffer_s;
 
+// teslalinux: how many dmabufs the DMABUF input keeps imported (a compositor's swapchain)
+#define US_M2M_DMA_SLOTS 6
+
 typedef struct {
 	int				fd;
 	us_m2m_buffer_s	*input_bufs;
@@ -42,6 +45,12 @@ typedef struct {
 	unsigned		stride;
 	bool			dma;
 	bool			ready;
+
+	// teslalinux: DMABUF input slots, one per distinct dmabuf (its st_dev/st_ino), so the driver
+	// keeps each buffer's import (vb2 re-imports a dmabuf only when a slot gets a different one)
+	unsigned long long	dma_ids[US_M2M_DMA_SLOTS];
+	unsigned		n_dma_ids;
+	unsigned		dma_next;
 
 	volatile int		force_key_pending;
 

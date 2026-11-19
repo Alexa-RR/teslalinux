@@ -9,9 +9,12 @@
  * events on the seat. The protocols are the ones the unmodified frontend speaks
  * (docs/UPSTREAM-NOTES.md).
  *
- * Encoding: v1 reads the rendered buffer back on the CPU (pixman renderer in the test VM, GPU
- * readback with gles2) and compresses with libjpeg-turbo. The V4L2 M2M path (m2m/, dmabuf in,
- * H.264 or JPEG out on the Pi) plugs into capture_frame(). For JPEG with gles2, the GPU converts the
+ * Encoding: on the Pi (gles2 renderer, V4L2 M2M H.264) the output is drawn into physically
+ * contiguous CMA buffers (cma_alloc) whose dmabuf the hardware encoder reads as it is: no read-back,
+ * no copy, and nothing waits for the GPU on the main thread; the event loop hands a frame to the
+ * encoder once the GPU has finished it (gpu_wait_submit). Otherwise the rendered buffer is read
+ * back (CPU map with pixman in the test VM, GPU read-back with gles2) and compressed by the
+ * hardware encoder from its own buffers, libjpeg-turbo or x264. For JPEG with gles2, the GPU converts the
  * frame to full-range YUV 4:2:0 before the read-back (yuv_readback): a JPEG is YCbCr, the read-back
  * is 1.5 bytes a pixel instead of 4, and the colours are JPEG's own (the Pi's codec converts RGB to
  * limited range, which browsers decode as full range: white came out 232 grey). TACOMP_YUV=0 turns it off.
@@ -24,8 +27,8 @@
  * neither the clients' next frame nor the next tick waits for the encoder.
  *
  * Encoding runs on a thread of its own (encoder_main): the frame hands it the committed buffer
- * (locked, and CPU-mapped or as a dmabuf; a GLES read-back is done before, on the main thread, which
- * owns the GL context) and the newest frame wins when the encoder is still busy. The hardware
+ * (locked, as a CMA dmabuf once the GPU has drawn it, else CPU-mapped or read back before, on the
+ * main thread, which owns the GL context) and the newest frame wins when the encoder is still busy. The hardware
  * encoder's compress call waits for its output, and x264/libjpeg-turbo take milliseconds: on the
  * main loop that held up compositing, input and the clients' frame callbacks. The buffer comes back
  * to the main thread (eventfd) to be released; the encoders are opened, used and closed only on the
@@ -39,6 +42,7 @@
 
  * TACOMP_BIND (address the two WebSocket servers listen on; the car services set 127.0.0.1 so only
  * nginx reaches them; unset: all interfaces), WAYLAND_DISPLAY (socket name, default tesla-0),
+ * TACOMP_CMA=0 (no CMA output buffers), TACOMP_DMA_HEAP (default /dev/dma_heap/linux,cma),
  * WLR_RENDERER, XDG_RUNTIME_DIR.
  *
  * H.264: a client that connects mid-GOP cannot decode until the next IDR, so every new display
@@ -77,6 +81,7 @@
 #include <wlr/render/dmabuf.h>
 #include <wlr/render/egl.h>
 #include <wlr/render/gles2.h>
+#include <wlr/render/pass.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_buffer.h>
@@ -119,6 +124,7 @@ struct server {
 	struct wlr_backend *backend;
 	struct wlr_renderer *renderer;
 	struct wlr_allocator *allocator;
+	struct wlr_allocator *cma_allocator; /* the output's buffers when they can be CMA (cma_alloc), else NULL */
 	struct wlr_scene *scene;
 	struct wlr_output_layout *output_layout;
 	struct wlr_scene_output_layout *scene_layout;
@@ -165,6 +171,7 @@ struct server {
 	struct encode_job *enc_pending, *enc_done;
 	int enc_efd;
 	bool enc_reset;
+	struct wl_list gpu_waiting; /* struct encode_job.link: CMA frames the GPU is still drawing */
 	/* the device keyboard: text-input-v3 from the app <-> the page's /sockets/keyboard (TACOMP_IME_PORT).
 	 * The page is told when a text field wants input; what it types comes back as commands, queued by
 	 * the lws thread and applied here on the main thread (wlroots is not thread-safe). */
@@ -213,6 +220,192 @@ static uint32_t now_msec(void)
 	return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
+static uint64_t now_usec(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+
+/* per-frame timing, printed with the frame counters every 300 frames built, in microseconds: the
+ * main thread's time per built frame (scene, commit, capture), how long a CMA frame waited for the
+ * GPU to finish it, the encoder thread's time per frame and capture to published; under enc_lock */
+struct frame_stats {
+	uint64_t main_us, main_max_us, main_n;
+	uint64_t gpu_us, gpu_max_us, gpu_n, enc_us, enc_max_us, latency_us, enc_n;
+};
+static struct frame_stats stats;
+
+/* ---------------------------------------------------------------- CMA output buffers (cma_alloc)
+ *
+ * The output's swapchain buffers, allocated physically contiguous and linear from a dma-heap
+ * (TACOMP_DMA_HEAP, default /dev/dma_heap/linux,cma; the Pi's CMA pool), so that the Pi 4's
+ * hardware encoder can read a rendered frame by DMA (it takes no other memory, see the V4L2 M2M
+ * path) and V3D can still render into it (it maps any pages through its MMU, and draws linear
+ * targets). Used with the GLES renderer when the renderer can draw into such a buffer (checked once
+ * at start, tacomp otherwise keeps wlroots' own allocator); TACOMP_CMA=0 turns it off. The stride
+ * is the width's 4 bytes a pixel on a 64-byte bound, the height is padded to 16 rows (the codec's
+ * macroblock rows), both what V3D and the codec expect of a linear 32-bit buffer of that size. */
+#include <linux/dma-heap.h>
+#include <sys/ioctl.h>
+#include <wlr/interfaces/wlr_buffer.h>
+
+struct cma_buffer {
+	struct wlr_buffer base;
+	struct wlr_dmabuf_attributes dmabuf;
+	size_t size;
+};
+
+struct cma_allocator {
+	struct wlr_allocator base;
+	int heap_fd;
+};
+
+static void cma_buffer_destroy(struct wlr_buffer *wlr_buffer)
+{
+	struct cma_buffer *b = wl_container_of(wlr_buffer, b, base);
+	wlr_buffer_finish(wlr_buffer);
+	wlr_dmabuf_attributes_finish(&b->dmabuf);
+	free(b);
+}
+
+static bool cma_buffer_get_dmabuf(struct wlr_buffer *wlr_buffer, struct wlr_dmabuf_attributes *attribs)
+{
+	struct cma_buffer *b = wl_container_of(wlr_buffer, b, base);
+	*attribs = b->dmabuf; /* the fd stays the buffer's */
+	return true;
+}
+
+static const struct wlr_buffer_impl cma_buffer_impl = {
+	.destroy = cma_buffer_destroy,
+	.get_dmabuf = cma_buffer_get_dmabuf,
+};
+
+/* the CMA buffer behind a wlroots buffer, NULL for any other */
+static const struct cma_buffer *cma_buffer_from(struct wlr_buffer *wlr_buffer)
+{
+	if (!wlr_buffer || wlr_buffer->impl != &cma_buffer_impl)
+		return NULL;
+	const struct cma_buffer *b = wl_container_of(wlr_buffer, b, base);
+	return b;
+}
+
+static bool cma_format_has(const struct wlr_drm_format *format, uint64_t modifier)
+{
+	for (size_t i = 0; i < format->len; i++)
+		if (format->modifiers[i] == modifier)
+			return true;
+	return false;
+}
+
+static struct wlr_buffer *cma_create_buffer(struct wlr_allocator *wlr_alloc, int width, int height, const struct wlr_drm_format *format)
+{
+	struct cma_allocator *alloc = wl_container_of(wlr_alloc, alloc, base);
+	switch (format->format) {
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ABGR8888:
+		break;
+	default:
+		wlr_log(WLR_ERROR, "CMA buffers: format 0x%08x is not a 32-bit RGB format", format->format);
+		return NULL;
+	}
+	/* linear is the only layout the codec reads; a format without modifiers (implicit) means the
+	 * importer's default, which for a dma-heap buffer without metadata is linear too */
+	uint64_t modifier = DRM_FORMAT_MOD_LINEAR;
+	if (!cma_format_has(format, DRM_FORMAT_MOD_LINEAR)) {
+		if (!cma_format_has(format, DRM_FORMAT_MOD_INVALID)) {
+			wlr_log(WLR_ERROR, "CMA buffers: the renderer takes no linear buffers of this format");
+			return NULL;
+		}
+		modifier = DRM_FORMAT_MOD_INVALID;
+	}
+	const uint32_t stride = ((uint32_t)width * 4 + 63) & ~63u;
+	const size_t size = (size_t)stride * (((uint32_t)height + 15) & ~15u);
+	struct dma_heap_allocation_data req = {
+		.len = size,
+		.fd_flags = O_RDWR | O_CLOEXEC,
+	};
+	if (ioctl(alloc->heap_fd, DMA_HEAP_IOCTL_ALLOC, &req) < 0) {
+		wlr_log(WLR_ERROR, "CMA buffers: %zu bytes from the dma-heap: %s", size, strerror(errno));
+		return NULL;
+	}
+	struct cma_buffer *b = calloc(1, sizeof *b);
+	if (!b) {
+		close((int)req.fd);
+		return NULL;
+	}
+	wlr_buffer_init(&b->base, &cma_buffer_impl, width, height);
+	b->size = size;
+	b->dmabuf.width = width;
+	b->dmabuf.height = height;
+	b->dmabuf.format = format->format;
+	b->dmabuf.modifier = modifier;
+	b->dmabuf.n_planes = 1;
+	b->dmabuf.offset[0] = 0;
+	b->dmabuf.stride[0] = stride;
+	b->dmabuf.fd[0] = (int)req.fd;
+	return &b->base;
+}
+
+static void cma_allocator_destroy(struct wlr_allocator *wlr_alloc)
+{
+	struct cma_allocator *alloc = wl_container_of(wlr_alloc, alloc, base);
+	close(alloc->heap_fd);
+	free(alloc);
+}
+
+static const struct wlr_allocator_interface cma_allocator_impl = {
+	.create_buffer = cma_create_buffer,
+	.destroy = cma_allocator_destroy,
+};
+
+/* a CMA allocator when the heap exists and the renderer draws into its buffers (one test frame of
+ * the output's size); NULL: keep wlroots' allocator */
+static struct wlr_allocator *cma_allocator_create(struct wlr_renderer *renderer, int width, int height)
+{
+	const char *env = getenv("TACOMP_CMA");
+	if (env && !strcmp(env, "0"))
+		return NULL;
+	if (!wlr_renderer_is_gles2(renderer))
+		return NULL; /* pixman draws into CPU memory; a dma-heap buffer would need CPU cache syncs */
+	const char *path = getenv("TACOMP_DMA_HEAP") ? getenv("TACOMP_DMA_HEAP") : "/dev/dma_heap/linux,cma";
+	int fd = open(path, O_RDWR | O_CLOEXEC);
+	if (fd < 0) {
+		wlr_log(WLR_INFO, "CMA buffers: %s: %s; the output uses the renderer's buffers", path, strerror(errno));
+		return NULL;
+	}
+	struct cma_allocator *alloc = calloc(1, sizeof *alloc);
+	if (!alloc) {
+		close(fd);
+		return NULL;
+	}
+	alloc->heap_fd = fd;
+	wlr_allocator_init(&alloc->base, &cma_allocator_impl, WLR_BUFFER_CAP_DMABUF);
+	uint64_t mods[] = { DRM_FORMAT_MOD_LINEAR };
+	struct wlr_drm_format format = { .format = DRM_FORMAT_XRGB8888, .len = 1, .capacity = 1, .modifiers = mods };
+	struct wlr_buffer *buffer = wlr_allocator_create_buffer(&alloc->base, width, height, &format);
+	struct wlr_render_pass *pass = buffer ? wlr_renderer_begin_buffer_pass(renderer, buffer, NULL) : NULL;
+	bool ok = false;
+	if (pass) {
+		wlr_render_pass_add_rect(pass, &(struct wlr_render_rect_options){
+			.box = { .width = width, .height = height },
+			.color = { .r = 0, .g = 0, .b = 0, .a = 1 },
+		});
+		ok = wlr_render_pass_submit(pass);
+	}
+	if (buffer)
+		wlr_buffer_drop(buffer);
+	if (!ok) {
+		wlr_log(WLR_ERROR, "CMA buffers: the renderer cannot draw into them; the output uses the renderer's buffers");
+		wlr_allocator_destroy(&alloc->base);
+		return NULL;
+	}
+	wlr_log(WLR_INFO, "CMA buffers from %s: the encoder reads the output's frames as they are drawn", path);
+	return &alloc->base;
+}
+
 /* ---------------------------------------------------------------- frames */
 
 /* the requested stream is H.264 (renderer 1 or 2) */
@@ -240,12 +433,22 @@ struct encode_job {
 	struct encode_job *next;
 	const unsigned char *pixels;  /* CPU pixels (`copy`) */
 	unsigned char *copy;          /* the frame's pixels, copied or read back by the main thread */
+	/* or the rendered buffer itself (a CMA buffer, cma_alloc): locked until the job is freed, its
+	 * dmabuf goes to the hardware encoder once the GPU has finished drawing it */
+	struct wlr_buffer *buffer;
+	int dma_fd;                   /* the buffer's dmabuf (owned by the buffer), -1: none */
+	size_t dma_size;
+	/* main thread: waiting for the GPU to finish the frame (the dmabuf polls readable), in
+	 * server.gpu_waiting in capture order; then it goes to the encoder */
+	struct wl_event_source *ready_source;
+	struct wl_list link;
 	int stride;
 	uint32_t format;
 	int width, height, fps, quality;
 	char mode[16];                /* TACOMP_ENCODER when the frame was captured ("": CPU JPEG) */
 	bool force_key;               /* H.264: this frame is an IDR */
 	bool reset;                   /* close the encoders first (reconfiguration) */
+	uint64_t t_captured;          /* now_usec() when the main thread handed it over */
 };
 
 static bool job_h264(const struct encode_job *j)
@@ -468,19 +671,23 @@ static void encode_and_publish(struct server *s, const struct encode_job *j)
 	tjFree(jpeg);
 }
 
-/* ---- the V4L2 M2M path (the Pi): the frame's pixels into the hardware encoder's own buffers.
- * Not the output buffer's dmabuf: the Pi 4's codec (bcm2835-codec, vb2-dma-contig) needs physically
- * contiguous, linear memory, and V3D render buffers are neither; the kernel took such a buffer and the
- * codec never produced a picture (tacomp's encoder thread then waited forever, no frame published).
- * The pixels come from the GPU read-back the CPU path uses; the encoder copies them into its MMAP
- * input buffer, which the driver allocates contiguous. */
+/* ---- the V4L2 M2M path (the Pi). The Pi 4's codec (bcm2835-codec, vb2-dma-contig) reads only
+ * physically contiguous, linear memory. V3D's own render buffers are neither: the kernel took such a
+ * dmabuf and the codec never produced a picture. So the output is drawn into contiguous buffers
+ * (cma_alloc, CMA from a dma-heap) whose dmabuf the codec imports as it is: no read-back, no copy,
+ * and the main thread never waits for the GPU (the encoder thread waits for the frame's fence).
+ * Without them the frame is read back by the GPU (the CPU path's read-back) and the encoder copies
+ * the pixels into its own MMAP input buffer. */
 #ifdef TACOMP_M2M
 #include <linux/videodev2.h>
+#include <poll.h>
 #include "../m2m/m2m.h"
 
 static us_m2m_encoder_s *m2m_enc;
 static us_frame_s *m2m_dst;
-static bool m2m_failed;
+static volatile bool m2m_failed; /* read by the main thread too (capture_frame) */
+/* the codec refused a CMA buffer: frames are read back from then on (set by the encoder thread) */
+static volatile bool m2m_dma_failed;
 
 static unsigned v4l2_format_for_drm(uint32_t drm_format)
 {
@@ -528,14 +735,33 @@ static bool encode_m2m(struct server *s, const struct encode_job *j)
 	unsigned fmt = v4l2_format_for_drm(j->format);
 	if (!fmt)
 		return false;
-	/* the job's pixels, borrowed for this call (the encoder copies them into its input buffer) */
 	us_frame_s src = {0};
-	src.data = (uint8_t *)j->pixels; /* only read (the MMAP path copies from it) */
-	src.used = (size_t)j->stride * j->height;
-	if (fmt == V4L2_PIX_FMT_YUV420)
-		src.used = src.used * 3 / 2; /* the U and V planes after the Y plane */
-	src.allocated = src.used;
-	src.dma_fd = -1;
+	if (j->dma_fd >= 0) {
+		/* the rendered buffer itself: the codec reads it by DMA and does not wait for the GPU (V4L2
+		 * takes no implicit fences). The main thread hands it over once the GPU has finished it
+		 * (gpu_wait_submit); this wait only matters when it could not watch the buffer (a dmabuf
+		 * polls readable once its write fences have signalled) */
+		struct pollfd pfd = { .fd = j->dma_fd, .events = POLLIN };
+		int r;
+		do
+			r = poll(&pfd, 1, 1000);
+		while (r < 0 && errno == EINTR);
+		if (r <= 0) {
+			wlr_log(WLR_ERROR, "frame not finished by the GPU after 1 s (%s), dropped", r < 0 ? strerror(errno) : "timeout");
+			return true; /* a frame without pixels has no other path; the next one is tried again */
+		}
+		src.dma_fd = j->dma_fd;
+		src.used = (size_t)j->stride * j->height;
+		src.allocated = j->dma_size;
+	} else {
+		/* the job's pixels, borrowed for this call (the encoder copies them into its input buffer) */
+		src.data = (uint8_t *)j->pixels; /* only read (the MMAP path copies from it) */
+		src.used = (size_t)j->stride * j->height;
+		if (fmt == V4L2_PIX_FMT_YUV420)
+			src.used = src.used * 3 / 2; /* the U and V planes after the Y plane */
+		src.allocated = src.used;
+		src.dma_fd = -1;
+	}
 	src.width = j->width;
 	src.height = j->height;
 	src.format = fmt;
@@ -544,6 +770,13 @@ static bool encode_m2m(struct server *s, const struct encode_job *j)
 	bool h264 = !strcmp(j->mode, "m2m-h264");
 	bool force_key = h264 && j->force_key;
 	if (us_m2m_encoder_compress(m2m_enc, &src, m2m_dst, force_key) != 0) {
+		if (src.dma_fd >= 0) {
+			/* the codec cannot take these buffers: the frames are read back into its own buffers
+			 * from now on (the encoder re-prepares itself for MMAP input); this one is dropped */
+			wlr_log(WLR_ERROR, "V4L2 M2M encoder refused the CMA buffer, frames are read back from now on");
+			m2m_dma_failed = true;
+			return true;
+		}
 		static int warned;
 		if (!warned++)
 			wlr_log(WLR_ERROR, "V4L2 M2M compress failed, using the CPU path");
@@ -575,6 +808,8 @@ static void new_display_client(struct server *s)
 /* main thread: give a finished (or dropped) job's buffer back */
 static void job_free(struct encode_job *j)
 {
+	if (j->buffer)
+		wlr_buffer_unlock(j->buffer); /* back to the swapchain */
 	free(j->copy);
 	free(j);
 }
@@ -613,12 +848,22 @@ static void encode_job(struct server *s, struct encode_job *j)
 		m2m_close();
 #endif
 	}
+	const uint64_t t0 = now_usec();
+	bool done = false;
 #ifdef TACOMP_M2M
-	if (!strncmp(j->mode, "m2m", 3) && j->pixels && encode_m2m(s, j))
-		return;
+	if (!strncmp(j->mode, "m2m", 3) && (j->pixels || j->dma_fd >= 0) && encode_m2m(s, j))
+		done = true;
 #endif
-	if (j->pixels)
+	if (!done && j->pixels)
 		encode_and_publish(s, j);
+	const uint64_t t1 = now_usec();
+	pthread_mutex_lock(&s->enc_lock);
+	stats.enc_us += t1 - t0;
+	if (t1 - t0 > stats.enc_max_us)
+		stats.enc_max_us = t1 - t0;
+	stats.latency_us += t1 - j->t_captured;
+	stats.enc_n++;
+	pthread_mutex_unlock(&s->enc_lock);
 }
 
 static void *encoder_main(void *data)
@@ -662,6 +907,64 @@ static void enc_submit(struct server *s, struct encode_job *j)
 	pthread_mutex_unlock(&s->enc_lock);
 	if (dropped)
 		enc_release_done(s);
+}
+
+/* main thread: a CMA frame waits here until the GPU has drawn it, then goes to the encoder. The
+ * wait is the event loop's, not a thread's: on a Pi 4 the composite of a client's frame queues
+ * behind the client's own GPU work (implicit sync on its buffer), tens of milliseconds when the app
+ * keeps the GPU busy, and neither the compositor (it used to block in its read-back) nor the
+ * encoder (it would wait and encode one frame after the other) may stall on that. The frames finish
+ * in the order they were drawn; once one is ready, older ones still waiting are obsolete. */
+static void gpu_wait_drop(struct encode_job *j)
+{
+	if (j->ready_source)
+		wl_event_source_remove(j->ready_source);
+	j->ready_source = NULL;
+	wl_list_remove(&j->link);
+}
+
+static int handle_frame_ready(int fd, uint32_t mask, void *data)
+{
+	struct encode_job *j = data;
+	struct server *s = g_server;
+	struct encode_job *old, *tmp;
+	wl_list_for_each_safe(old, tmp, &s->gpu_waiting, link) {
+		if (old == j)
+			break;
+		j->force_key |= old->force_key; /* its requests carry over, as in enc_submit */
+		j->reset |= old->reset;
+		gpu_wait_drop(old);
+		job_free(old);
+	}
+	gpu_wait_drop(j);
+	const uint64_t waited = now_usec() - j->t_captured;
+	pthread_mutex_lock(&s->enc_lock);
+	stats.gpu_us += waited;
+	stats.gpu_n++;
+	if (waited > stats.gpu_max_us)
+		stats.gpu_max_us = waited;
+	pthread_mutex_unlock(&s->enc_lock);
+	enc_submit(s, j);
+	return 0;
+}
+
+static void gpu_wait_submit(struct server *s, struct encode_job *j)
+{
+	j->ready_source = wl_event_loop_add_fd(s->loop, j->dma_fd, WL_EVENT_READABLE, handle_frame_ready, j);
+	if (!j->ready_source) {
+		enc_submit(s, j); /* the encoder thread waits for it itself (encode_m2m) */
+		return;
+	}
+	wl_list_insert(s->gpu_waiting.prev, &j->link);
+}
+
+static void gpu_wait_finish(struct server *s)
+{
+	struct encode_job *j, *tmp;
+	wl_list_for_each_safe(j, tmp, &s->gpu_waiting, link) {
+		gpu_wait_drop(j);
+		job_free(j);
+	}
 }
 
 /* ---- yuv_readback: the frame as full-range BT.601 YUV 4:2:0 (I420: the Y plane, then U, then V,
@@ -864,6 +1167,8 @@ static void capture_frame(struct server *s, struct wlr_buffer *buffer)
 	struct encode_job *j = calloc(1, sizeof *j);
 	if (!j)
 		return;
+	j->dma_fd = -1;
+	j->t_captured = now_usec();
 	const char *mode = getenv("TACOMP_ENCODER");
 	snprintf(j->mode, sizeof j->mode, "%s", mode ? mode : "");
 	j->width = s->width;
@@ -882,6 +1187,20 @@ static void capture_frame(struct server *s, struct wlr_buffer *buffer)
 		if (old)
 			wlr_buffer_unlock(old);
 	}
+#ifdef TACOMP_M2M
+	/* H.264 on the hardware encoder from a CMA buffer: the buffer itself, no read-back (JPEG keeps
+	 * yuv_readback: the codec's own RGB to YCbCr is limited range, see the top comment) */
+	if (!strcmp(j->mode, "m2m-h264") && !m2m_failed && !m2m_dma_failed && cma_buffer_from(buffer)) {
+		const struct cma_buffer *cb = cma_buffer_from(buffer);
+		j->buffer = wlr_buffer_lock(buffer);
+		j->dma_fd = cb->dmabuf.fd[0];
+		j->dma_size = cb->size;
+		j->stride = (int)cb->dmabuf.stride[0];
+		j->format = cb->dmabuf.format;
+		gpu_wait_submit(s, j);
+		return;
+	}
+#endif
 	const size_t need = (size_t)s->width * 4 * s->height;
 	void *data;
 	uint32_t format;
@@ -950,6 +1269,7 @@ static void output_frame(struct server *s)
 		wlr_scene_output_send_frame_done(s->scene_output, &now);
 		return;
 	}
+	const uint64_t t0 = now_usec();
 	struct wlr_output_state state;
 	wlr_output_state_init(&state);
 	struct wlr_buffer *capture = NULL;
@@ -968,8 +1288,25 @@ static void output_frame(struct server *s)
 		capture_frame(s, capture);
 	}
 	wlr_output_state_finish(&state);
-	if (built <= 3 || built % 300 == 0)
-		wlr_log(WLR_INFO, "frame ticks %u, built %u, captured %u, published %llu", frames, built, captured, (unsigned long long)s->frame_seq);
+	const uint64_t took = now_usec() - t0;
+	stats.main_us += took;
+	stats.main_n++;
+	if (took > stats.main_max_us)
+		stats.main_max_us = took;
+	static unsigned logged_built;
+	if (built != logged_built && (built <= 3 || built % 300 == 0)) {
+		logged_built = built;
+		pthread_mutex_lock(&s->enc_lock);
+		struct frame_stats st = stats;
+		stats = (struct frame_stats){0};
+		pthread_mutex_unlock(&s->enc_lock);
+		const double mn = st.main_n ? (double)st.main_n : 1, en = st.enc_n ? (double)st.enc_n : 1, gn = st.gpu_n ? (double)st.gpu_n : 1;
+		wlr_log(WLR_INFO, "frame ticks %u, built %u, captured %u, published %llu | main %.2f ms/frame (max %.1f) | "
+		        "GPU done after %.2f ms (max %.1f) | encoder %llu frames, %.2f ms each (max %.1f), capture to published %.1f ms%s",
+		        frames, built, captured, (unsigned long long)s->frame_seq, st.main_us / mn / 1000, st.main_max_us / 1000.0,
+		        st.gpu_us / gn / 1000, st.gpu_max_us / 1000.0, (unsigned long long)st.enc_n, st.enc_us / en / 1000,
+		        st.enc_max_us / 1000.0, st.latency_us / en / 1000, s->cma_allocator ? ", CMA buffers" : "");
+	}
 }
 
 /* the backend's frame event: the frame clock for outputs without tacomp's own (not headless) */
@@ -1014,7 +1351,7 @@ static void handle_new_output(struct wl_listener *listener, void *data)
 {
 	struct server *s = wl_container_of(listener, s, new_output);
 	struct wlr_output *output = data;
-	wlr_output_init_render(output, s->allocator, s->renderer);
+	wlr_output_init_render(output, s->cma_allocator ? s->cma_allocator : s->allocator, s->renderer);
 	struct wlr_output_state state;
 	wlr_output_state_init(&state);
 	wlr_output_state_set_enabled(&state, true);
@@ -1812,6 +2149,13 @@ int main(int argc, char **argv)
 		wlr_log(WLR_ERROR, "no allocator");
 		return 1;
 	}
+	s.cma_allocator = cma_allocator_create(s.renderer, s.width, s.height);
+	/* with CMA output buffers every frame is composited into one of them: a client buffer handed
+	 * over as it is (wlroots' direct scan-out, when one surface covers the output) is V3D memory the
+	 * encoder cannot read, and switching the encoder between its DMA and copy input re-creates it
+	 * (about a second without frames). wlr_scene reads this when it is created. */
+	if (s.cma_allocator)
+		setenv("WLR_SCENE_DISABLE_DIRECT_SCANOUT", "1", 1);
 	wlr_compositor_create(s.display, 6, s.renderer);
 	wlr_subcompositor_create(s.display);
 	/* wp_viewporter: GTK puts a widget's dmabuf frames in a subsurface of their own (graphics
@@ -1856,6 +2200,7 @@ int main(int argc, char **argv)
 
 	pthread_mutex_init(&s.enc_lock, NULL);
 	pthread_cond_init(&s.enc_cond, NULL);
+	wl_list_init(&s.gpu_waiting);
 	s.enc_efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 	if (s.enc_efd < 0 || pthread_create(&s.enc_thread, NULL, encoder_main, &s) != 0) {
 		wlr_log(WLR_ERROR, "encoder thread: %s", strerror(errno));
@@ -1890,6 +2235,7 @@ int main(int argc, char **argv)
 	pthread_cond_signal(&s.enc_cond);
 	pthread_mutex_unlock(&s.enc_lock);
 	pthread_join(s.enc_thread, NULL);
+	gpu_wait_finish(&s);
 	if (s.enc_pending) {
 		s.enc_pending->next = s.enc_done;
 		s.enc_done = s.enc_pending;
@@ -1913,6 +2259,8 @@ int main(int argc, char **argv)
 	wlr_scene_node_destroy(&s.scene->tree.node);
 	wlr_keyboard_finish(&s.keyboard);
 	wlr_backend_destroy(s.backend);
+	if (s.cma_allocator)
+		wlr_allocator_destroy(s.cma_allocator);
 	wlr_allocator_destroy(s.allocator);
 	wlr_renderer_destroy(s.renderer);
 	wl_display_destroy(s.display);

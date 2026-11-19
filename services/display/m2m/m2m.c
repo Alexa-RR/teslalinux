@@ -1,5 +1,7 @@
 #include "m2m.h"
 
+#include <sys/stat.h> // teslalinux: fstat of an INPUT dmabuf
+
 
 static us_m2m_encoder_s *_m2m_encoder_init(
 	const char *name, const char *path, unsigned output_format,
@@ -270,9 +272,21 @@ static void _m2m_encoder_prepare(us_m2m_encoder_s *enc, const us_frame_s *frame)
 		fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
 		fmt.fmt.pix_mp.colorspace = V4L2_COLORSPACE_JPEG; // libcamera currently has no means to request the right colour space
 		fmt.fmt.pix_mp.num_planes = 1;
+		if (dma) {
+			// teslalinux: a dmabuf is read as it is laid out: ask for its stride, and accept no other
+			fmt.fmt.pix_mp.plane_fmt[0].bytesperline = _RUN(stride);
+		}
 		_E_LOG_DEBUG("Configuring INPUT format ...");
 		_E_XIOCTL(VIDIOC_S_FMT, &fmt, "Can't set INPUT format");
 		_m2m_encoder_diag_report_format(enc, "INPUT", &fmt);
+		if (dma && (fmt.fmt.pix_mp.plane_fmt[0].bytesperline != _RUN(stride)
+			|| fmt.fmt.pix_mp.width != _RUN(width) || fmt.fmt.pix_mp.height != _RUN(height)
+			|| fmt.fmt.pix_mp.plane_fmt[0].sizeimage > frame->allocated)) {
+			_E_LOG_ERROR("The INPUT-DMA format doesn't fit the buffers: %ux%u bytesperline=%u sizeimage=%u, buffers %ux%u stride=%u size=%zu",
+				fmt.fmt.pix_mp.width, fmt.fmt.pix_mp.height, fmt.fmt.pix_mp.plane_fmt[0].bytesperline,
+				fmt.fmt.pix_mp.plane_fmt[0].sizeimage, _RUN(width), _RUN(height), _RUN(stride), frame->allocated);
+			goto error;
+		}
 	}
 
 	{
@@ -458,7 +472,7 @@ static int _m2m_encoder_init_buffers(
 	_E_LOG_DEBUG("Initializing %s buffers ...", name);
 
 	struct v4l2_requestbuffers req = {0};
-	req.count = 1;
+	req.count = (dma ? US_M2M_DMA_SLOTS : 1); // teslalinux: a slot per dmabuf (see m2m.h)
 	req.type = type;
 	req.memory = (dma ? V4L2_MEMORY_DMABUF : V4L2_MEMORY_MMAP);
 
@@ -472,6 +486,8 @@ static int _m2m_encoder_init_buffers(
 
 	if (dma) {
 		*n_bufs_ptr = req.count;
+		_RUN(n_dma_ids) = 0;
+		_RUN(dma_next) = 0;
 	} else {
 		*bufs_ptr = calloc(req.count, sizeof(us_m2m_buffer_s));
 		for (*n_bufs_ptr = 0; *n_bufs_ptr < req.count; ++(*n_bufs_ptr)) {
@@ -585,7 +601,30 @@ static int _m2m_encoder_compress_raw(us_m2m_encoder_s *enc, const us_frame_s *sr
 	input_buf.m.planes = &input_plane;
 
 	if (_RUN(dma)) {
-		input_buf.index = 0;
+		// teslalinux: the slot that already holds this dmabuf, else the next one round robin
+		struct stat st;
+		if (fstat(src->dma_fd, &st) < 0) {
+			_E_LOG_PERROR("Can't stat the INPUT dmabuf");
+			goto error;
+		}
+		const unsigned long long id = ((unsigned long long)st.st_dev << 40) ^ (unsigned long long)st.st_ino;
+		unsigned slot = _RUN(n_input_bufs);
+		for (unsigned i = 0; i < _RUN(n_dma_ids); i++) {
+			if (_RUN(dma_ids[i]) == id) {
+				slot = i;
+				break;
+			}
+		}
+		if (slot == _RUN(n_input_bufs)) {
+			if (_RUN(n_dma_ids) < _RUN(n_input_bufs)) {
+				slot = _RUN(n_dma_ids)++;
+			} else {
+				slot = _RUN(dma_next);
+				_RUN(dma_next) = (_RUN(dma_next) + 1) % _RUN(n_input_bufs);
+			}
+			_RUN(dma_ids[slot]) = id;
+		}
+		input_buf.index = slot;
 		input_buf.memory = V4L2_MEMORY_DMABUF;
 		input_buf.field = V4L2_FIELD_NONE;
 		input_plane.m.fd = src->dma_fd;
@@ -611,7 +650,8 @@ static int _m2m_encoder_compress_raw(us_m2m_encoder_s *enc, const us_frame_s *sr
 	input_buf.timestamp.tv_sec = ts.tv_sec;
 	input_buf.timestamp.tv_usec = ts.tv_usec;
 	input_plane.bytesused = src->used;
-	input_plane.length = src->used;
+	// teslalinux: a dmabuf's length is the whole buffer (the driver checks it against sizeimage)
+	input_plane.length = (_RUN(dma) && src->allocated > src->used ? src->allocated : src->used);
 	if (!_RUN(dma)) {
 		memcpy(_RUN(input_bufs[input_buf.index].data), src->data, src->used);
 	}
