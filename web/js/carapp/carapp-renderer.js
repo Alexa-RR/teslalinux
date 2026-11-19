@@ -162,9 +162,19 @@
       this.graphite = false;
       this.night = false;
       this.roots = [root];
+      // the listeners of this renderer, removed by destroy(): a new renderer (a new display size or
+      // density) takes over the same elements, and the old one's listeners sent every tap again
+      this.listening = new AbortController();
       root.classList.add("carapp-root");
       this.applyTokens();
       this.listen(root);
+    }
+
+    /** Stops this renderer: its listeners and timers go (the controller made a new one). */
+    destroy() {
+      this.listening.abort();
+      clearTimeout(this.mapActionsTimer);
+      if (this.countdown) this.stopCountdown(true);
     }
 
     /**
@@ -203,9 +213,10 @@
         this.roots.push(root);
       }
       // touching the panel that runs a default action's countdown stops it (the driver is choosing)
+      const signal = this.listening.signal;
       root.addEventListener("pointerdown", (e) => {
         if (this.countdown && e.target.closest(".carapp-card.content")) this.stopCountdown();
-      });
+      }, { signal });
       root.addEventListener("click", (e) => {
         const el = e.target.closest("[data-act]");
         if (!el || !root.contains(el)) return;
@@ -265,7 +276,7 @@
             this.finishAlert(el.closest(".carapp-alert"), 2 /* REASON_USER_ACTION */);
             break;
         }
-      });
+      }, { signal });
     }
 
     dimen(name, fallback) {
@@ -1538,9 +1549,17 @@
      * onCancel(REASON_USER_ACTION); an action: its callback, then onDismiss.
      */
     alert(container, a) {
-      for (const old of container.querySelectorAll(".carapp-alert")) old.remove();
+      // one alert at a time: a new one takes the place of the one shown. Waze sends a new alert
+      // every second while one is up (a new id with the new distance, "In 240 m", "In 230 m"):
+      // the replacement goes in without the entry animation, or the card faded in every second
+      let replacing = false;
+      for (const old of container.querySelectorAll(".carapp-alert")) {
+        clearTimeout(old._timer);
+        old.remove();
+        replacing = true;
+      }
       const card = document.createElement("div");
-      card.className = "carapp-alert";
+      card.className = replacing ? "carapp-alert replaced" : "carapp-alert";
       card.dataset.id = a.id;
       if (a.callbackDelegate) card.dataset.cb = a.callbackDelegate.$cb;
       const top = document.createElement("div");

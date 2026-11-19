@@ -136,7 +136,7 @@
         this.panelSize = look.panelSize;
         writePref(LOOK_PANEL_SIZE_KEY, look.panelSize);
         // the panels are laid out again at the new density; the map area they leave free follows
-        this.renderer = null;
+        this.dropRenderer();
         this.draw();
       }
       let saved = Promise.resolve();
@@ -274,7 +274,7 @@
           // the panels are laid out at the display's density (dpi); the app's map may be drawn at
           // another (mapDpi, the map size): only a new size or display density needs new tokens
           const s = this.surface;
-          if (m.width !== s.width || m.height !== s.height || m.dpi !== s.dpi) this.renderer = null;
+          if (m.width !== s.width || m.height !== s.height || m.dpi !== s.dpi) this.dropRenderer();
           this.surface = { width: m.width, height: m.height, dpi: m.dpi, mapDpi: m.mapDpi || m.dpi };
           this.fit();
           this.draw();
@@ -416,6 +416,12 @@
         this.lastArea = key;
         this.send(Object.assign({ type: "visibleArea" }, a));
       });
+    }
+
+    /** The renderer goes (a new size or density): its listeners with it, or each tap went once per renderer made. */
+    dropRenderer() {
+      if (this.renderer) this.renderer.destroy();
+      this.renderer = null;
     }
 
     draw() {
