@@ -67,7 +67,7 @@ class Cdp:
 async def run(a):
     prof = tempfile.mkdtemp(prefix="tl-chrome-")
     w, h = (int(v) for v in a.size.split("x"))
-    rules = f"MAP {a.host}:443 127.0.0.1:{a.port}, MAP *.{a.host}:443 127.0.0.1:{a.port}"
+    rules = f"MAP {a.host}:443 {a.addr}:{a.port}, MAP *.{a.host}:443 {a.addr}:{a.port}"
     proc = subprocess.Popen([a.chrome, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={prof}",
                              f"--host-resolver-rules={rules}", "--ignore-certificate-errors", "--no-first-run",
                              "--autoplay-policy=no-user-gesture-required", f"--window-size={w},{h}", "about:blank"],
@@ -159,7 +159,8 @@ async def run(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", type=int, default=8443, help="the Mac port forwarded to the guest's 443")
+    ap.add_argument("--port", type=int, default=8443, help="the Mac port forwarded to the guest's 443 (a Pi: --addr ITS-IP --port 443)")
+    ap.add_argument("--addr", default="127.0.0.1", help="where HOST is served (a Pi on the network: its address)")
     ap.add_argument("--host", default="car.alexahub.dev")
     ap.add_argument("--size", default="1280x900", help="browser viewport (CSS px)")
     ap.add_argument("--dpr", type=float, default=1.0, help="devicePixelRatio (a Model 3: --size 773x601 --dpr 1.53, docs/CAR-SCREENS.md)")
