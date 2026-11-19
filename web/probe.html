@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screen probe</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 22px/1.4 system-ui, sans-serif; }
+  main { padding: 16px; }
+  pre { font: 20px/1.35 ui-monospace, monospace; white-space: pre-wrap; }
+  a, button { font: inherit; color: #111; background: #8cf; border: 0; border-radius: 8px; padding: 10px 18px; margin-right: 12px; text-decoration: none; }
+  #grid { display: block; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <div><a href="/">Back to the car page</a><button id="send">Send again</button><span id="status"></span></div>
+  <pre id="out"></pre>
+  <canvas id="grid" width="200" height="60"></canvas>
+</main>
+<script>
+(function () {
+  function measure() {
+    var vv = window.visualViewport;
+    var m = {
+      innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+      outerWidth: window.outerWidth, outerHeight: window.outerHeight,
+      clientWidth: document.documentElement.clientWidth, clientHeight: document.documentElement.clientHeight,
+      vvWidth: vv ? vv.width : null, vvHeight: vv ? vv.height : null, vvScale: vv ? vv.scale : null,
+      devicePixelRatio: window.devicePixelRatio,
+      screenWidth: screen.width, screenHeight: screen.height,
+      availWidth: screen.availWidth, availHeight: screen.availHeight,
+      colorDepth: screen.colorDepth,
+      orientation: screen.orientation ? screen.orientation.type : null,
+      fullscreen: !!document.fullscreenElement,
+      displayModeFullscreen: matchMedia("(display-mode: fullscreen)").matches,
+      pointerCoarse: matchMedia("(pointer: coarse)").matches,
+      hover: matchMedia("(hover: hover)").matches,
+      maxTouchPoints: navigator.maxTouchPoints,
+      hardwareConcurrency: navigator.hardwareConcurrency,
+      deviceMemory: navigator.deviceMemory || null,
+      webcodecs: typeof window.VideoDecoder === "function",
+      ua: navigator.userAgent
+    };
+    m.physicalViewport = Math.round(m.innerWidth * m.devicePixelRatio) + "x" + Math.round(m.innerHeight * m.devicePixelRatio);
+    return m;
+  }
+  function show(m) {
+    var lines = [];
+    for (var k in m) lines.push(k + ": " + m[k]);
+    document.getElementById("out").textContent = lines.join("\n");
+    // a 1-device-pixel checkerboard: crisp = the canvas maps 1:1 to the panel's pixels
+    var c = document.getElementById("grid"), dpr = m.devicePixelRatio || 1;
+    c.style.width = "200px"; c.style.height = "60px";
+    c.width = Math.round(200 * dpr); c.height = Math.round(60 * dpr);
+    var g = c.getContext("2d"), img = g.createImageData(c.width, c.height);
+    for (var y = 0; y < c.height; y++) for (var x = 0; x < c.width; x++) {
+      var i = (y * c.width + x) * 4, v = ((x + y) & 1) ? 255 : 0;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+  }
+  function send(reason) {
+    var m = measure(); show(m);
+    var q = "reason=" + encodeURIComponent(reason);
+    for (var k in m) q += "&" + k + "=" + encodeURIComponent(m[k]);
+    var st = document.getElementById("status");
+    fetch("/probe-report?" + q, { cache: "no-store" }).then(function () { st.textContent = " sent " + new Date().toLocaleTimeString(); },
+      function () { st.textContent = " send failed"; });
+  }
+  document.getElementById("send").onclick = function () { send("button"); };
+  var t; window.addEventListener("resize", function () { clearTimeout(t); t = setTimeout(function () { send("resize"); }, 400); });
+  send("load");
+})();
+</script>
+</body>
+</html>

@@ -14,6 +14,10 @@ Changes from upstream:
   field as the words are heard and searches when the driver stops speaking; it stays on while typing
   is off on the move. Settings, Waze interface: "Voice language" (kept by this browser) and "Test the
   microphone"; in a browser without speech recognition a tile says so and the buttons are left out.
+* `probe.html` (new, standalone, linked from nowhere): opened in a car's browser, it shows what the
+  browser reports about its screen (viewport, `devicePixelRatio`, screen size, pointer, WebCodecs, user
+  agent, a device-pixel checkerboard) and sends it as `GET /probe-report?...`, which lands in nginx's
+  access log. Measured cars are in docs/CAR-SCREENS.md.
 * `js/core/cert-warning.js` (new, one `<script defer>` line in `index.html`): a small dismissable
   notice, bottom left, when the car's TLS certificate is a placeholder, has fewer than 14 days left,
   or its last update failed or was rejected. It reads the new read-only `GET /api/certificate`
