@@ -2,7 +2,7 @@
 """teslalinux: how many frames a Pi delivers while the map moves, with its temperature and clocks.
 
   pi-bench.py [--label NAME] [--seconds 60] [--warmup 15] [--speed-kmh 50] [--start LAT,LON]
-              [--bearing 0] [--host 127.0.0.1] [--display-port 9091] [--gps-port 9998]
+              [--bearing 0] [--no-drive] [--host 127.0.0.1] [--display-port 9091] [--gps-port 9998]
 
 Runs on the Pi (python3-websockets, vcgencmd). A simulated car drives in a straight line through the
 GPS WebSocket (gps-drive.py's path, so the map keeps moving), a display client counts tacomp's frames
@@ -12,7 +12,9 @@ GPS WebSocket (gps-drive.py's path, so the map keeps moving), a display client c
   fps (mean), fps_p10 (the slowest tenth of seconds), temp_max, throttled (OR of the flags seen),
   arm_mhz / v3d_mhz (lowest seen), cpu_busy (%), display (TACOMP_SIZE and encoder).
 A car page (or another display client) must keep Waze's map shown in Car mode; the benchmark only
-reads the stream.
+reads the stream. --no-drive leaves the GPS to something else: a straight line leaves the roads, and
+Waze then stops following the car, so for comparable runs drive a real route with gps-route.py
+(a cached --route file, the same stretch every run) and pass --no-drive.
 """
 import argparse
 import asyncio
@@ -108,6 +110,7 @@ async def main():
     ap.add_argument("--speed-kmh", type=float, default=50.0)
     ap.add_argument("--start", default="32.0700,34.7800")
     ap.add_argument("--bearing", type=float, default=0.0)
+    ap.add_argument("--no-drive", action="store_true", help="send no GPS (gps-route.py drives)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--display-port", type=int, default=9091)
     ap.add_argument("--gps-port", type=int, default=9998)
@@ -115,8 +118,9 @@ async def main():
     start = tuple(float(v) for v in a.start.split(","))
     stamps, samples, stop = [], [], asyncio.Event()
     total = a.warmup + a.seconds
-    tasks = [
-        asyncio.create_task(drive(f"ws://{a.host}:{a.gps_port}/", start, a.bearing, a.speed_kmh, total + 2)),
+    tasks = [] if a.no_drive else [
+        asyncio.create_task(drive(f"ws://{a.host}:{a.gps_port}/", start, a.bearing, a.speed_kmh, total + 2))]
+    tasks += [
         asyncio.create_task(count_frames(f"ws://{a.host}:{a.display_port}/sockets/display", stamps, stop)),
         asyncio.create_task(sample(samples, stop)),
     ]
