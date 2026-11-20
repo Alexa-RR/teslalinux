@@ -366,6 +366,42 @@
         ),
         dense: false,
       });
+      // the map's frame rate is the device's (it changes what Waze runs, at its start)
+      const pacingNotice = utils.createElement("div", "settings-description", "");
+      pacingNotice.hidden = true;
+      const pacingWarning = global.document.createElement("div");
+      let pacing = state.mapPacing === "full" ? "full" : "app";
+      this._appendTile({
+        icon: "speed",
+        title: "Map frame rate",
+        subtitle:
+          "Waze's own: Waze draws its car map at most 30 times a second, as on a phone. Full: as often as the device manages, up to the display's 60: smoother on the move, the device works harder",
+        trailing: this._createSelect(
+          [
+            { value: "app", label: "Waze's own (30/s)" },
+            { value: "full", label: "Full (60/s)" },
+          ],
+          pacing,
+          async (value) => {
+            try {
+              await this.apiClient.setMapPacing(value);
+            } catch (_error) {
+              this._renderErrorState("Service error");
+              return;
+            }
+            if (value !== pacing) {
+              pacing = value;
+              pacingNotice.textContent = "Saved. Waze restarts " + (value === "full" ? "with its map at the full frame rate." : "with its own frame rate.");
+              pacingNotice.hidden = false;
+            }
+            this._showMapPacingWarning(pacingWarning, pacing, state.mapPacingSupport);
+          },
+        ),
+        dense: false,
+      });
+      this.content.appendChild(pacingNotice);
+      this.content.appendChild(pacingWarning);
+      this._showMapPacingWarning(pacingWarning, pacing, state.mapPacingSupport);
       // the map colours are the device's (they change what Waze draws): this state's, fresher than
       // the one the car interface read when the page loaded
       if (car.setDeviceMapColours) car.setDeviceMapColours(state);
@@ -501,6 +537,33 @@
         icon: "warning",
         title: "Map colours: not available for " + installed,
         subtitle: why + (look.style === "graphite" ? " Waze's own colours are used, toned down by this screen (Muted)." : " Waze's own colours are used."),
+        dense: false,
+      });
+      this._target = previous;
+    }
+
+    /**
+     * The full map frame rate applies only to the Waze versions it was checked with
+     * (tools/apps/waze-map-pacing.py on the device); for any other version Waze keeps its own. The
+     * warning says so while Full is chosen.
+     */
+    _showMapPacingWarning(container, pacing, support) {
+      container.innerHTML = "";
+      if (pacing !== "full" || !support || support.supported) return;
+      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
+      const installed = support.versionCode ? "Waze " + named(support) : "this Waze";
+      const checked = (support.verifiedVersions || []).map(named).join(", ");
+      const why = {
+        "unverified-version": "The full map frame rate is not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".",
+        "not-installed": "The full map frame rate is not available: no installed Waze was found.",
+        "no-tool": "The full map frame rate is not available on this device.",
+      }[support.state] || "The full map frame rate is not available for " + installed + ".";
+      const previous = this._target;
+      this._target = container;
+      this._appendTile({
+        icon: "warning",
+        title: "Map frame rate: not available for " + installed,
+        subtitle: why + " Waze keeps its own frame rate.",
         dense: false,
       });
       this._target = previous;

@@ -78,7 +78,7 @@ fi
 # Android starts a process for a service binding, as on a phone running Android Auto) and its car
 # app service draws only the car map.
 LAUNCH_ARGS=()
-unset ATL_FILE_OVERLAYS
+unset ATL_FILE_OVERLAYS ATL_APP_CLASS_OVERRIDES
 if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
   export ATL_CAR_HOST=1 ATL_CAR_APP_CHANNEL_PORT="${ATL_CAR_APP_CHANNEL_PORT:-9995}"
   LAUNCH_ARGS+=(--background)
@@ -92,6 +92,27 @@ if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
       export ATL_FILE_OVERLAYS="$MAP_SKIN"
     else
       echo "teslalinux-atl: no map colour manifest at $MAP_SKIN; the app keeps its own map colours" >&2
+    fi
+  fi
+  # the car map's frame rate chosen on the settings page (teslalinux-set-app-interface pacing ...):
+  # Waze holds its car map at 30 frames/s (a phone battery's choice); "full" gives the app its map
+  # loop and frame limiter on the display's 60 frames/s schedule, as a class ATL loads in front of
+  # the app's own (ATL_APP_CLASS_OVERRIDES). tools/apps/waze-map-pacing.py makes it here from the
+  # installed APK, for the Waze versions it lists and only when the code is exactly as expected;
+  # the APK is never changed. Made again when the app is updated.
+  if [[ "${TESLALINUX_MAP_PACING:-app}" == full ]]; then
+    PACING_TOOL="${TESLALINUX_MAP_PACING_TOOL:-/usr/local/lib/teslalinux/apps/waze-map-pacing.py}"
+    PACING_DIR="$HOME/.cache/teslalinux/app-overrides"
+    VC="$(sed -n 's/.*"versionCode": *\([0-9]*\).*/\1/p' "$APP_DIR/installed.json" 2>/dev/null | head -1)"
+    PACING_JAR="$PACING_DIR/com.waze-${VC:-unknown}-map-pacing.jar"
+    if [[ -n "$VC" && ( ! -s "$PACING_JAR" || "${APKS[0]}" -nt "$PACING_JAR" ) && -r "$PACING_TOOL" ]]; then
+      mkdir -p "$PACING_DIR"
+      python3 -I "$PACING_TOOL" "$APP_DIR" "$PACING_JAR" >&2 || rm -f "$PACING_JAR"
+    fi
+    if [[ -n "$VC" && -s "$PACING_JAR" ]]; then
+      export ATL_APP_CLASS_OVERRIDES="$PACING_JAR"
+    else
+      echo "teslalinux-atl: the full map frame rate is not available for this app version; it keeps its own" >&2
     fi
   fi
 fi

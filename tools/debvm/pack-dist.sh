@@ -118,7 +118,7 @@ PAYLOAD=(
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
   services/display/test/ws-client.py
   web
-  tools/apps/install-app.sh tools/apps/apk-info.py tools/apps/apk_verify.py
+  tools/apps/install-app.sh tools/apps/apk-info.py tools/apps/apk_verify.py tools/apps/waze-map-pacing.py
   tools/appupdate/install.sh tools/appupdate/teslalinux-appupdate tools/appupdate/device.properties
   tools/pios/install.sh tools/atl-vm/mk-android-tzdata.py docs/APP-UPDATES.md
   host/appstyle tools/appstyle/mapskin.py docs/MAP-COLOURS.md

@@ -50,6 +50,8 @@ VERIFIED = {
         ("Lcom/waze/map/opengl/m;", "b", CONST16, 30, 60, ()),  # what opengl.l calls 5 s after a boost
     ],
 }
+# the version names of VERIFIED, for the settings page (services/api/api.py map_pacing_status)
+VERIFIED_NAMES = {1030750: "5.27.5.0"}
 
 
 def uleb(data, off):

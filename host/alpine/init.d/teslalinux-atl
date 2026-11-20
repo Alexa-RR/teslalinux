@@ -33,6 +33,8 @@ start_pre() {
 	[ -r /etc/teslalinux/interface.env ] && . /etc/teslalinux/interface.env && export TESLALINUX_APP_INTERFACE
 	# and the car map's colours (graphite: ATL's file overlay of the app's map palette)
 	[ -n "${TESLALINUX_MAP_COLOURS:-}" ] && export TESLALINUX_MAP_COLOURS
+	# and its frame rate (full: the map loop on the display's schedule, verified app versions only)
+	[ -n "${TESLALINUX_MAP_PACING:-}" ] && export TESLALINUX_MAP_PACING
 	export HOME=/var/lib/tesla XDG_RUNTIME_DIR=/run/tesla WAYLAND_DISPLAY=tesla-0
 	# ALSA "default" -> pipewire-alsa -> the "android" sink in this runtime dir
 	export PIPEWIRE_RUNTIME_DIR=/run/tesla

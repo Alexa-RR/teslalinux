@@ -83,6 +83,7 @@ channel and offline-mode switches take effect at the next boot (host/teslalinux-
 the frontend says ("Apply it during the next system startup?").
 """
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -113,6 +114,14 @@ APP_INTERFACES = ("phone", "car")
 # the car map's colours: graphite (ATL's file overlay of the app's palette, verified versions only),
 # muted (the car page recolours the stream), app (the app's own)
 MAP_COLOURS = ("graphite", "muted", "app")
+# the car map's frame rate: app (Waze's own, 30 frames/s) or full (the display's 60; the launcher gives the app
+# a class changed by tools/apps/waze-map-pacing.py, verified versions only)
+MAP_PACINGS = ("app", "full")
+MAP_PACING_TOOLS = tuple(p for p in (
+    os.environ.get("TESLALINUX_MAP_PACING_TOOL"),
+    "/usr/local/lib/teslalinux/apps/waze-map-pacing.py",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "apps", "waze-map-pacing.py"),
+) if p)
 APP_PACKAGE = "com.waze"
 APP_DIR = os.environ.get("TESLALINUX_APP_DIR", "/var/lib/teslalinux/apps/" + APP_PACKAGE)
 # ATL's data directory for the app: ANDROID_APP_DATA_DIR/<base APK name>_ (main.c)
@@ -629,18 +638,23 @@ def app_interface_state(with_map_skin=False):
     env = _env_file(INTERFACE_ENV)
     mode = env.get("TESLALINUX_APP_INTERFACE", "phone")
     colours = env.get("TESLALINUX_MAP_COLOURS")
+    pacing = env.get("TESLALINUX_MAP_PACING")
     out = {"interface": mode if mode in APP_INTERFACES else "phone",
-           "mapColours": colours if colours in MAP_COLOURS else None}
+           "mapColours": colours if colours in MAP_COLOURS else None,
+           "mapPacing": pacing if pacing in MAP_PACINGS else "app"}
     if with_map_skin:
         out["mapSkin"] = map_skin_status()
+        out["mapPacingSupport"] = map_pacing_status()
     return out
 
 
-def set_app_interface(mode=None, map_colours=None):
+def set_app_interface(mode=None, map_colours=None, map_pacing=None):
     """POST /api/appInterface: the root helper writes interface.env and restarts the app if what it
-    starts with changed (the interface, or the map colours to or from "graphite")"""
+    starts with changed (the interface, or the map colours to or from "graphite", or the map's frame
+    rate)"""
     cmd = ["sudo", "-n", SET_APP_INTERFACE] if APPLY_SUDO and os.geteuid() != 0 else [SET_APP_INTERFACE]
-    calls = ([[mode]] if mode else []) + ([["map", map_colours]] if map_colours else [])
+    calls = (([[mode]] if mode else []) + ([["map", map_colours]] if map_colours else [])
+             + ([["pacing", map_pacing]] if map_pacing else []))
 
     def run():
         with _apply_lock:
@@ -701,6 +715,39 @@ def map_skin_status():
             state = "unverified-files"
     out["state"] = state
     out["supported"] = state in ("verified", "pending")
+    return out
+
+
+def map_pacing_status():
+    """Whether the "full" map frame rate applies to the app as installed: its versionCode against the
+    versions tools/apps/waze-map-pacing.py knows (VERIFIED; the launcher's run of the tool also checks
+    the code itself and leaves the app alone if it differs). state: "verified", "unverified-version",
+    "no-tool", "not-installed"."""
+    inst = _read_json(os.path.join(APP_DIR, "installed.json")) or {}
+    vc, vn = inst.get("versionCode"), inst.get("versionName")
+    out = {"supported": False, "versionCode": vc, "versionName": vn, "verifiedVersions": []}
+    verified = None
+    for path in MAP_PACING_TOOLS:
+        if not os.path.isfile(path):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("waze_map_pacing", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            verified = mod.VERIFIED
+            names = getattr(mod, "VERIFIED_NAMES", {})
+            break
+        except Exception as e:  # a broken tool: reported as missing, never a failed request
+            print("teslalinux-api: %s: %s" % (path, e), flush=True)
+    if verified is None:
+        out["state"] = "no-tool"
+        return out
+    out["verifiedVersions"] = [{"versionCode": v, "versionName": names.get(v)} for v in sorted(verified)]
+    if not isinstance(vc, int):
+        out["state"] = "not-installed"
+        return out
+    out["state"] = "verified" if vc in verified else "unverified-version"
+    out["supported"] = out["state"] == "verified"
     return out
 
 
@@ -1501,11 +1548,12 @@ class Handler(BaseHTTPRequestHandler):
                 req = json.loads(body.decode("utf-8") or "null")
             except (ValueError, UnicodeDecodeError):
                 return self._error()
-            if (not isinstance(req, dict) or not ("interface" in req or "mapColours" in req)
+            if (not isinstance(req, dict) or not ("interface" in req or "mapColours" in req or "mapPacing" in req)
                     or ("interface" in req and req["interface"] not in APP_INTERFACES)
-                    or ("mapColours" in req and req["mapColours"] not in MAP_COLOURS)):
+                    or ("mapColours" in req and req["mapColours"] not in MAP_COLOURS)
+                    or ("mapPacing" in req and req["mapPacing"] not in MAP_PACINGS)):
                 return self._error()
-            set_app_interface(req.get("interface"), req.get("mapColours"))
+            set_app_interface(req.get("interface"), req.get("mapColours"), req.get("mapPacing"))
             return self._ok()
         if route == "appUpdateSettings":
             try:

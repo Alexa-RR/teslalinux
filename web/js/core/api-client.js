@@ -69,6 +69,11 @@
       return this._postJson(this.apiBaseUrl + "/appInterface", { interface: value });
     }
 
+    // teslalinux: the car map's frame rate ("app": Waze's own 30 frames/s | "full": the display's)
+    setMapPacing(value) {
+      return this._postJson(this.apiBaseUrl + "/appInterface", { mapPacing: value });
+    }
+
     // teslalinux: what the device is connected to right now (services/api/api.py)
     fetchStatus() {
       return this._fetchJson(this.apiBaseUrl + "/status");
