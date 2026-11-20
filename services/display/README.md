@@ -63,6 +63,29 @@ depended on the newest of them, and the read-back blocked tacomp's main thread f
 the main thread takes ~0.8 ms a frame, every frame Waze commits is encoded (~27-32 a second),
 and tacomp's GPU share went from 6-7% to 3-4% (no read-back job).
 
+Delivered frames a second / slowest tenth of seconds, Pi 4 at stock clocks, Waze 5.27.5 Car mode on
+a road route (`tools/debian/pi-bench.py`), H.264, Nov 20 2026. "Uncapped" is Waze's map without its
+30 frames/s caps (`tools/apps/waze-map-pacing.py`), "ahead" ATL's `ATL_SWAP_FRAMES_AHEAD`; the
+milliseconds are a frame's age from composite to published:
+
+| | read-back (before) | CMA buffers |
+|---|---|---|
+| 832x608, stock Waze | 22.5 / 8 | 23.6 / 10, 16 ms |
+| 832x608, uncapped, 1 ahead | 24.0 / 11 | 27.2 / 12, ~75 ms |
+| 832x608, uncapped, 2 ahead | 11.2 / 7 | 26.8 / 10, ~75 ms |
+| 1184x928 (Native), stock | 7.5 / 7 | 15.2 / 6, ~150 ms |
+| 1184x928, uncapped, 1 ahead | 7.3 / 6 | 15.2 / 4, ~150 ms |
+| 1184x928, uncapped, 2 ahead | 7.4 / 7 | 15.3 / 5, ~150 ms |
+
+What is left is Waze itself: its map takes ~24-29 ms of V3D time a frame at 832x608 (30-35 frames/s
+while it runs smoothly) and ~51 ms at 1184x928, and it pauses on its own for up to 3 s (most of the
+slow tenths). The long ages come from Waze drawing ahead of the GPU: ATL's eglSwapBuffers returns
+as soon as the frame is queued, and a frame replaced before GTK showed it gives its token back, so
+nothing makes the app wait for its earlier frames' GPU work. Holding the Wayland frame callbacks in
+tacomp until the GPU is done was tried (Nov 20) and does not do that. Waze kept drawing, only GTK
+committed fewer of its frames, and the results swung between 7 and 17 frames/s at 1184x928. The
+place for that limit is ATL's swap: wait for the GPU fence of the frame before last.
+
 The log line every 300 frames built shows the main thread's time per frame, how long frames waited
 for the GPU, the encoder's time per frame and the time from capture to published frame.
 
