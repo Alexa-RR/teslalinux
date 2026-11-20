@@ -17,6 +17,11 @@
 #   --apk PATH           install Waze from this split-APK bundle (.apkm/.xapk/.apks/zip) or directory
 #   --waze apkpure|none  apkpure: download Waze now (verified against Waze's signing certificate; it
 #                        installs at the reboot); none: leave it to the car page's upload screen
+#   --waze-version VERSIONCODE|latest
+#                        pin Waze to that version (1030750 = 5.27.5, the one the car page's Map frame
+#                        rate "Full" is verified for): the download and the updater fetch exactly it and
+#                        nothing newer (Settings > App updates > Waze version changes it later);
+#                        latest: no pin (the default)
 #   --payload DIR        take configs and scripts from this repo checkout instead of the dist's copy
 #   --no-trim            leave the boot-time trimming out
 #   --no-prewarm         do not build ART's boot image now (the first app start does it)
@@ -194,7 +199,7 @@ inputs() {
     web) hash_paths "$ENVF" "$PAYLOAD/web" "$PAYLOAD/host/phase1-pios/etc" /etc/teslalinux/tls ;;
     audio) echo "-" ;;
     display) model ;;
-    appupdate) echo "$(hash_paths "$PAYLOAD/tools/appupdate" "$PAYLOAD/tools/apps" "$PREFIX/bin/tlplay") $WAZE_MODE" ;;
+    appupdate) echo "$(hash_paths "$PAYLOAD/tools/appupdate" "$PAYLOAD/tools/apps" "$PREFIX/bin/tlplay") $WAZE_MODE $WAZE_PIN" ;;
     waze) echo "$WAZE_MODE ${APK:+$(hash_paths "$APK")} $(hash_paths "$APPS/com.waze/installed.json")" ;;
     prewarm) echo "$PREWARM $(readlink -f "$PREFIX") $(ls "$TESLA_HOME"/.cache/art/*/*boot*.art 2>/dev/null | head -1)" ;;
     trim) echo "-" ;;
@@ -245,7 +250,7 @@ usage() {
 }
 
 parse_install_args() {
-  DIST=latest DIST_SHA_WANT="" CONFIG="" APK="" WAZE_MODE="" PAYLOAD_OVERRIDE=""
+  DIST=latest DIST_SHA_WANT="" CONFIG="" APK="" WAZE_MODE="" WAZE_PIN="" PAYLOAD_OVERRIDE=""
   TRIM=1 PREWARM=1 FORCE=0 YES=0 REBOOT=ask
   SETS=()
   while [[ $# -gt 0 ]]; do
@@ -256,6 +261,7 @@ parse_install_args() {
       --set) [[ "${2:-}" =~ ^[A-Z_][A-Z0-9_]*= ]] || die "--set KEY=VALUE"; SETS+=("$2"); shift ;;
       --apk) APK=${2:?}; WAZE_MODE=apk; shift ;;
       --waze) WAZE_MODE=${2:?}; shift; [[ $WAZE_MODE == apkpure || $WAZE_MODE == none ]] || die "--waze apkpure|none" ;;
+      --waze-version) WAZE_PIN=${2:?}; shift; [[ $WAZE_PIN == latest || $WAZE_PIN =~ ^[1-9][0-9]{0,9}$ ]] || die "--waze-version VERSIONCODE|latest" ;;
       --payload) PAYLOAD_OVERRIDE=${2:?}; shift ;;
       --no-trim) TRIM=0 ;;
       --no-prewarm) PREWARM=0 ;;
@@ -831,6 +837,21 @@ s["source"] = os.environ["SRC"]
 json.dump(s, open(p, "w"), indent=1, sort_keys=True)' "$settings"
     chown tesla:tesla "$settings"; chmod 0644 "$settings"
     log "  update source: $src"
+  fi
+  # a version pin (--waze-version): the download below and every later check fetch exactly it
+  if [[ -n "$WAZE_PIN" ]]; then
+    local name=""
+    # its name, when it is one tools/apps/waze-map-pacing.py is verified for (VERIFIED_NAMES)
+    name=$(python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("p", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(getattr(m, "VERIFIED_NAMES", {}).get(int(sys.argv[2]), ""))' "$LIB/apps/waze-map-pacing.py" "$WAZE_PIN" 2>/dev/null || true)
+    if [[ $WAZE_PIN == latest ]]; then
+      /usr/local/bin/teslalinux-appupdate pin latest >/dev/null
+    else
+      /usr/local/bin/teslalinux-appupdate pin "$WAZE_PIN" $name >/dev/null
+    fi
+    [[ -f "$settings" ]] && { chown tesla:tesla "$settings"; chmod 0644 "$settings"; }
+    log "  Waze version: ${name:-$WAZE_PIN}"
   fi
 }
 

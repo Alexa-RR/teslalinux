@@ -217,17 +217,41 @@ then it needs a dispenser address that accepts the Pi.
 * **A new Waze signing key** (key rotation) is refused like on Android without a rotation proof. It
   needs a manual install with `install-app.sh` on the Pi.
 
+## Version pin
+
+Waze can be kept on one version: **Settings > App updates > Waze version** ("Latest", or "Stay on" a
+version), `teslalinux-appupdate pin VERSIONCODE [VERSIONNAME]` / `pin latest` on the Pi, or
+`install.sh --waze-version VERSIONCODE` for a new install. The page offers the versions the Map frame
+rate "Full" is verified for (`VERIFIED` in `tools/apps/waze-map-pacing.py`; now 5.27.5.0, versionCode
+1030750) and the installed one. The pin is `pinVersionCode`/`pinVersionName` in the settings file.
+
+With a pin, each check still asks the source for its latest version (shown on the page), but the
+version to have is the pinned one:
+* installed older than the pin, or nothing installed: the pinned version is downloaded
+  (`tlplay download --version-code`: APKPure lists about two years of versions), verified and
+  installed like any update;
+* installed is the pin: nothing to do ("installed, as pinned (the latest is ...)");
+* installed newer than the pin: nothing is downloaded and nothing goes back ("pinned-older"): Android
+  keeps an app's data across upgrades only, so a downgrade would need the data wiped;
+* a download newer than the pin that was waiting to install is dropped ("pin-dropped"); an upload
+  from the page is the user's own choice and installs even past the pin.
+
+A changed pin starts a check at once (the API kicks the updater). Waze's servers may one day refuse
+an old version; then "Latest" brings it back to the newest, and the Map frame rate falls back to
+Waze's own until the pacing tool is verified for that version.
+
 ## Settings and status
 
 * Settings > **App updates**: **Update source** (APKPure (automatic) / Manual uploads only / Google Play
-  via Aurora (unavailable unless enabled)), **Update Waze automatically**, **Allow updates over LTE**,
+  via Aurora (unavailable unless enabled)), **Update Waze automatically**, **Waze version** (the pin
+  above), **Allow updates over LTE**,
   the status ("Update server unavailable since ...", a verified update waiting for the car to
   disconnect, the running health check, the last result, the last notice), **Check for an update now**,
   **Upload an update** (progress, then the verification result), and **Advanced: Google Play via a token
   dispenser** with its dispenser address.
 * API (new routes; the upstream ones are unchanged): `GET /api/appUpdate`, `POST /api/appUpdateSettings`
-  (JSON with any of `source`, `autoUpdate`, `allowMetered`, `playEnabled`, `dispenserUrl`; 500 on
-  anything invalid), `POST /api/appUpdateCheck`, `POST /api/appUpdateUpload?name=FILE` (the body; 411
+  (JSON with any of `source`, `autoUpdate`, `allowMetered`, `playEnabled`, `dispenserUrl`,
+  `pinVersionCode` (0 = none), `pinVersionName`; 500 on anything invalid; `GET` adds `pinChoices`), `POST /api/appUpdateCheck`, `POST /api/appUpdateUpload?name=FILE` (the body; 411
   without a length, 413 over 400 MB; answers `{ok, state, message}`).
 * sudoers (`/etc/sudoers.d/teslalinux-appupdate`): tesla may run `teslalinux-appupdate kick --force`
   and `teslalinux-appupdate receive-upload --size * --name *`, nothing else.
@@ -280,7 +304,7 @@ default is APKPure, automatic, Wi-Fi only.
 ## Tests
 
 `tools/appupdate/test/run.sh` runs without a network, an account or a VM:
-* `test_appupdate.py` (39 tests) uses the real Waze 5.25 set in `out/apps/com.waze/` as the installed
+* `test_appupdate.py` (45 tests) uses the real Waze 5.25 set in `out/apps/com.waze/` as the installed
   app:
   * verification: accepted when newer; refused for an equal or lower versionCode, a copy re-signed with
     a throwaway RSA key (valid v2, wrong signer), one foreign split, a flipped byte, a truncated split,
@@ -291,13 +315,15 @@ default is APKPure, automatic, Wi-Fi only.
   * the state machine (fake tlplay, fake systemctl, the real install-app.sh): source down -> backoff ->
     recovery, LTE waits, verification failure -> marked bad, car connected waits, idle install ->
     health ok, health failure -> rollback with data, boot install -> health service, manual rollback,
-    the Play source refused unless enabled, manual-only, and no token in the status;
+    the Play source refused unless enabled, manual-only, and no token in the status; the version pin
+    (the pinned version downloaded instead of the latest, no further update once reached, never a
+    downgrade, a newer download dropped but an upload kept, the command's validation);
   * uploads: out/apps/com.waze as an `.apkm` gives "same version, nothing to do"; the re-signed
     `.apkm` is rejected (no version marked bad); an XAPK-named newer set is staged and installed when
     idle; a bundletool `.apks` is staged; a zip without APKs and a non-ZIP are refused; a set without
     the ABI split is refused; the size limit holds.
 * `services/api/test/test_api.py`: the status shape, the settings fields and their validation, the
-  kick, and an upload streamed byte-exact into the helper (413 from the headers alone).
+  pin (its choices, validation, the check a changed pin starts), the kick, and an upload streamed byte-exact into the helper (413 from the headers alone).
 * `cargo test`: the APKPure answer decoder, XAPK member names, Java-properties unescaping, and the Play
   profile.
 

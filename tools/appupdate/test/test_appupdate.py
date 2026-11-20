@@ -606,6 +606,81 @@ class StateMachine(unittest.TestCase):
         self.assertTrue(c.startswith("--source play --auth-file"), c)
         self.assertIn("--dispenser https://d.example/auth", c)
 
+    def relabel(self, vc, vn):
+        """the installed set as another versionCode (installed.json is what the updater reads)"""
+        with open(self.t("apps", "com.waze", "installed.json"), "w") as f:
+            json.dump({"package": "com.waze", "versionCode": vc, "versionName": vn, "signer": SIGNER}, f)
+
+    def pin(self, *args):
+        import io
+        import contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            return au.cmd_pin(list(args))
+
+    def test_pin_downloads_the_pinned_version_not_the_latest(self):
+        self.mode(latest=VC + 50)  # the source's latest is newer than the pin
+        self.assertEqual(self.pin(str(VC), "5.25.0.1"), 0)
+        s = au.load_settings()
+        self.assertEqual((s["pinVersionCode"], s["pinVersionName"]), (VC, "5.25.0.1"))
+        self.connected = True
+        au.cmd_run(False)
+        st = self.state()
+        self.assertEqual(st["pending"]["versionCode"], VC, st["lastMessage"])
+        self.assertEqual(st["latest"]["versionCode"], VC + 50)
+        dl = [c for c in self.calls("tlplay.log") if "download" in c]
+        self.assertEqual(len(dl), 1)
+        self.assertIn("--version-code %d " % VC, dl[0])
+
+    def test_pin_reached_stops_further_updates(self):
+        self.relabel(VC, "5.25.0.1")
+        self.mode(latest=VC + 50)
+        self.pin(str(VC), "5.25.0.1")
+        au.cmd_run(True)
+        st = self.state()
+        self.assertEqual(st["lastResult"], "up-to-date", st["lastMessage"])
+        self.assertIn("as pinned (the latest is v%d)" % (VC + 50), st["lastMessage"])
+        self.assertFalse(any("download" in c for c in self.calls("tlplay.log")))
+        self.pin("latest")  # unpinned: the latest is wanted again
+        self.assertEqual(au.load_settings()["pinVersionCode"], 0)
+        self.connected = True
+        au.cmd_run(True)
+        self.assertEqual(self.state()["wanted"], None)
+        self.assertTrue(any("--version-code %d " % (VC + 50) in c for c in self.calls("tlplay.log")))
+
+    def test_pin_older_than_installed_never_downgrades(self):
+        self.relabel(VC + 10, "5.26")
+        self.mode(latest=VC + 50)
+        self.pin(str(VC))
+        au.cmd_run(True)
+        st = self.state()
+        self.assertEqual(st["lastResult"], "pinned-older", st["lastMessage"])
+        self.assertIsNone(st["wanted"])
+        self.assertFalse(any("download" in c for c in self.calls("tlplay.log")))
+
+    def test_pin_drops_a_newer_download_but_not_an_upload(self):
+        self.connected = True
+        au.cmd_run(False)  # VC downloaded and waiting for the car to leave
+        self.assertEqual(self.state()["pending"]["versionCode"], VC)
+        self.pin(str(VC - 50))
+        au.cmd_run(True)
+        st = self.state()
+        self.assertTrue(any(h["result"] == "pin-dropped" for h in st["history"]))
+        # the newer download is gone; the pinned version (older, still above the installed one) took its place
+        self.assertEqual(st["pending"]["versionCode"], VC - 50)
+        self.assertTrue(any("--version-code %d " % (VC - 50) in c for c in self.calls("tlplay.log")))
+        st["pending"] = {"versionCode": VC, "versionName": "5.25.0.1", "source": "upload"}
+        au.save_state(st)
+        au.cmd_run(True)
+        self.assertEqual(self.state()["pending"]["versionCode"], VC)  # the user's own upload stays
+
+    def test_pin_command_validates(self):
+        self.assertEqual(self.pin("abc"), 2)
+        self.assertEqual(self.pin(str(VC), "bad name;"), 2)
+        self.assertEqual(self.pin(), 2)
+        with open(au.SETTINGS_FILE, "w") as f:
+            json.dump({"pinVersionCode": True, "pinVersionName": "x y"}, f)
+        self.assertEqual(au.load_settings()["pinVersionCode"], 0)  # a bool is not a versionCode
+
     def test_manual_source_never_checks(self):
         with open(au.SETTINGS_FILE, "w") as f:
             json.dump({"source": "manual"}, f)

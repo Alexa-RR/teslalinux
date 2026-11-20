@@ -73,12 +73,17 @@ Changes from upstream:
     flipped upwards when there is no room below), so the scrolling settings panel no longer cuts them.
   * The page's own text fields count as "keyboard open" for `js/keyboard/device-keyboard.js`: typing in
     them neither resizes the app's display nor hands the keyboard to the app.
+  * The sidebar and the content scroll separately inside the page (`css/app.css` `.settings-layout`,
+    `#settings-content`). At 820 px and below (the car: 773 CSS px) upstream turned the sidebar into a
+    wrapped strip above the content, which got a zero-height grid row and hid every entry; it stays a
+    212 px column there now, and only at 560 px and below becomes one sideways-scrolling row.
 * Settings, **App updates** (new sidebar section between "Language & region" and "Device";
   `js/settings/settings-controller.js` `_renderAppUpdateSection`, four `js/core/api-client.js` methods,
   the upload one with XMLHttpRequest for its progress events; `css/app.css` `.settings-inline-field`,
   `.settings-text-input`): Waze updates (`tools/appupdate`, docs/APP-UPDATES.md). Update source
   (APKPure automatic / manual uploads only / Google Play via Aurora, "unavailable" unless enabled under
-  Advanced), "Update Waze automatically", "Allow updates over LTE", the status ("Update server
+  Advanced), "Update Waze automatically", "Waze version" (Latest, or a version pin from the API's `pinChoices`),
+  "Allow updates over LTE", the status ("Update server
   unavailable since ...", a verified update waiting, the health check, the last result and notice),
   "Check for an update now", "Upload an update" (.apkm/.xapk/.apks/.zip/.apk up to 400 MB, progress,
   then the verification result), and Advanced: the Google Play switch and the dispenser address.

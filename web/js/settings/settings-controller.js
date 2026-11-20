@@ -2278,6 +2278,48 @@
           trailing: this._createSwitch(settings.autoUpdate !== false, (checked) => save({ autoUpdate: checked })),
           dense: false,
         });
+        // teslalinux: a version pin: download exactly this version and no newer one (the Map frame
+        // rate "Full" works only on the Waze versions it is verified for)
+        const pinCode = settings.pinVersionCode || 0;
+        const pinOptions = [{ value: "0", label: "Latest" }];
+        const choices = (info.pinChoices || []).slice();
+        if (pinCode && !choices.some((c) => c.versionCode === pinCode)) {
+          choices.push({ versionCode: pinCode, versionName: settings.pinVersionName, reason: "" });
+        }
+        for (let index = 0; index < choices.length; index += 1) {
+          const c = choices[index];
+          pinOptions.push({ value: String(c.versionCode), label: "Stay on " + (c.versionName || "versionCode " + c.versionCode) });
+        }
+        // the versions the Map frame rate "Full" works on, named in the subtitle
+        const pacingNames = choices.filter((c) => c.reason === "mapPacing" && c.versionName).map((c) => c.versionName);
+        const pacingNote = pacingNames.length ? " Map frame rate Full works on " + pacingNames.join(", ") + " only." : "";
+        let pinSubtitle;
+        if (!pinCode) {
+          pinSubtitle = "Updates to each new Waze version." + pacingNote;
+        } else {
+          const pinName = settings.pinVersionName || "versionCode " + pinCode;
+          const installedCode = (info.installed && info.installed.versionCode) || 0;
+          pinSubtitle =
+            installedCode > pinCode
+              ? "Pinned to " + pinName + ": the installed " + ver(info.installed) + " is newer, so no further updates (never back to an older version)"
+              : installedCode === pinCode
+                ? "Pinned to " + pinName + ": installed, no newer version is downloaded"
+                : "Pinned to " + pinName + ": downloaded and installed like an update, then no newer one";
+        }
+        this._appendTile({
+          icon: "push_pin",
+          title: "Waze version",
+          subtitle: pinSubtitle,
+          trailing: this._createSelect(pinOptions, String(pinCode), async (value) => {
+            const code = parseInt(value, 10) || 0;
+            const chosen = choices.find((c) => c.versionCode === code);
+            await this.apiClient.setAppUpdateSettings({
+              pinVersionCode: code,
+              pinVersionName: chosen && chosen.versionName ? chosen.versionName : "",
+            });
+          }),
+          dense: false,
+        });
         this._appendTile({
           icon: "cell_tower",
           title: "Allow updates over LTE",

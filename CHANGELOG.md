@@ -61,6 +61,25 @@ Measured on a Raspberry Pi 4 at its standard speed, in Car mode, on a road route
   to 75 and 150: Waze can no longer queue pictures faster than the graphics chip draws them, the
   same limit Android sets.
 
+### Keep one Waze version
+
+*Settings > App updates > Waze version.*
+
+Waze can stay on one version instead of updating to each new one: "Stay on 5.27.5.0", the version
+the Full map frame rate works on, or on the installed version. A Pi with an older Waze downloads
+exactly that version and stops there; one with a newer Waze keeps it and stops updating, because
+Waze's data cannot go back to an older version. "Latest" updates as before. A new install can
+start pinned with `--waze-version 1030750`.
+
+### Settings menu on the car's screen
+
+*The list of settings pages on the left was missing in the car's browser.*
+
+On a screen as narrow as the car's (773 points wide on a Model 3), the menu shrank to an empty
+strip above the settings and none of its pages could be opened. It now stays beside the settings,
+a little narrower, and scrolls on its own; the settings scroll separately, so the menu stays in
+view. Phone-sized screens get the menu as one row that scrolls sideways.
+
 ### Waze on a real Raspberry Pi
 
 *The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything

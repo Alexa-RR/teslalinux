@@ -28,7 +28,11 @@ The app updater (tools/appupdate/teslalinux-appupdate, docs/APP-UPDATES.md), new
                                "update server unavailable since", rollback notices
 * POST /api/appUpdateSettings  JSON with any of source ("apkpure" | "manual" | "play"), autoUpdate,
                                allowMetered, playEnabled (bools), dispenserUrl ("" = Aurora's default,
-                               else https://...); 500 on anything else
+                               else https://...), pinVersionCode (0 = the latest; else download exactly
+                               that version and no newer one) with pinVersionName; 500 on anything else.
+                               A changed pin starts a check at once. GET's "pinChoices" lists the
+                               versions the page offers to pin: the ones the Map frame rate "Full" is
+                               verified for (tools/apps/waze-map-pacing.py) and the installed one
 * POST /api/appUpdateCheck     check now (`teslalinux-appupdate kick --force` through one sudoers rule)
 * POST /api/appUpdateUpload?name=FILE   a bundle (.apkm/.xapk/.apks/.zip/.apk, at most 400 MB) streamed
                                into `teslalinux-appupdate receive-upload` (root, sudoers); answers its
@@ -370,7 +374,11 @@ def app_state():
 
 # ---------------------------------------------------------------------------- app updates
 
-APPUPDATE_DEFAULTS = {"source": "apkpure", "autoUpdate": True, "allowMetered": False, "playEnabled": False, "dispenserUrl": ""}
+APPUPDATE_DEFAULTS = {"source": "apkpure", "autoUpdate": True, "allowMetered": False, "playEnabled": False, "dispenserUrl": "",
+                      "pinVersionCode": 0, "pinVersionName": ""}
+# the same rules as teslalinux-appupdate's load_settings (it checks again before use)
+VERSION_NAME_RE = re.compile(r"[0-9][0-9A-Za-z._-]{0,31}")
+MAX_VERSION_CODE = (1 << 31) - 1
 APPUPDATE_SOURCES = ("apkpure", "manual", "play")
 APPUPDATE_MAX_UPLOAD = int(os.environ.get("TESLALINUX_APPUPDATE_MAX_UPLOAD", str(400 << 20)))
 APPUPDATE_DEFAULT_DISPENSER = "https://auroraoss.com/api/auth"
@@ -398,7 +406,29 @@ def appupdate_settings():
         s["source"] = raw["source"]
     if isinstance(raw.get("dispenserUrl"), str) and (raw["dispenserUrl"] == "" or DISPENSER_RE.fullmatch(raw["dispenserUrl"])):
         s["dispenserUrl"] = raw["dispenserUrl"]
+    pin = raw.get("pinVersionCode")
+    if _valid_version_code(pin):
+        s["pinVersionCode"] = pin
+        if isinstance(raw.get("pinVersionName"), str) and VERSION_NAME_RE.fullmatch(raw["pinVersionName"]):
+            s["pinVersionName"] = raw["pinVersionName"]
     return s
+
+
+def _valid_version_code(v):
+    return isinstance(v, int) and not isinstance(v, bool) and 0 < v <= MAX_VERSION_CODE
+
+
+def appupdate_pin_choices(installed):
+    """The versions the settings page offers to pin: those the "Full" map frame rate is verified for,
+    then the installed one, each once, with why it is offered."""
+    out, seen = [], set()
+    for v in map_pacing_status().get("verifiedVersions") or []:
+        if _valid_version_code(v.get("versionCode")) and v["versionCode"] not in seen:
+            seen.add(v["versionCode"])
+            out.append({"versionCode": v["versionCode"], "versionName": v.get("versionName"), "reason": "mapPacing"})
+    if installed and _valid_version_code(installed.get("versionCode")) and installed["versionCode"] not in seen:
+        out.append({"versionCode": installed["versionCode"], "versionName": installed.get("versionName"), "reason": "installed"})
+    return out
 
 
 def appupdate_state():
@@ -425,6 +455,7 @@ def appupdate_state():
         "bad": st.get("bad") or {},
         "upload": _read_json(os.path.join(os.path.dirname(APPUPDATE_STATE), "upload.json")),
         "maxUpload": APPUPDATE_MAX_UPLOAD,
+        "pinChoices": appupdate_pin_choices(ver(st.get("installed"))),
     }
 
 
@@ -441,8 +472,19 @@ def set_appupdate_settings(req):
         u = req["dispenserUrl"]
         if not isinstance(u, str) or len(u) > 256 or not (u == "" or DISPENSER_RE.fullmatch(u)):
             return False
+    if "pinVersionCode" in req and not (req["pinVersionCode"] == 0 and not isinstance(req["pinVersionCode"], bool)
+                                        or _valid_version_code(req["pinVersionCode"])):
+        return False
+    if "pinVersionName" in req and not (isinstance(req["pinVersionName"], str)
+                                        and (req["pinVersionName"] == "" or VERSION_NAME_RE.fullmatch(req["pinVersionName"]))):
+        return False
     with _appupdate_lock:
         s = appupdate_settings()
+        pin_before = s["pinVersionCode"]
+        if "pinVersionCode" in req and "pinVersionName" not in req:
+            req = dict(req, pinVersionName="")  # a name that belonged to the previous pin
+        if req.get("pinVersionCode") == 0:
+            req = dict(req, pinVersionName="")
         s.update(req)
         d = os.path.dirname(APPUPDATE_SETTINGS)
         os.makedirs(d, exist_ok=True)
@@ -453,6 +495,8 @@ def set_appupdate_settings(req):
             os.fsync(f.fileno())
         os.chmod(tmp, 0o644)
         os.replace(tmp, APPUPDATE_SETTINGS)
+    if s["pinVersionCode"] != pin_before and s["autoUpdate"]:
+        appupdate_check_now()  # the pinned version (or the latest) is looked up and fetched now
     return True
 
 

@@ -183,7 +183,10 @@ class AppUpdate(unittest.TestCase):
     def test_status_shape(self):
         st = json.loads(call("appUpdate")[2])
         self.assertEqual(st["settings"], {"source": "apkpure", "autoUpdate": True, "allowMetered": False,
-                                          "playEnabled": False, "dispenserUrl": ""})
+                                          "playEnabled": False, "dispenserUrl": "", "pinVersionCode": 0, "pinVersionName": ""})
+        # the versions offered to pin: the map frame rate's verified ones, then the installed one
+        self.assertEqual(st["pinChoices"], [{"versionCode": 1030750, "versionName": "5.27.5.0", "reason": "mapPacing"},
+                                            {"versionCode": 1030736, "versionName": "5.25.0.1", "reason": "installed"}])
         self.assertEqual(st["maxUpload"], 4 << 20)
         self.assertEqual(st["installed"], {"versionCode": 1030736, "versionName": "5.25.0.1"})  # no signer, no history
         self.assertEqual(st["latest"]["versionName"], "5.26.0.0")
@@ -199,7 +202,8 @@ class AppUpdate(unittest.TestCase):
             self.assertEqual(call("appUpdateSettings", "POST", json.dumps({"source": src}), "application/json")[0], 200)
         self.assertEqual(call("appUpdateSettings", "POST", json.dumps({"playEnabled": True}), "application/json")[0], 200)
         st = json.loads(call("appUpdate")[2])["settings"]
-        self.assertEqual(st, {"source": "apkpure", "autoUpdate": True, "allowMetered": True, "playEnabled": True, "dispenserUrl": url})
+        self.assertEqual(st, {"source": "apkpure", "autoUpdate": True, "allowMetered": True, "playEnabled": True, "dispenserUrl": url,
+                              "pinVersionCode": 0, "pinVersionName": ""})
         for bad in ({"source": "apkmirror"}, {"playEnabled": "yes"}, {"allowMetered": 1}, {"dispenserUrl": "http://x.org/"}, {"dispenserUrl": "https://a b"},
                     {"dispenserUrl": "https://u:p@x.org/"}, {"other": True}, {}, [], "x"):
             self.assertEqual(call("appUpdateSettings", "POST", json.dumps(bad), "application/json")[0], 500, bad)
@@ -207,6 +211,39 @@ class AppUpdate(unittest.TestCase):
                               "application/json")[0], 200)
         self.assertEqual(json.loads(call("appUpdate")[2])["settings"]["dispenserUrl"], "")
         self.assertEqual(call("appUpdateSettings", "POST", json.dumps({"playEnabled": False}), "application/json")[0], 200)
+
+    def test_version_pin(self):
+        def post(obj):
+            return call("appUpdateSettings", "POST", json.dumps(obj), "application/json")[0]
+
+        def kicks():
+            try:
+                with open(KICK_LOG) as f:
+                    return f.read().count("kick --force")
+            except OSError:
+                return 0
+
+        def wait_kicks(n):
+            for _ in range(50):
+                if kicks() >= n:
+                    break
+                time.sleep(0.05)
+            return kicks()
+        before = kicks()
+        self.assertEqual(post({"pinVersionCode": 1030750, "pinVersionName": "5.27.5.0"}), 200)
+        st = json.loads(call("appUpdate")[2])["settings"]
+        self.assertEqual((st["pinVersionCode"], st["pinVersionName"]), (1030750, "5.27.5.0"))
+        self.assertEqual(wait_kicks(before + 1), before + 1)  # a changed pin is looked up at once
+        self.assertEqual(post({"pinVersionCode": 1030750, "pinVersionName": "5.27.5.0"}), 200)
+        time.sleep(0.2)
+        self.assertEqual(kicks(), before + 1)  # unchanged: no extra check
+        for bad in ({"pinVersionCode": -1}, {"pinVersionCode": True}, {"pinVersionCode": "1030750"}, {"pinVersionCode": 1 << 31},
+                    {"pinVersionName": "5.27; rm"}, {"pinVersionName": 5}):
+            self.assertEqual(post(bad), 500, bad)
+        self.assertEqual(post({"pinVersionCode": 0}), 200)  # back to the latest; the name goes with the pin
+        st = json.loads(call("appUpdate")[2])["settings"]
+        self.assertEqual((st["pinVersionCode"], st["pinVersionName"]), (0, ""))
+        self.assertEqual(wait_kicks(before + 2), before + 2)
 
     def test_upload_streams_into_the_root_helper(self):
         data = os.urandom(3 << 20)

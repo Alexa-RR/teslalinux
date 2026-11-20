@@ -15,6 +15,8 @@
     teslalinux-appupdate kick [--force]  start teslalinux-appupdate.service now (no-op if it runs)
     teslalinux-appupdate status          the state as JSON (what GET /api/appUpdate shows)
     teslalinux-appupdate rollback        back to <pkg>.old by hand (marks the current version bad)
+    teslalinux-appupdate pin VERSIONCODE [VERSIONNAME] | pin latest
+                                         download exactly that version, and no newer one (see below)
     teslalinux-appupdate receive-upload --size N --name FILE
                                          (api.py through sudo) a bundle uploaded from the settings page on
                                          stdin: stored root-only, unpacked, verified, staged like a download
@@ -41,7 +43,14 @@ established connection to the display or touch sockets (9091, 9999).
 
 Runs as root (systemd units in host/phase1-pios/etc/systemd). Settings (written by services/api/api.py
 as tesla): /var/lib/teslalinux/state/appupdate.json {"source", "autoUpdate", "allowMetered",
-"playEnabled", "dispenserUrl"}.
+"playEnabled", "dispenserUrl", "pinVersionCode", "pinVersionName"}.
+
+Version pin ("pinVersionCode", 0 = none; `teslalinux-appupdate pin VERSIONCODE|latest`, or the settings
+page): the updater downloads exactly that version instead of the latest (a first install too) and
+goes no further; a staged download newer than the pin is dropped. It never goes back to an older
+version: with a newer Waze installed, the pin only stops further updates (Android keeps an app's data
+across upgrades only). An upload from the settings page is the user's own choice and installs even
+past the pin.
 State (read by api.py): /var/lib/teslalinux/appupdate/state.json.
 """
 import fcntl
@@ -138,7 +147,11 @@ SERVICE = "teslalinux-appupdate.service"
 # source: "apkpure" (automatic, default), "manual" (uploads from the settings page only) or "play"
 # (Google Play through a token dispenser; used only while playEnabled, an advanced setting, is on)
 SOURCES = ("apkpure", "manual", "play")
-DEFAULT_SETTINGS = {"source": "apkpure", "autoUpdate": True, "allowMetered": False, "playEnabled": False, "dispenserUrl": ""}
+DEFAULT_SETTINGS = {"source": "apkpure", "autoUpdate": True, "allowMetered": False, "playEnabled": False, "dispenserUrl": "",
+                    "pinVersionCode": 0, "pinVersionName": ""}
+# a version name as Waze writes them (5.27.5.0); services/api/api.py checks the same
+VERSION_NAME_RE = re.compile(r"[0-9][0-9A-Za-z._-]{0,31}")
+MAX_VERSION_CODE = (1 << 31) - 1
 DEFAULT_DISPENSER = "https://auroraoss.com/api/auth"
 MAX_UPLOAD = int(E("APPUPDATE_MAX_UPLOAD", str(400 << 20)))
 
@@ -187,7 +200,17 @@ def load_settings():
         s["source"] = raw["source"]
     if isinstance(raw.get("dispenserUrl"), str) and valid_dispenser_url(raw["dispenserUrl"]):
         s["dispenserUrl"] = raw["dispenserUrl"]
+    pin = raw.get("pinVersionCode")
+    if isinstance(pin, int) and not isinstance(pin, bool) and 0 < pin <= MAX_VERSION_CODE:
+        s["pinVersionCode"] = pin
+        name = raw.get("pinVersionName")
+        if isinstance(name, str) and VERSION_NAME_RE.fullmatch(name):
+            s["pinVersionName"] = name
     return s
+
+
+def pin_label(settings):
+    return settings["pinVersionName"] or "versionCode %d" % settings["pinVersionCode"]
 
 
 def effective_source(settings):
@@ -767,6 +790,14 @@ def cycle(force=False):
     if st.get("pending") and int(st["pending"]["versionCode"]) <= inst_vc:
         st["pending"] = None  # installed by hand meanwhile
         shutil.rmtree(_p("pending"), ignore_errors=True)
+    pin = settings["pinVersionCode"]
+    if pin and st.get("wanted") and int(st["wanted"]["versionCode"]) != pin:
+        st["wanted"] = None  # chosen before the pin
+    if pin and st.get("pending") and st["pending"].get("source") != "upload" and int(st["pending"]["versionCode"]) > pin:
+        event(st, "pin-dropped", "dropped the downloaded Waze %s: Waze is pinned to %s"
+              % (st["pending"].get("versionName"), pin_label(settings)), now)
+        st["pending"] = None
+        shutil.rmtree(_p("pending"), ignore_errors=True)
     if effective_source(settings) == "manual":
         st["wanted"] = None
         if not st.get("pending"):
@@ -781,11 +812,22 @@ def cycle(force=False):
             record_failure(st, res.get("error", "play"), res.get("message", "?"), now)
             return st
         record_success(st, now)
-        vc, vn = int(res["versionCode"]), res.get("versionName")
-        st["latest"] = {"versionCode": vc, "versionName": vn, "checkedAt": now}
-        if vc <= inst_vc:
+        latest_vc, latest_vn = int(res["versionCode"]), res.get("versionName")
+        st["latest"] = {"versionCode": latest_vc, "versionName": latest_vn, "checkedAt": now}
+        # the version to have: the pinned one, else the latest
+        if pin:
+            vc, vn = pin, (latest_vn if pin == latest_vc else pin_label(settings))
+        else:
+            vc, vn = latest_vc, latest_vn
+        if pin and inst_vc > pin:
             st["wanted"] = None
-            event(st, "up-to-date", "Waze %s is the latest" % (vn,), now)
+            event(st, "pinned-older", "Waze %s is installed, newer than the pinned %s: no further updates, and no "
+                  "going back (the app's data is only kept across upgrades)"
+                  % ((st["installed"] or {}).get("versionName"), vn), now)
+        elif vc <= inst_vc:
+            st["wanted"] = None
+            event(st, "up-to-date", ("Waze %s is installed, as pinned (the latest is %s)" % (vn, latest_vn)) if pin
+                  else "Waze %s is the latest" % (vn,), now)
         elif str(vc) in (st.get("bad") or {}):
             st["wanted"] = None
             event(st, "skipping-bad", "%s offers %s (%s), which failed before: %s"
@@ -1135,6 +1177,34 @@ def cmd_kick(force):
         return 1
 
 
+def cmd_pin(args):
+    """pin VERSIONCODE [VERSIONNAME] | pin latest: writes the pin into the settings file (kept as its
+    owner wrote it, the settings page's user). The next run (`kick --force`) acts on it."""
+    if args == ["latest"]:
+        code, name = 0, ""
+    elif 1 <= len(args) <= 2 and args[0].isdigit() and 0 < int(args[0]) <= MAX_VERSION_CODE:
+        code, name = int(args[0]), args[1] if len(args) == 2 else ""
+        if name and not VERSION_NAME_RE.fullmatch(name):
+            print("teslalinux-appupdate: not a version name: %r" % name, file=sys.stderr)
+            return 2
+    else:
+        print("usage: teslalinux-appupdate pin VERSIONCODE [VERSIONNAME] | pin latest", file=sys.stderr)
+        return 2
+    raw = read_json(SETTINGS_FILE, {}) or {}
+    raw["pinVersionCode"], raw["pinVersionName"] = code, name
+    try:
+        st_ = os.stat(SETTINGS_FILE)
+        owner = (st_.st_uid, st_.st_gid)
+    except OSError:
+        owner = None
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+    write_json(SETTINGS_FILE, raw, 0o644)
+    if owner and os.geteuid() == 0:
+        os.chown(SETTINGS_FILE, *owner)
+    print("pinned to %s" % (name or code) if code else "no pin: the latest version")
+    return 0
+
+
 def status():
     st, settings = load_state(), load_settings()
     st["installed"] = installed_info() or st.get("installed")
@@ -1171,6 +1241,8 @@ def main(argv):
         return 0
     if cmd == "rollback":
         return cmd_rollback()
+    if cmd == "pin":
+        return cmd_pin(rest)
     if cmd == "receive-upload":
         args = dict(zip(rest[0::2], rest[1::2]))
         try:
