@@ -477,17 +477,22 @@
       max-width: 900px;
     }
 
+    /* teslalinux: the sidebar and the content scroll on their own inside the page (the controller
+       keeps #settings-content's scrollTop across re-renders), so the menu stays in view */
     .settings-layout {
       display: grid;
-      grid-template-columns: var(--settings-sidebar-width) 1fr;
+      grid-template-columns: var(--settings-sidebar-width) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       height: 100%;
-      min-height: 100%;
+      min-height: 0;
     }
 
     #settings-sidebar {
       border-right: 1px solid var(--border);
       padding: 12px;
+      min-height: 0;
       overflow: auto;
+      overscroll-behavior: contain;
       background: rgba(20, 20, 20, 0.72);
       border-top-right-radius: 22px;
       border-bottom-right-radius: 22px;
@@ -529,13 +534,17 @@
 
     .settings-content-wrap {
       min-width: 0;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       height: 100%;
     }
 
     #settings-content {
+      flex: 1 1 auto;
+      min-height: 0;
       overflow: auto;
+      overscroll-behavior: contain;
       padding: 16px;
       width: 100%;
     }
@@ -1187,27 +1196,37 @@
         max-height: 38vh;
       }
 
-      .settings-layout {
-        grid-template-columns: 1fr;
+      /* teslalinux: the car's screen (773 CSS px wide on a Model 3) keeps the menu beside the
+         content, narrower and denser; upstream's wrapped strip on top got a zero-height grid row
+         here and hid every entry */
+      :root {
+        --settings-sidebar-width: 212px;
       }
 
       #settings-sidebar {
-        border-right: 0;
-        border-bottom: 1px solid var(--border);
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        padding: 10px;
+        padding: 8px;
       }
 
       .settings-menu-item {
-        width: auto;
-        min-width: 140px;
-        margin: 0;
+        min-height: 50px;
+        margin: 3px 0;
+        padding: 0 12px;
+        gap: 10px;
+      }
+
+      .settings-menu-icon {
+        width: 24px;
+        min-width: 24px;
+        font-size: 22px;
       }
 
       .settings-menu-label {
-        font-size: 17px;
+        font-size: 16px;
+        line-height: 1.2;
+      }
+
+      .settings-tile-wide {
+        grid-template-columns: 34px 1fr minmax(200px, auto);
       }
 
       .settings-description {
@@ -1244,6 +1263,32 @@
 
       .release-details-text {
         font-size: 18px;
+      }
+    }
+
+    /* teslalinux: phone-sized screens (after the 820 px rules, which it overrides): the menu becomes
+       one scrolling row above the content */
+    @media (max-width: 560px) {
+      .settings-layout {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      #settings-sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        border-radius: 0;
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+
+      .settings-menu-item {
+        width: auto;
+        flex: 0 0 auto;
+        margin: 0;
+        white-space: nowrap;
       }
     }
 
