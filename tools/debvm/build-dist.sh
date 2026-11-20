@@ -175,6 +175,7 @@ step_art() {
   python3 "$DEBVM_PATCHES/art_standalone-gcc14.py"
   python3 "$DEBVM_PATCHES/art_standalone-dex2oat-context.py"
   python3 "$DEBVM_PATCHES/art_standalone-conscrypt.py"
+  python3 "$DEBVM_PATCHES/art_standalone-androidfw-free.py"
   # Alpine: make ____PREFIX=/usr ____LIBDIR=lib, then make ... install. Build and install with
   # the same prefix (art-standalone.pc is not regenerated when the prefix changes between the two).
   # C sources here are written for C23 (bool/true/false without <stdbool.h>, e.g. liblog's

@@ -21,9 +21,6 @@ replaced; each is removed from this list only when the real behavior is in.
 | `android/app/usage/StorageStatsManager.java` | app bytes reported as 0 | Size of the APK + extracted natives |
 
 ## Placeholders seen in the upstream ATL merge (added 2026-11-11, fix in the fork)
-- `AssetManager.destroy()` only logs "STUB" (old upstream code; the merged build calls it about 8
-  times per start). The native AssetManager and its ApkAssets are never freed. A real one needs
-  reference counts, because sibling managers share ApkAssets (`tl_assets_share`).
 - `KeyGenParameterSpec.Builder`: certificate, digest, padding and validity setters return `this`
   without recording anything; the spec does not carry them.
 - `Paint.getFillPath` (upstream, came in through a clean merge) returns false. It should build the
@@ -165,7 +162,6 @@ replaced; each is removed from this list only when the real behavior is in.
   llvmpipe (software GL for the map at ~25 fps) plus Waze's RenderThread; the Java main thread is ~15%.
 - Launch to MainScreenVisible is ~3.5 s in the VM (process start to Waze's MainScreenVisible; Waze's
   own boot clock reports 2.2 s from its entry point, so ART/ATL/APK startup is ~1.3 s).
-- Upstream ATL logs "AssetManager.destroy(): STUB" at startup: the native manager is never released.
 - GSK renderer: cairo in the VM (llvmpipe); the Pi should run the GL renderer so SurfaceView frames
   stay GL textures (egl.c builds them with gdk_gl_texture_builder; no download).
 

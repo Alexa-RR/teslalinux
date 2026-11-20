@@ -19,6 +19,22 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### Platform
+
+#### Fixed
+
+- ATL's `AssetManager.destroy()` only logged "STUB", so no asset manager and no loaded APK was ever
+  freed: every Context has a manager of its own, and a parsed package one more. The native manager
+  is now deleted when its last reference goes or the object is finalized, and its APKs are released
+  when no manager sharing them is left (a reference-counted set owning the strong reference
+  `ApkAssets_load` hands out). Asset streams take a reference of their own and themes are deleted
+  when released, as in AOSP; without the first, the first asset stream closed would have freed its
+  manager. art_standalone's androidfw C API gains `AssetManager_delete` and `ApkAssets_release`
+  (`tools/debvm/patches/art_standalone-androidfw-free.py`), which also stops `AssetManager_setApkAssets`
+  leaking a list per call. Measured with 300 managers a round over framework-res.apk: the process
+  grew about 560 MB a round, now not at all. `tools/debian/atl-tests/assets/` checks it (11 checks:
+  streams, themes, sharing, memory).
+
 ## [0.3.1] - 2026-11-20
 
 Graphite map colours for Waze 5.27, the version a new install gets.
