@@ -97,7 +97,8 @@
       "path": "waze/skins/default/skin_values.day.lua",
       "replace": "graphite-day",
       "verified": [
-        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "4e51a4ca5bfe8565c79c15d6ee580583d60eea27a72aaa7650423d2f7c1572fa"}
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "4e51a4ca5bfe8565c79c15d6ee580583d60eea27a72aaa7650423d2f7c1572fa"},
+        {"versionCode": 1030750, "versionName": "5.27.5.0", "sha256": "4e51a4ca5bfe8565c79c15d6ee580583d60eea27a72aaa7650423d2f7c1572fa"}
       ]
     },
     {
@@ -106,7 +107,8 @@
       "path": "waze/skins/default/experiment/skin_values.day.lua",
       "replace": "graphite-day",
       "verified": [
-        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "c9ab9833053a436f66c63bafd2cdbaf06592d44bde06b416218fc55c3eab8335"}
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "c9ab9833053a436f66c63bafd2cdbaf06592d44bde06b416218fc55c3eab8335"},
+        {"versionCode": 1030750, "versionName": "5.27.5.0", "sha256": "c9ab9833053a436f66c63bafd2cdbaf06592d44bde06b416218fc55c3eab8335"}
       ]
     },
     {
@@ -115,7 +117,8 @@
       "path": "waze/skins/default/skin_values.night.lua",
       "replace": "graphite-night",
       "verified": [
-        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "ad7c719dc4e946908780f257f224bcaeb93242f7fef572b1442591e538509133"}
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "ad7c719dc4e946908780f257f224bcaeb93242f7fef572b1442591e538509133"},
+        {"versionCode": 1030750, "versionName": "5.27.5.0", "sha256": "ad7c719dc4e946908780f257f224bcaeb93242f7fef572b1442591e538509133"}
       ]
     },
     {
@@ -124,7 +127,8 @@
       "path": "waze/skins/default/experiment/skin_values.night.lua",
       "replace": "graphite-night",
       "verified": [
-        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "578ee060acfea249ce9c787f87e1fb8ebaea3c54fbfa629d27f2f1ab6a6b5a9d"}
+        {"versionCode": 1030736, "versionName": "5.25.0.1", "sha256": "578ee060acfea249ce9c787f87e1fb8ebaea3c54fbfa629d27f2f1ab6a6b5a9d"},
+        {"versionCode": 1030750, "versionName": "5.27.5.0", "sha256": "578ee060acfea249ce9c787f87e1fb8ebaea3c54fbfa629d27f2f1ab6a6b5a9d"}
       ]
     }
   ]

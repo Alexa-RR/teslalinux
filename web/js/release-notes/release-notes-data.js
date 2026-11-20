@@ -8,6 +8,16 @@
   TAHtml.releaseNotesData = {
     "versions": [
       {
+        "versionName": "v0.3.1 · 2026-11-20",
+        "changelogItems": [
+          {
+            "title": "Graphite map colours on Waze 5.27",
+            "shortDescription": "Settings > Waze interface > Map colours > Graphite.",
+            "descriptionMarkdown": "The Graphite map colours were checked with Waze 5.25 only, so with Waze 5.27.5 the map kept Waze's own colours. They are now checked with 5.27.5 too (day and night, on the map, while driving and in the route overview) and apply to it. The route preview's bubbles and the position arrow still keep Waze's own colours, as before."
+          }
+        ]
+      },
+      {
         "versionName": "v0.3.0 · 2026-11-20",
         "changelogItems": [
           {

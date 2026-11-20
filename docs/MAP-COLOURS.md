@@ -81,5 +81,11 @@ whether every replacement still occurs exactly once. Then:
    --data-dir <unpacked data folder> --version-code N --version-name X.Y`, or copy the lines from step
    2), commit, and release. Keep the older versions on the list while cars still run them.
 
-Verified so far: Waze 5.25.0.1 (versionCode 1030736), all four files (day, night, and the experiment
-copies), on the Debian VM, Nov 12.
+Verified so far:
+- Waze 5.25.0.1 (versionCode 1030736), all four files (day, night, and the experiment copies), on the
+  Debian VM, Nov 12.
+- Waze 5.27.5.0 (versionCode 1030750), all four files, on a Raspberry Pi 4, Nov 20. The four palette
+  files are byte for byte those of 5.25.0.1 (the same sha256s). Checked in Car mode, day and night:
+  the idle map, a drive and the route overview (grey land, white or dark roads, the palette's water
+  and parks, alternative routes in light blue, labels readable; traffic, highway shields and pins
+  Waze's own; the route preview's "Current" bubble Waze's purple or cyan, as on 5.25).

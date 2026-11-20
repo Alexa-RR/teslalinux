@@ -19,6 +19,26 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-20
+
+Graphite map colours for Waze 5.27, the version a new install gets.
+
+### Graphite map colours on Waze 5.27
+
+*Settings > Waze interface > Map colours > Graphite.*
+
+The Graphite map colours were checked with Waze 5.25 only, so with Waze 5.27.5 the map kept Waze's
+own colours. They are now checked with 5.27.5 too (day and night, on the map, while driving and in
+the route overview) and apply to it. The route preview's bubbles and the position arrow still keep
+Waze's own colours, as before.
+
+### Platform
+
+#### Changed
+
+- `host/appstyle/waze-map-graphite.json`: Waze 5.27.5.0 (versionCode 1030750) verified for the
+  Graphite map palette (its four skin files are 5.25.0.1's, byte for byte; docs/MAP-COLOURS.md).
+
 ## [0.3.0] - 2026-11-20
 
 The first release run on real hardware: a Raspberry Pi 4 with Raspberry Pi OS, where Waze now
@@ -786,7 +806,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.1...v0.1.2
