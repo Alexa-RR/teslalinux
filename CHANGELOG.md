@@ -19,66 +19,13 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
-### Voice search
+## [0.3.0] - 2026-11-20
 
-*In Hebrew or English, with the microphone and speech recognition of the browser the car page is
-open in.*
-
-- In the car interface, the search field has a microphone button: speak a place, the words appear
-  as they are heard and Waze searches when you stop speaking. It works while the car moves, when
-  typing is off.
-- Settings > Waze interface: "Voice language" (Hebrew or English, kept by each browser) and "Test
-  the microphone", which listens once and shows what it heard. A browser without speech
-  recognition says so there.
-
-### GPU speed
-
-*Settings > Device > GPU speed.*
-
-Waze's map is drawn by the Pi's graphics chip, and that is what limits how smoothly it moves. The
-chip can now run faster: Standard (500 MHz, the Pi's own), Faster (600 MHz, needs a heatsink) or
-Fastest (700 MHz, needs a heatsink and a fan; it also raises the chip's voltage a little). The
-choice applies at the next restart; the tile shows the chip's clock and temperature now, and says
-when the Pi has slowed itself down because of heat.
-
-### Smoother map
-
-*Waze's car map: up to 49 pictures a second instead of 29, and each reaches the car sooner.
-Measured on a Raspberry Pi 4 at its standard speed, in Car mode, on a road route.*
-
-- Every picture Waze draws now reaches the car. The Pi used to copy each picture back from its
-  graphics chip before encoding it, and when Waze drew quickly, that wait lost most of them; the
-  encoder now reads the picture where the graphics chip drew it.
-- The graphics chip no longer does work that changes nothing. Waze's map stopped and restarted its
-  picture three times while drawing it, and cleared pictures that were already clear. At the car's
-  Native size (1184x928) the map went from 19 to 26 pictures a second.
-- Settings > Waze interface > **Map frame rate** (Car mode). Waze draws its map at most 30 times a
-  second, as it does to save a phone's battery. "Full" lets it draw as often as the Pi manages, up
-  to the display's 60. At the standard size (832x608) the car then gets about 49 pictures a second
-  instead of 29. It is for the Waze version it was checked with (5.27.5); with another version Waze
-  keeps its own rate, and the setting says so. Waze restarts when it is changed.
-- A picture reaches the car in about 20 ms at the standard size and 60 ms at Native, instead of up
-  to 75 and 150: Waze can no longer queue pictures faster than the graphics chip draws them, the
-  same limit Android sets.
-
-### Keep one Waze version
-
-*Settings > App updates > Waze version.*
-
-Waze can stay on one version instead of updating to each new one: "Stay on 5.27.5.0", the version
-the Full map frame rate works on, or on the installed version. A Pi with an older Waze downloads
-exactly that version and stops there; one with a newer Waze keeps it and stops updating, because
-Waze's data cannot go back to an older version. "Latest" updates as before. A new install can
-start pinned with `--waze-version 1030750`.
-
-### Settings menu on the car's screen
-
-*The list of settings pages on the left was missing in the car's browser.*
-
-On a screen as narrow as the car's (773 points wide on a Model 3), the menu shrank to an empty
-strip above the settings and none of its pages could be opened. It now stays beside the settings,
-a little narrower, and scrolls on its own; the settings scroll separately, so the menu stays in
-view. Phone-sized screens get the menu as one row that scrolls sideways.
+The first release run on real hardware: a Raspberry Pi 4 with Raspberry Pi OS, where Waze now
+starts, reaches its servers and streams to the car. Its map is much smoother (up to 49 pictures a
+second instead of 29), the hotspot and the car page come up in about 8 seconds, and the car
+interface gains voice search, map size, map sharpness and panel size settings. Waze can now be
+kept on one version, and the settings menu works on the car's screen.
 
 ### Waze on a real Raspberry Pi
 
@@ -109,6 +56,26 @@ before was tested in the build VM, which hid all of these.*
   idle on its map). The map now goes to the screen as it is, instead of being drawn again under
   Waze's panels for every picture.
 
+### Smoother map
+
+*Waze's car map: up to 49 pictures a second instead of 29, and each reaches the car sooner.
+Measured on a Raspberry Pi 4 at its standard speed, in Car mode, on a road route.*
+
+- Every picture Waze draws now reaches the car. The Pi used to copy each picture back from its
+  graphics chip before encoding it, and when Waze drew quickly, that wait lost most of them; the
+  encoder now reads the picture where the graphics chip drew it.
+- The graphics chip no longer does work that changes nothing. Waze's map stopped and restarted its
+  picture three times while drawing it, and cleared pictures that were already clear. At the car's
+  Native size (1184x928) the map went from 19 to 26 pictures a second.
+- Settings > Waze interface > **Map frame rate** (Car mode). Waze draws its map at most 30 times a
+  second, as it does to save a phone's battery. "Full" lets it draw as often as the Pi manages, up
+  to the display's 60. At the standard size (832x608) the car then gets about 49 pictures a second
+  instead of 29. It is for the Waze version it was checked with (5.27.5); with another version Waze
+  keeps its own rate, and the setting says so. Waze restarts when it is changed.
+- A picture reaches the car in about 20 ms at the standard size and 60 ms at Native, instead of up
+  to 75 and 150: Waze can no longer queue pictures faster than the graphics chip draws them, the
+  same limit Android sets.
+
 ### The hotspot and the car page come up sooner
 
 *Measured on a Raspberry Pi 4 with a fresh Raspberry Pi OS install.*
@@ -126,23 +93,17 @@ before was tested in the build VM, which hid all of these.*
   address on a Pi set up with Raspberry Pi Imager, so the Pi had no mobile internet and kept
   resetting the stick. It now connects by itself (tested: E3372 on 4G).
 
-### Panel size
+### Voice search
 
-*Settings > Waze interface > Panel size, in Car mode.*
+*In Hebrew or English, with the microphone and speech recognition of the browser the car page is
+open in.*
 
-The panels and buttons the car page draws over the map (turn card, trip card, search, lists, the
-route preview, the map buttons) can now be smaller, or a little larger: Smallest, Smaller, Default
-or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels
-leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice.
-
-### Map sharpness
-
-*Settings > Waze interface > Map sharpness, in Car mode.*
-
-Waze's map can be drawn in fewer pixels and scaled up to the screen: Full, 90%, 80% or 70%. Waze
-lays it out exactly as at full size, so it only looks a little softer, and it moves more smoothly
-at the car's Native size (measured on a Pi 4: 26 pictures a second at Full, 30 at 90%, 36 at 80%).
-The panels drawn over the map stay sharp. Each browser keeps its own choice.
+- In the car interface, the search field has a microphone button: speak a place, the words appear
+  as they are heard and Waze searches when you stop speaking. It works while the car moves, when
+  typing is off.
+- Settings > Waze interface: "Voice language" (Hebrew or English, kept by each browser) and "Test
+  the microphone", which listens once and shows what it heard. A browser without speech
+  recognition says so there.
 
 ### Map size
 
@@ -153,6 +114,69 @@ larger (or smaller) on the map, to match the car page's large panels: Smaller, D
 Largest. The map changes at once, without restarting Waze; the speedometer, which Waze sizes only
 when it creates it, follows the next time Waze starts. The panels on the screen keep their size.
 The browser keeps the choice, and every car page that is open follows the latest one.
+
+### Map sharpness
+
+*Settings > Waze interface > Map sharpness, in Car mode.*
+
+Waze's map can be drawn in fewer pixels and scaled up to the screen: Full, 90%, 80% or 70%. Waze
+lays it out exactly as at full size, so it only looks a little softer, and it moves more smoothly
+at the car's Native size (measured on a Pi 4: 26 pictures a second at Full, 30 at 90%, 36 at 80%).
+The panels drawn over the map stay sharp. Each browser keeps its own choice.
+
+### Panel size
+
+*Settings > Waze interface > Panel size, in Car mode.*
+
+The panels and buttons the car page draws over the map (turn card, trip card, search, lists, the
+route preview, the map buttons) can now be smaller, or a little larger: Smallest, Smaller, Default
+or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels
+leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice.
+
+### GPU speed
+
+*Settings > Device > GPU speed.*
+
+Waze's map is drawn by the Pi's graphics chip, and that is what limits how smoothly it moves. The
+chip can now run faster: Standard (500 MHz, the Pi's own), Faster (600 MHz, needs a heatsink) or
+Fastest (700 MHz, needs a heatsink and a fan; it also raises the chip's voltage a little). The
+choice applies at the next restart; the tile shows the chip's clock and temperature now, and says
+when the Pi has slowed itself down because of heat.
+
+### Keep one Waze version
+
+*Settings > App updates > Waze version.*
+
+Waze can stay on one version instead of updating to each new one: "Stay on 5.27.5.0", the version
+the Full map frame rate works on, or on the installed version. A Pi with an older Waze downloads
+exactly that version and stops there; one with a newer Waze keeps it and stops updating, because
+Waze's data cannot go back to an older version. "Latest" updates as before. A new install can
+start pinned with `--waze-version 1030750`.
+
+### Settings menu on the car's screen
+
+*The list of settings pages on the left was missing in the car's browser.*
+
+On a screen as narrow as the car's (773 points wide on a Model 3), the menu shrank to an empty
+strip above the settings and none of its pages could be opened. It now stays beside the settings,
+a little narrower, and scrolls on its own; the settings scroll separately, so the menu stays in
+view. Phone-sized screens get the menu as one row that scrolls sideways.
+
+### Known issues
+
+*What does not work yet.*
+
+- Map frame rate "Full" works with Waze 5.27.5 only; with another version Waze keeps its own 30
+  pictures a second (Settings > App updates > Waze version keeps 5.27.5).
+- Graphite map colours were checked with Waze 5.25 only, so with 5.27, the version a new install
+  gets, the map keeps Waze's own colours (Muted works with any version).
+- Graphite look (experimental): the route bubbles in route preview and the position arrow keep
+  Waze's own colours, which Waze sets in its code, not in its map colours.
+- Waze's own microphone button in Phone mode does nothing yet; voice search works from the car
+  interface's search field.
+- Phone mode: the Account and login screen does not scroll.
+- Some outlines drawn by the app may be missing: Paint.getFillPath (stroke to outline) is not
+  implemented yet.
 
 ### Platform
 
@@ -211,7 +235,6 @@ In teslalinux:
 - tacomp's output buffers come from the CMA dma-heap and go to the V4L2 encoder as DMABUF, with no
   read-back; a frame goes to the encoder when its GPU fence signals (`services/display/README.md`,
   "CMA output buffers"; `TACOMP_CMA=0` turns it off).
-
 - Car-app host render scale (`{"type":"renderScale","scale":S}` from the car page, 0.5 to 1): the
   map surface's buffers are that fraction of the display's size (`SurfaceHolder.setFixedSize`, now
   as AOSP, with `setSizeFromLayout`), scaled up by GTK or the compositor, and the app gets that
@@ -219,12 +242,19 @@ In teslalinux:
   reach it in its surface's pixels. A new scale gives the app a new surface (the old one destroyed),
   as a host replacing its surface does: the app keeps drawing into the window surface it made.
   SurfaceView keeps its view's size apart from its surface's (`tlViewSize`).
-
 - `host/teslalinux-set-gpu-speed` (root, one sudoers rule; `GET/POST /api/gpuSpeed`): the V3D clock
   as a marked block of the firmware's `config.txt` after the installer's (`v3d_freq=600`, or
   `v3d_freq=700` with `over_voltage=2`, the values Tesla Android's guide used), the choice in
   `/etc/teslalinux/gpu.env`; `status` reports the clock the firmware booted with
   (`vcgencmd get_config`), the clock now, the temperature and the throttling flags.
+- A Waze version pin in `teslalinux-appupdate` (`pinVersionCode`/`pinVersionName` in its settings,
+  `teslalinux-appupdate pin VERSIONCODE [NAME] | latest`, `install.sh --waze-version`,
+  `POST /api/appUpdateSettings`, whose `GET` lists `pinChoices`; docs/APP-UPDATES.md "Version pin"):
+  the pinned version is fetched with `tlplay download --version-code` instead of the latest, never
+  a downgrade, a newer waiting download is dropped, an upload still installs; a changed pin starts a
+  check.
+- The settings page's sidebar stays a column at the car's width (`css/app.css`; upstream's wrapped
+  strip at 820 px and below got a zero-height grid row); sidebar and content scroll separately.
 
 Tools, tests and docs:
 
@@ -250,7 +280,6 @@ Tools, tests and docs:
   wrapper of a name wherever there is one, as an import or `dlsym` gets.
 - ATL's eglSwapBuffers bound the next buffer even when the app had its own framebuffer bound
   (EGL leaves the bindings alone); it now does so only for the default framebuffer.
-
 - tacomp converts each frame to JPEG's full-range YUV 4:2:0 on the GPU before reading it back
   (`yuv_readback`: one pass into an RGBA target a quarter as wide and 1.5 times as tall whose bytes
   are the I420 planes, chroma averaged over each 2x2 block by linear filtering), for the hardware
@@ -757,6 +786,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.0...v0.1.1

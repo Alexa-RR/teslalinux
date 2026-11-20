@@ -8,22 +8,47 @@
   TAHtml.releaseNotesData = {
     "versions": [
       {
-        "versionName": "Unreleased",
+        "versionName": "v0.3.0 · 2026-11-20",
         "changelogItems": [
+          {
+            "title": "Waze on a real Raspberry Pi",
+            "shortDescription": "",
+            "descriptionMarkdown": "The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything before was tested in the build VM, which hid all of these.\n\n• Waze 5.27, the version a new install and the daily update now download, closed about 15 seconds after every start. It runs again.\n• The screen stayed black: the Pi's hardware picture encoder never answered, and the stream stopped for good. It now gets the picture in a form it can read, and if it ever fails, the Pi switches to its processor for the picture instead of stopping.\n• Waze could not reach any of its servers (\"certificate verify failed\"), and once it could, it crashed on its second connection to a server. Apps now make secure connections with Android's own component for them (Conscrypt), as on a phone: they work, a connection to a server already seen is set up in about half the time and a third of the processor time, and the faster encryption for the Pi's processor is used.\n• Waze waited on IPv6 connections that lead nowhere on some networks (a home router with only a local IPv6 prefix) and gave up. The Pi now uses IPv4 only.\n• The car's position is sent to Waze from the start (it was off until switched on in Settings).\n• In Phone mode, the map beside search results, a place card or a route stayed black for 3 to 7 seconds every time it opened. It now shows within a second.\n• In Phone mode, \"Connect calendar\" froze Waze: the screen stayed on its last picture and nothing answered. Screens that open over Waze's map without covering it (Waze's permission and calendar screens) now leave the map running underneath, as on a phone.\n• White was light grey in the picture from the Pi's hardware encoder. The colours are now exact, and making each picture takes the Pi half the processor time it did.\n• Waze's map is smoother: about 26 pictures a second instead of 21 at the full 1088x832 (Waze idle on its map). The map now goes to the screen as it is, instead of being drawn again under Waze's panels for every picture."
+          },
+          {
+            "title": "Smoother map",
+            "shortDescription": "",
+            "descriptionMarkdown": "Waze's car map: up to 49 pictures a second instead of 29, and each reaches the car sooner. Measured on a Raspberry Pi 4 at its standard speed, in Car mode, on a road route.\n\n• Every picture Waze draws now reaches the car. The Pi used to copy each picture back from its graphics chip before encoding it, and when Waze drew quickly, that wait lost most of them; the encoder now reads the picture where the graphics chip drew it.\n• The graphics chip no longer does work that changes nothing. Waze's map stopped and restarted its picture three times while drawing it, and cleared pictures that were already clear. At the car's Native size (1184x928) the map went from 19 to 26 pictures a second.\n• Settings > Waze interface > Map frame rate (Car mode). Waze draws its map at most 30 times a second, as it does to save a phone's battery. \"Full\" lets it draw as often as the Pi manages, up to the display's 60. At the standard size (832x608) the car then gets about 49 pictures a second instead of 29. It is for the Waze version it was checked with (5.27.5); with another version Waze keeps its own rate, and the setting says so. Waze restarts when it is changed.\n• A picture reaches the car in about 20 ms at the standard size and 60 ms at Native, instead of up to 75 and 150: Waze can no longer queue pictures faster than the graphics chip draws them, the same limit Android sets."
+          },
+          {
+            "title": "The hotspot and the car page come up sooner",
+            "shortDescription": "Measured on a Raspberry Pi 4 with a fresh Raspberry Pi OS install.",
+            "descriptionMarkdown": "• The car hotspot could come up without its address (172.16.0.1): the address was set before the Wi-Fi chip was ready, so the car could join the network but not reach the page. It now waits for the Wi-Fi chip.\n• The Pi boots in 12 seconds instead of 22; the hotspot is up about 8 seconds after power-on and the car page right after it, instead of about 21.\n• Waze's first start after an install no longer builds the runtime's core library image again.\n• Waze's first start after an install or a Waze update no longer spends about three minutes preparing Waze's code: the installer and the updater do it beforehand (measured: 199 s during the install, none at the first start).\n• An LTE stick that works as a network card (a Huawei HiLink stick such as the E3372) got no address on a Pi set up with Raspberry Pi Imager, so the Pi had no mobile internet and kept resetting the stick. It now connects by itself (tested: E3372 on 4G)."
+          },
           {
             "title": "Voice search",
             "shortDescription": "",
             "descriptionMarkdown": "In Hebrew or English, with the microphone and speech recognition of the browser the car page is open in.\n\n• In the car interface, the search field has a microphone button: speak a place, the words appear as they are heard and Waze searches when you stop speaking. It works while the car moves, when typing is off.\n• Settings > Waze interface: \"Voice language\" (Hebrew or English, kept by each browser) and \"Test the microphone\", which listens once and shows what it heard. A browser without speech recognition says so there."
           },
           {
+            "title": "Map size",
+            "shortDescription": "Settings > Waze interface > Map size, in Car mode.",
+            "descriptionMarkdown": "Waze's street names, road signs, report icons, position arrow and speedometer can now be drawn larger (or smaller) on the map, to match the car page's large panels: Smaller, Default, Larger or Largest. The map changes at once, without restarting Waze; the speedometer, which Waze sizes only when it creates it, follows the next time Waze starts. The panels on the screen keep their size. The browser keeps the choice, and every car page that is open follows the latest one."
+          },
+          {
+            "title": "Map sharpness",
+            "shortDescription": "Settings > Waze interface > Map sharpness, in Car mode.",
+            "descriptionMarkdown": "Waze's map can be drawn in fewer pixels and scaled up to the screen: Full, 90%, 80% or 70%. Waze lays it out exactly as at full size, so it only looks a little softer, and it moves more smoothly at the car's Native size (measured on a Pi 4: 26 pictures a second at Full, 30 at 90%, 36 at 80%). The panels drawn over the map stay sharp. Each browser keeps its own choice."
+          },
+          {
+            "title": "Panel size",
+            "shortDescription": "Settings > Waze interface > Panel size, in Car mode.",
+            "descriptionMarkdown": "The panels and buttons the car page draws over the map (turn card, trip card, search, lists, the route preview, the map buttons) can now be smaller, or a little larger: Smallest, Smaller, Default or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice."
+          },
+          {
             "title": "GPU speed",
             "shortDescription": "Settings > Device > GPU speed.",
             "descriptionMarkdown": "Waze's map is drawn by the Pi's graphics chip, and that is what limits how smoothly it moves. The chip can now run faster: Standard (500 MHz, the Pi's own), Faster (600 MHz, needs a heatsink) or Fastest (700 MHz, needs a heatsink and a fan; it also raises the chip's voltage a little). The choice applies at the next restart; the tile shows the chip's clock and temperature now, and says when the Pi has slowed itself down because of heat."
-          },
-          {
-            "title": "Smoother map",
-            "shortDescription": "",
-            "descriptionMarkdown": "Waze's car map: up to 49 pictures a second instead of 29, and each reaches the car sooner. Measured on a Raspberry Pi 4 at its standard speed, in Car mode, on a road route.\n\n• Every picture Waze draws now reaches the car. The Pi used to copy each picture back from its graphics chip before encoding it, and when Waze drew quickly, that wait lost most of them; the encoder now reads the picture where the graphics chip drew it.\n• The graphics chip no longer does work that changes nothing. Waze's map stopped and restarted its picture three times while drawing it, and cleared pictures that were already clear. At the car's Native size (1184x928) the map went from 19 to 26 pictures a second.\n• Settings > Waze interface > Map frame rate (Car mode). Waze draws its map at most 30 times a second, as it does to save a phone's battery. \"Full\" lets it draw as often as the Pi manages, up to the display's 60. At the standard size (832x608) the car then gets about 49 pictures a second instead of 29. It is for the Waze version it was checked with (5.27.5); with another version Waze keeps its own rate, and the setting says so. Waze restarts when it is changed.\n• A picture reaches the car in about 20 ms at the standard size and 60 ms at Native, instead of up to 75 and 150: Waze can no longer queue pictures faster than the graphics chip draws them, the same limit Android sets."
           },
           {
             "title": "Keep one Waze version",
@@ -36,29 +61,9 @@
             "descriptionMarkdown": "On a screen as narrow as the car's (773 points wide on a Model 3), the menu shrank to an empty strip above the settings and none of its pages could be opened. It now stays beside the settings, a little narrower, and scrolls on its own; the settings scroll separately, so the menu stays in view. Phone-sized screens get the menu as one row that scrolls sideways."
           },
           {
-            "title": "Waze on a real Raspberry Pi",
-            "shortDescription": "",
-            "descriptionMarkdown": "The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything before was tested in the build VM, which hid all of these.\n\n• Waze 5.27, the version a new install and the daily update now download, closed about 15 seconds after every start. It runs again.\n• The screen stayed black: the Pi's hardware picture encoder never answered, and the stream stopped for good. It now gets the picture in a form it can read, and if it ever fails, the Pi switches to its processor for the picture instead of stopping.\n• Waze could not reach any of its servers (\"certificate verify failed\"), and once it could, it crashed on its second connection to a server. Apps now make secure connections with Android's own component for them (Conscrypt), as on a phone: they work, a connection to a server already seen is set up in about half the time and a third of the processor time, and the faster encryption for the Pi's processor is used.\n• Waze waited on IPv6 connections that lead nowhere on some networks (a home router with only a local IPv6 prefix) and gave up. The Pi now uses IPv4 only.\n• The car's position is sent to Waze from the start (it was off until switched on in Settings).\n• In Phone mode, the map beside search results, a place card or a route stayed black for 3 to 7 seconds every time it opened. It now shows within a second.\n• In Phone mode, \"Connect calendar\" froze Waze: the screen stayed on its last picture and nothing answered. Screens that open over Waze's map without covering it (Waze's permission and calendar screens) now leave the map running underneath, as on a phone.\n• White was light grey in the picture from the Pi's hardware encoder. The colours are now exact, and making each picture takes the Pi half the processor time it did.\n• Waze's map is smoother: about 26 pictures a second instead of 21 at the full 1088x832 (Waze idle on its map). The map now goes to the screen as it is, instead of being drawn again under Waze's panels for every picture."
-          },
-          {
-            "title": "The hotspot and the car page come up sooner",
-            "shortDescription": "Measured on a Raspberry Pi 4 with a fresh Raspberry Pi OS install.",
-            "descriptionMarkdown": "• The car hotspot could come up without its address (172.16.0.1): the address was set before the Wi-Fi chip was ready, so the car could join the network but not reach the page. It now waits for the Wi-Fi chip.\n• The Pi boots in 12 seconds instead of 22; the hotspot is up about 8 seconds after power-on and the car page right after it, instead of about 21.\n• Waze's first start after an install no longer builds the runtime's core library image again.\n• Waze's first start after an install or a Waze update no longer spends about three minutes preparing Waze's code: the installer and the updater do it beforehand (measured: 199 s during the install, none at the first start).\n• An LTE stick that works as a network card (a Huawei HiLink stick such as the E3372) got no address on a Pi set up with Raspberry Pi Imager, so the Pi had no mobile internet and kept resetting the stick. It now connects by itself (tested: E3372 on 4G)."
-          },
-          {
-            "title": "Panel size",
-            "shortDescription": "Settings > Waze interface > Panel size, in Car mode.",
-            "descriptionMarkdown": "The panels and buttons the car page draws over the map (turn card, trip card, search, lists, the route preview, the map buttons) can now be smaller, or a little larger: Smallest, Smaller, Default or Larger. The screen redraws at once, and Waze keeps its car and route in the map area the panels leave free. Waze's map keeps its own size (see Map size). Each browser keeps its own choice."
-          },
-          {
-            "title": "Map sharpness",
-            "shortDescription": "Settings > Waze interface > Map sharpness, in Car mode.",
-            "descriptionMarkdown": "Waze's map can be drawn in fewer pixels and scaled up to the screen: Full, 90%, 80% or 70%. Waze lays it out exactly as at full size, so it only looks a little softer, and it moves more smoothly at the car's Native size (measured on a Pi 4: 26 pictures a second at Full, 30 at 90%, 36 at 80%). The panels drawn over the map stay sharp. Each browser keeps its own choice."
-          },
-          {
-            "title": "Map size",
-            "shortDescription": "Settings > Waze interface > Map size, in Car mode.",
-            "descriptionMarkdown": "Waze's street names, road signs, report icons, position arrow and speedometer can now be drawn larger (or smaller) on the map, to match the car page's large panels: Smaller, Default, Larger or Largest. The map changes at once, without restarting Waze; the speedometer, which Waze sizes only when it creates it, follows the next time Waze starts. The panels on the screen keep their size. The browser keeps the choice, and every car page that is open follows the latest one."
+            "title": "Known issues",
+            "shortDescription": "What does not work yet.",
+            "descriptionMarkdown": "• Map frame rate \"Full\" works with Waze 5.27.5 only; with another version Waze keeps its own 30 pictures a second (Settings > App updates > Waze version keeps 5.27.5).\n• Graphite map colours were checked with Waze 5.25 only, so with 5.27, the version a new install gets, the map keeps Waze's own colours (Muted works with any version).\n• Graphite look (experimental): the route bubbles in route preview and the position arrow keep Waze's own colours, which Waze sets in its code, not in its map colours.\n• Waze's own microphone button in Phone mode does nothing yet; voice search works from the car interface's search field.\n• Phone mode: the Account and login screen does not scroll.\n• Some outlines drawn by the app may be missing: Paint.getFillPath (stroke to outline) is not implemented yet."
           }
         ]
       },
