@@ -28,6 +28,10 @@ replaced; each is removed from this list only when the real behavior is in.
   without recording anything; the spec does not carry them.
 - `Paint.getFillPath` (upstream, came in through a clean merge) returns false. It should build the
   stroked or filled outline.
+- `eglPresentationTimeANDROID` (`src/libandroid/egl.c`, seen Nov 20 2026) returns EGL_TRUE and keeps
+  nothing. AOSP attaches the timestamp to the next queued buffer and SurfaceFlinger presents it no
+  earlier than that time; ATL's surface should hold the frame in `queue_texture` until it (video
+  playback through a Surface is the user).
 - `ATLCarService.saveUxRestrictionsConfigurationForNextBoot` (car interface, added 2026-11-12)
   returns false: there is no persistent staging file. AOSP's CarUxRestrictionsManagerService
   writes a staged JSON config that it promotes at the next boot; do the same under the app data

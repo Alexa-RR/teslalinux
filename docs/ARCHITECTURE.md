@@ -45,6 +45,13 @@ Tesla browser ──Wi-Fi──> hostapd / dnsmasq / nftables ──> nginx (TLS
   `/var/lib/teslalinux/apps/<package>`), never merged or re-signed: Google's APIs check the APK
   Signing Block. Signer and versionCode are checked against the installed app; the previous version
   is kept for rollback.
+* **GL on a tiler** (ATL `src/libandroid/gl_passes.c`, `egl.c`): the Pi's V3D renders a framebuffer
+  in passes, and Mesa's v3d starts a new pass where the GPUs Android apps are written for do not.
+  ATL puts an app's `glFenceSync` in at its context's next flush (Mesa's deferred flush, which v3d
+  ignores) and leaves out clears of buffers that provably already hold that value (every write path
+  followed); eglSwapBuffers waits for the GPU work of the frame before last, as Android's buffer
+  queue does. Waze's map: four passes fewer a frame, and frames that reach the car in a third of the
+  time. Numbers in `services/display/README.md` ("Waze's frame on the GPU").
 * **Ahead-of-time compilation** (`host/teslalinux-dexopt`) is opt-in (`TESLALINUX_DEXOPT=1`): measured
   on the VM it costs the main thread 20-25% more CPU than ART's JIT, and only the first start after an
   install is faster (2 s to the map instead of 21 s while ART compiles its cache copy).
@@ -141,6 +148,10 @@ ATL (GTK 4, GSK GL on V3D) -> wl_surface.commit
   app's queued work stalled the whole compositor. With Waze's map uncapped that showed 11 of the
   37 frames/s Waze drew; now every frame it commits is shown. Details and numbers in
   `services/display/README.md` ("CMA output buffers").
+* What the car receives is then Waze's frame rate: on a Pi 4 at stock clocks ~29 frames/s at
+  832x608 with Waze's own 30 cap, ~49 with Settings > Waze interface > Map frame rate "Full"
+  (verified Waze versions), and ~26 at 1184x928, where V3D is the limit
+  (`services/display/README.md`, "Waze's frame on the GPU").
 * Frames without damage are not encoded; newest-frame-wins when the encoder is busy.
 * Size, encoder and quality come from the frontend's display state (`POST /api/displayState` →
   `teslalinux-apply-display` → `/etc/teslalinux/display.env`). tacomp applies a new size, encoder or
@@ -209,6 +220,16 @@ The setting (`host/teslalinux-set-app-interface`, `TESLALINUX_APP_INTERFACE` in
   also answers the library's constraints (list limits of a car host), vehicle data and day/night
   (the sun at the car's position), and ATL's car service (`android.car`) turns the GPS speed into
   driving state and UX restrictions.
+
+In the car interface, `TESLALINUX_MAP_PACING` (Settings > Waze interface > Map frame rate,
+`teslalinux-set-app-interface pacing app|full`) chooses the car map's frame rate. Waze holds it at
+30 frames/s in its map loop and its renderer's frame limiter (a phone battery's choice, lifted only
+for 5 s after a touch on a phone's map view, which the car's map never gets). "Full" has the launcher
+make, from the installed APK, a copy of that one dex with those constants on the 60 frames/s
+schedule (`tools/apps/waze-map-pacing.py`: listed versions only, each literal checked, the APK and
+its signing block untouched) and hand it to ATL as `ATL_APP_CLASS_OVERRIDES`, which loads it in
+front of the app's own classes. It is kept in the `tesla` user's cache and made again after an app
+update; for an unlisted version the app keeps its own rate.
 
 The AOSP Templates Host (the Android Automotive renderer) also runs under ATL as a privileged
 system app (`tools/carhost/`), but supports car API level 4 at most; Waze needs 5, so the car page

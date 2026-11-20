@@ -89,6 +89,61 @@ place for that limit is ATL's swap: wait for the GPU fence of the frame before l
 The log line every 300 frames built shows the main thread's time per frame, how long frames waited
 for the GPU, the encoder's time per frame and the time from capture to published frame.
 
+## Waze's frame on the GPU (Nov 20 2026)
+
+After the CMA buffers, the frame rate is what Waze's own frame costs the Pi 4's V3D. Three changes
+in ATL took that from ~28 ms (832x608) and ~45 ms (1184x928) of GPU time a frame to ~14.5 and ~31:
+
+* **The swap waits for the frame before last** (ATL `egl.c`, `tl_swap_gpu_throttle`,
+  `ATL_SWAP_GPU_FRAMES`, default 1): eglSwapBuffers returns once the GPU work of all but the newest
+  frame is done, as Android's buffer queue holds a producer back with the release fence. Waze could
+  queue frame after frame behind the GPU before: its frames waited 78 ms on the GPU, now 26, at the
+  same frame rate.
+* **Fences no longer split a pass** (ATL `gl_passes.c`): Mesa's v3d flushes the job on every
+  `glFenceSync`, which on a tiler means storing colour and depth and loading them again. Godot (Waze's
+  map engine) creates three fences in the middle of its main pass, so that pass ran as four. ATL puts
+  an app's fence in at its context's next flush instead, as Mesa asks its other drivers to do.
+* **Clears of buffers that already hold the value are left out** (ATL `gl_passes.c`): Godot clears a
+  2048x2048 shadow atlas twice a frame that nothing is drawn into, and an empty transparent viewport;
+  each was a full pass (3 to 6 ms). ATL follows every write to an app's textures and renderbuffers and
+  leaves out a clear only when everything it would clear provably holds that value already.
+
+`tools/debian/glpasses.c` (an LD_PRELOAD tracer: each pass's framebuffer, attachments, clears, draws,
+blits and what it samples) found these; `tools/debian/gl-passes-test.c` checks the clear and fence
+rules against the GL's own results. Waze's frame at 1184x928 is now one 128x128 pass (0.1 ms), the
+location arrow's transparent viewport (5.6 ms: 2 draws, but a full-size colour and depth store), the
+map (22 ms, 200+ draws) and Godot's blit to the window (2.6 ms).
+
+Then the frame rate is Waze's: it holds its car map at 30 frames/s (Settings > Waze interface > Map
+frame rate: "Full" lifts that, verified Waze versions only, `tools/apps/waze-map-pacing.py`).
+
+Delivered frames a second (run 2 of 2, warmed up) / slowest tenth, Waze's own frames a second, the
+capture-to-published time in tacomp and the app's share of V3D's render queue; Pi 4 at stock clocks,
+Waze 5.27.5 Car mode on a road route (`tools/debian/pi-bench.py`), H.264, max 66 C, never throttled:
+
+| | delivered | Waze | capture to published | V3D render |
+|---|---|---|---|---|
+| 832x608, Waze's 30, before | 28.6 / 24 | 29.4 | 15 ms | 68% |
+| 832x608, Waze's 30, now | 28.8 / 25 | 29.6 | 12 ms | 41% |
+| 832x608, uncapped, swap throttle only | 33.6 / 28 | 34.8 | 36 ms | 84% |
+| 832x608, uncapped, no throttle | 33.9 / 31 | 35.0 | 77 ms | 84% |
+| **832x608, Full frame rate, now** | **48.8 / 38** | **53.4** | **19 ms** | 75% |
+| 1184x928, before | 19.1 / 18 | 19.4 | 86 ms | 87% |
+| **1184x928, now** (Waze's 30 and Full alike) | **26.3 / 22** | 26.9 | 59 ms | 80% |
+| 1184x928, Full, Map sharpness 90% | 30.3 / 26 | 29.8 | 50 ms | 80% |
+| 1184x928, Full, Map sharpness 80% | 36.1 / 27 | 36.3 | 39 ms | 78% |
+| 1184x928, Godot 3D render scale 0.75 | 16.7 / 15 | 17.1 | 98 ms | 87% |
+| 1184x928, Godot 3D render scale 0.5 | 18.1 / 15 | 18.3 | 89 ms | 86% |
+
+At 832x608 the GPU is no longer the limit: Waze's own work on its render thread (~15 ms a frame)
+is. At 1184x928 the GPU still is, which is why Map sharpness (the car-app host's render scale: a
+smaller map surface, scaled up, Waze's panels and labels laid out as at full size) pays there (80% of the render queue; V3D's binner also waits for each render
+job because Godot's vertex shaders read textures, which Mesa's v3d serialises). Godot's own 3D render
+scale (`rendering/scaling_3d/scale` in an `override.cfg` beside its pack, which this Godot reads) is
+slower: it adds a colour copy and a depth blit for each of Waze's three viewports, more than the
+smaller 3D pass saves. Godot's shadow atlas settings in `override.cfg` do not reach Waze's atlas
+(set from its code).
+
 ## Touch path
 
 A second WebSocket server on `TACOMP_TOUCH_PORT` (9999) accepts the upstream text protocol

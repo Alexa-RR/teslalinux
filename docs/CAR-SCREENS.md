@@ -60,7 +60,11 @@ Raw report (nginx access log, the VM behind the Mac's hotspot, so the client add
 - Settings > Display > Resolution > **Native (screen pixels)**: on this car the stream is 1184 x 928 at
   density 284, shown pixel for pixel (773.86 x 606.54 CSS px; 0.9 and 5.5 CSS px fall outside the
   window and are clipped). Checked on the car on Nov 19, 2026: sharper; the map's edges still show
-  stair steps (Waze's car-mode map asks for no multisampling). Not the default yet: about 2.2 times
-  the pixels of 832p, so the Pi's frame rate and its encoder at 60 Hz must be measured first.
+  stair steps (Waze's car-mode map asks for no multisampling). Not the default: about 2.2 times
+  the pixels of 832p. Measured on the Pi 4 at stock clocks (Nov 20 2026, Car mode, a road route,
+  `services/display/README.md` "Waze's frame on the GPU"): 26 frames/s at Native (the GPU is the
+  limit; the encoder takes ~14 ms a frame), against ~29 at 832x608 with Waze's own 30 cap and ~49
+  with Map frame rate "Full". At Native, Map sharpness 90% gives ~30 and 80% ~36. So the choice is
+  sharpness (Native) or smoothness (832p, Full).
 - `tools/debian/car-browser.py --size 773x601 --dpr 1.53` emulates this browser in a headless Chrome.
   Every test browser posts its own display size to the device: restore the car's afterwards.

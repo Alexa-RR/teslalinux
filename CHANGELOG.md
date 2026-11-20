@@ -41,6 +41,26 @@ Fastest (700 MHz, needs a heatsink and a fan; it also raises the chip's voltage 
 choice applies at the next restart; the tile shows the chip's clock and temperature now, and says
 when the Pi has slowed itself down because of heat.
 
+### Smoother map
+
+*Waze's car map: up to 49 pictures a second instead of 29, and each reaches the car sooner.
+Measured on a Raspberry Pi 4 at its standard speed, in Car mode, on a road route.*
+
+- Every picture Waze draws now reaches the car. The Pi used to copy each picture back from its
+  graphics chip before encoding it, and when Waze drew quickly, that wait lost most of them; the
+  encoder now reads the picture where the graphics chip drew it.
+- The graphics chip no longer does work that changes nothing. Waze's map stopped and restarted its
+  picture three times while drawing it, and cleared pictures that were already clear. At the car's
+  Native size (1184x928) the map went from 19 to 26 pictures a second.
+- Settings > Waze interface > **Map frame rate** (Car mode). Waze draws its map at most 30 times a
+  second, as it does to save a phone's battery. "Full" lets it draw as often as the Pi manages, up
+  to the display's 60. At the standard size (832x608) the car then gets about 49 pictures a second
+  instead of 29. It is for the Waze version it was checked with (5.27.5); with another version Waze
+  keeps its own rate, and the setting says so. Waze restarts when it is changed.
+- A picture reaches the car in about 20 ms at the standard size and 60 ms at Native, instead of up
+  to 75 and 150: Waze can no longer queue pictures faster than the graphics chip draws them, the
+  same limit Android sets.
+
 ### Waze on a real Raspberry Pi
 
 *The first install on Raspberry Pi hardware (a Pi 4 with a fresh Raspberry Pi OS); everything
@@ -102,8 +122,8 @@ leave free. Waze's map keeps its own size (see Map size). Each browser keeps its
 
 Waze's map can be drawn in fewer pixels and scaled up to the screen: Full, 90%, 80% or 70%. Waze
 lays it out exactly as at full size, so it only looks a little softer, and it moves more smoothly
-(measured on a Pi 4: about 25 pictures a second at Full, 30 at 80%). The panels drawn over the map
-stay sharp. Each browser keeps its own choice.
+at the car's Native size (measured on a Pi 4: 26 pictures a second at Full, 30 at 90%, 36 at 80%).
+The panels drawn over the map stay sharp. Each browser keeps its own choice.
 
 ### Map size
 
@@ -142,8 +162,36 @@ In ATL (the fork):
   microG names its services after Google's; nothing of Google's runs or is contacted), and
   `queryIntentServicesAsUser` answers for the one user (it returned null). Waze's own microphone
   button in the phone interface does not reach a recognizer yet: a tap on it calls no Android API.
+- `src/libandroid/gl_passes.c`: an app's `glFenceSync` goes into the command stream at its
+  context's next flush (glFlush, glFinish, eglSwapBuffers, eglMakeCurrent, eglReleaseThread,
+  eglWaitGL/eglWaitClient, or a wait that needs it), for a context alone in its share group, as Mesa
+  asks its drivers to do (`PIPE_FLUSH_DEFERRED`) and v3d does not; a status query or a zero-timeout
+  wait without `GL_SYNC_FLUSH_COMMANDS_BIT` reports it unsignalled until then. A clear is left out
+  when every buffer it clears holds exactly that value: a full clear (no scissor, full write masks,
+  draw buffer 0 only) of a complete framebuffer whose level-0 2D texture or renderbuffer attachments
+  nothing has written since (draws, blits, partial clears, invalidation, uploads, copies, storage,
+  image units, EGL images and deletion are followed; the decisions read the GL's own state). Only for
+  contexts that never shared objects; an `eglGetProcAddress` name that could write a texture without
+  a wrapper turns it off. `ATL_GL_DEFER_FENCES=0`, `ATL_GL_SKIP_CLEARS=0`; counts with
+  `ATL_DEBUG_GL_PASSES=1`.
+- `egl.c`: eglSwapBuffers waits for the GPU fence of the frame before last (`ATL_SWAP_GPU_FRAMES`,
+  0 to 3, default 1: the release fence wait of Android's buffer queue), at most 1 s.
+- `ATL_APP_CLASS_OVERRIDES`: dex files or jars in front of the primary app's classes on its class
+  loader (as ghax.jar's), for a class changed on the device for one verified app version.
 
 In teslalinux:
+
+- Settings > Waze interface > Map frame rate (`TESLALINUX_MAP_PACING=app|full` in
+  `/etc/teslalinux/interface.env`, `teslalinux-set-app-interface pacing ...`, `/api/appInterface`
+  `mapPacing` and `mapPacingSupport`): with "full" the launcher makes
+  `~tesla/.cache/teslalinux/app-overrides/com.waze-<versionCode>-map-pacing.jar` from the installed
+  APK with `tools/apps/waze-map-pacing.py` (Waze 5.27.5's map loop `com.waze.map.de` 33 -> 17 ms and
+  frame limiter `com.waze.bq.a` / `map.opengl.m` 30 -> 60 frames/s, each literal checked) and passes
+  it as `ATL_APP_CLASS_OVERRIDES`; again when base.apk is newer than the jar. The installer and the
+  dist carry the tool.
+- tacomp's output buffers come from the CMA dma-heap and go to the V4L2 encoder as DMABUF, with no
+  read-back; a frame goes to the encoder when its GPU fence signals (`services/display/README.md`,
+  "CMA output buffers"; `TACOMP_CMA=0` turns it off).
 
 - Car-app host render scale (`{"type":"renderScale","scale":S}` from the car page, 0.5 to 1): the
   map surface's buffers are that fraction of the display's size (`SurfaceHolder.setFixedSize`, now
@@ -165,8 +213,24 @@ Tools, tests and docs:
   taking it on at create and on a configuration change.
 - `tools/changelog/changelog.py`: an `## [Unreleased]` section shows on the car page as
   "Unreleased".
+- Pi measuring tools in `tools/debian/`: `pi-bench.py` (frames a Pi delivers on a driven route, with
+  temperature, throttling and clocks), `gpu-trace.sh`/`.py` (a timeline of V3D's jobs per client and
+  ring from the DRM scheduler tracepoints), `gpu-split.sh` (GPU time per process from DRM fdinfo),
+  `swaptime.c` (an app's frame work and swap waits, LD_PRELOAD), `glpasses.c` (an app's render
+  passes, one frame at a time: framebuffers and attachments, clears, draws, blits, what each samples,
+  LD_PRELOAD), `gl-passes-test.c` (ATL's clear and fence rules against the GL's own results).
 
 #### Fixed
+
+- ATL's Java GL bindings: `GLES20.glDrawElements` drew `type` vertices (it passed the type as the
+  count), `glDeleteTextures` deleted the names 4 x `offset` entries on; both now as Android. They
+  and `GLUtils.texImage2D`, `GL10.glDrawArrays` and the Java EGL context calls go through ATL's
+  wrappers, as an app's native calls do.
+- ATL's `eglGetProcAddress` handed out Mesa's own entry points, so an app that looked up
+  `glBindFramebuffer` drew into nothing when it bound framebuffer 0; it now hands out ATL's
+  wrapper of a name wherever there is one, as an import or `dlsym` gets.
+- ATL's eglSwapBuffers bound the next buffer even when the app had its own framebuffer bound
+  (EGL leaves the bindings alone); it now does so only for the default framebuffer.
 
 - tacomp converts each frame to JPEG's full-range YUV 4:2:0 on the GPU before reading it back
   (`yuv_readback`: one pass into an RGBA target a quarter as wide and 1.5 times as tall whose bytes
