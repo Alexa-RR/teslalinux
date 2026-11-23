@@ -5,7 +5,8 @@ Writes a binary AndroidManifest.xml (Android's compiled XML format, as aapt writ
 PACKAGE with the first ACTIVITY as its exported launcher activity and any further ones as plain
 activities (NAME:0xTHEME gives one a framework theme), and stores it with CLASSES.dex. There are no
 resources: the tests build their views in code. ATL needs no signature for an app it is given.
-MKAPK_SUPPORTS_RTL=1 in the environment declares android:supportsRtl="true" on the application.
+MKAPK_SUPPORTS_RTL=1 in the environment declares android:supportsRtl="true" on the application;
+MKAPK_PERMISSIONS="NAME ..." declares a <uses-permission> for each name.
 """
 import os
 import struct
@@ -84,6 +85,11 @@ def manifest(package, activity, others=()):
     start("manifest", [("package", False, TYPE_STRING, package)])
     start("uses-sdk", [("minSdkVersion", True, TYPE_INT_DEC, 24), ("targetSdkVersion", True, TYPE_INT_DEC, 31)])
     end("uses-sdk")
+    # MKAPK_PERMISSIONS: <uses-permission> entries (space-separated names); an app holds only what
+    # its manifest requests, as on Android
+    for perm in os.environ.get("MKAPK_PERMISSIONS", "").split():
+        start("uses-permission", [("name", True, TYPE_STRING, perm)])
+        end("uses-permission")
     app_attrs = [("label", True, TYPE_STRING, "ATL embed test")]
     if os.environ.get("MKAPK_SUPPORTS_RTL") == "1":
         app_attrs.append(("supportsRtl", True, TYPE_INT_BOOLEAN, True))

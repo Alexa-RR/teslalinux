@@ -7,32 +7,17 @@ replaced; each is removed from this list only when the real behavior is in.
 
 | Where | Shortcut | Real behavior needed |
 |---|---|---|
-| `members/android/graphics/Canvas.java.frag` | `clipOutRect`/`clipOutPath` return true and clip nothing | Subtract the rect/path from the current clip (cairo: clip to the inverse via even-odd fill), in `api-impl-jni` |
-| same | `saveLayerAlpha` ignores alpha | `saveLayer` with a paint whose alpha is set, so the layer composites at that alpha |
+| `members/android/graphics/Canvas.java.frag` | `saveLayerAlpha` ignores alpha | `saveLayer` with a paint whose alpha is set, so the layer composites at that alpha |
 | same | `drawVertices`, `drawBitmapMesh`, `drawPosText` are no-ops | Implement on cairo meshes or document as unsupported with a visible log |
-| `members/android/content/Intent.java.frag` | `CREATOR`/`writeToParcel` do not serialize | Parcel the action, data, categories, component, flags and extras like AOSP |
-| `members/android/location/Location.java.frag` | `CREATOR` builds an empty location | Parcel all fields |
-| `replace/android/content/pm/PackageManager.java.repl` | every permission granted | Grant exactly the permissions declared in the APK manifest (`<uses-permission>`), deny the rest |
-| `android/app/AppOpsManager.java` | every op allowed | Mirror the manifest-derived permission state above |
 | `android/location/LocationProvider.java`, `LocationManager` additions | GNSS measurements callback returns false | Fine as "not supported" only until the host GPS feed exists; then `getCurrentLocation`/updates must come from `services/gps` |
-| `members/android/media/AudioManager.java.frag` | device list is one fixed speaker + mic | Enumerate PipeWire sinks/sources |
-| `members/android/net/NetworkCapabilities.java.frag` | always Wi-Fi, 100 Mbit | Read the host's default route interface and its speed |
-| `members/android/view/Choreographer.java.frag` | FrameData timelines are synthesized (deadline +8 ms, present +16.7 ms) | The frame itself is vsync-paced by the GdkFrameClock (native-choreographer-vsync.sh, Oct 10); fill the timelines from gdk_frame_clock_get_timings (predicted presentation time, refresh interval) |
-| `android/app/usage/StorageStatsManager.java` | app bytes reported as 0 | Size of the APK + extracted natives |
+
+## Open after the Nov 23 integration (fork tracks A, B and C)
+- `Bitmap.getPixel`/`getPixels` return premultiplied colour (AOSP: unpremultiplied); fix together
+  with `setPixels`. (Track D is fixing it.)
+- `android.opengl.GLES20` lacks ~80 natives (`glScissor`, `glIsTexture`, `glFinish`, most
+  `glUniform*`, `glStencil*`): track E is implementing them.
 
 ## Placeholders seen in the upstream ATL merge (added 2026-11-11, fix in the fork)
-- `KeyGenParameterSpec.Builder`: certificate, digest, padding and validity setters return `this`
-  without recording anything; the spec does not carry them.
-- `Paint.getFillPath` (upstream, came in through a clean merge) returns false. It should build the
-  stroked or filled outline.
-- `eglPresentationTimeANDROID` (`src/libandroid/egl.c`, seen Nov 20 2026) returns EGL_TRUE and keeps
-  nothing. AOSP attaches the timestamp to the next queued buffer and SurfaceFlinger presents it no
-  earlier than that time; ATL's surface should hold the frame in `queue_texture` until it (video
-  playback through a Surface is the user).
-- `ATLCarService.saveUxRestrictionsConfigurationForNextBoot` (car interface, added 2026-11-12)
-  returns false: there is no persistent staging file. AOSP's CarUxRestrictionsManagerService
-  writes a staged JSON config that it promotes at the next boot; do the same under the app data
-  directory.
 - Keystore backend: the fork's KeyStoreStorage is kept. Upstream's libsecret natives
   (`android_security_keystore_AndroidKeyStore.c`) are compiled but unused; using them is a decision
   for the user.
@@ -85,26 +70,6 @@ replaced; each is removed from this list only when the real behavior is in.
   scratchpad/mhtest has the lambda/method-handle tests. A boot jar change costs one boot-image
   rebuild (~3 min) instead of a Waze relaunch (~10 min).
 
-## Paint colour filters (added 2026-11-09)
-- Blend-mode colour filters (PorterDuffColorFilter, BlendModeColorFilter) are GSK colour matrices
-  (native-paint-colorfilter-modes.sh): CLEAR, SRC, DST, SRC_IN, DST_IN, SRC_OUT, DST_OUT, SRC_ATOP,
-  MULTIPLY/MODULATE and SRC_OVER with an opaque colour are exact. DST_OVER, DST_ATOP, XOR, SCREEN,
-  ADD, OVERLAY, DARKEN, LIGHTEN and SRC_OVER with a translucent colour divide by the result alpha in
-  un-premultiplied space, so they are no colour matrix: they still render as SRC_IN. Real version: a
-  blend node (gtk_snapshot_push_blend / a mask node) around the drawing with the filter colour.
-- LightingColorFilter and ColorMatrixColorFilter are not mapped to the native filter yet.
-
-## Canvas stroke styles
-- GskCanvas.drawRect now outlines when Paint.Style is STROKE (four thin rects). drawRoundRect, drawCircle,
-  drawOval and drawPath still fill regardless of style: GTK 4.14+ has gsk_stroke_node (GskStroke with
-  width/cap/join) and gsk_path_builder, which is the right native implementation for all of them.
-
-## SurfaceTexture
-- android.graphics.SurfaceTexture is a skeleton (no GL external texture, no buffer producer, no frame
-  callbacks). EGLImpl.eglCreateWindowSurface(SurfaceTexture) therefore fails with AOSP's
-  "Make sure the SurfaceTexture is valid". Real implementation: a GL_TEXTURE_EXTERNAL_OES-less variant on
-  GLES3 (sampler2D updated from a wl_buffer/dmabuf or a CPU buffer queue) plus Surface(SurfaceTexture).
-
 ## Open after 2026-10-08 evening (Mac VM)
 - Main menu (WazeMainMenuFragment, ComposeView in FragmentContainerView 0x7f0a025f): composed and laid
   out (tap.sh dump shows header, avatar, rows) but its AndroidComposeView draws nothing; hiding the
@@ -140,21 +105,10 @@ replaced; each is removed from this list only when the real behavior is in.
 - FIXED (Oct 10): drawer buttons unreachable: ATL's View.requestLayout only flipped flags up the chain, so Compose's AndroidViewsHandler never remeasured holders whose View went GONE and a stale 1280x72 node kept catching taps. requestLayout now calls the parent's virtual requestLayout (AOSP). One-off crash seen once right after Stop: 'Must run runDetachLifecycle() before markAsDetached()' (Compose detach ordering) - not reproduced since; watch for it.
 
 ## Oct 10: View state stubs still in ATL (found while porting the button/switch widgets)
-- View.setSelected is a no-op and isSelected reports nothing: AOSP sets the SELECTED flag, refreshes
-  the drawable state and notifies the parent. Needs the flag plus refreshDrawableState
-  (ListView/RecyclerView item selection, SwitchCompat state_selected). (hasFocus/findFocus/clearFocus
-  are real since 2026-11-09, see "Nov 9: search field focus".)
-- setDuplicateParentStateEnabled now stores the flag; getDrawableState still does not merge the
-  parent's state (AOSP: a view with the flag takes its parent's drawable state).
-- NinePatch: only the npTc chunk is read; aapt's optical/outline insets (npOl/npLb) are not, so
-  NinePatchDrawable.getOutline is the plain bounds and getOpticalInsets is NONE.
 - onLayout for leaf views reaches Java only when the class overrides onLayout/onSizeChanged
   (native-leaf-layout.sh); AOSP always calls it. Fine for performance, but a class that only reads
   getWidth()/getHeight() in onDraw after a size change is covered by the wrapper's allocation.
 - isShown walks the parents (AOSP); a parentless view reports isAttachedToWindow.
-- View attributes clickable/longClickable/contextClickable/contentDescription/alpha/
-  importantForAccessibility/focusableInTouchMode/duplicateParentState are parsed from styles now;
-  soundEffectsEnabled/hapticFeedbackEnabled/layoutDirection/textDirection still are not.
 
 ## Oct 10: performance notes
 - ART ran with -Xcheck:jni on every launch (native-checkjni-opt.sh keeps it behind ATL_CHECK_JNI=1).
@@ -256,8 +210,8 @@ split APK set from tools/apps/install-app.sh, and the dalvik cache warmed (dex2o
   - Window insets are empty objects (WindowInsets.java.frag): the on-screen keyboard is not an IME
     inset, setOnApplyWindowInsetsListener does nothing, so adjustResize/inset-driven layouts never
     see the keyboard (the visible display frame does).
-  - Layout direction is not resolved (getLayoutDirection is always LTR; setLayoutDirection only
-    stores the raw value): no RTL mirroring for Hebrew.
+  - Text drawn by GTK keeps Pango's paragraph direction; ATL's own GTK containers do not mirror;
+    resolution is not redone on a runtime locale or configuration change.
   - Dialog layers and the on-screen keyboard: dialogs shown while the keyboard is up stack above it.
   - The window layer covers only the main window; app windows of other toplevels (none today) and
     the ATLKeyboardDialog / notification GtkWindows are not managed.

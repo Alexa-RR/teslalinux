@@ -19,6 +19,11 @@
             "title": "A smaller turn card",
             "shortDescription": "Car mode, both looks, day and night.",
             "descriptionMarkdown": "The card with the next turn took almost half the screen. It is now about a fifth shorter: a smaller turn sign and lanes row, and the street name gets room for its two lines. The exit and road signs Waze puts in front of a street name were drawn at the height of the letters, too small to read; they now keep their own shape and are a little taller than the text."
+          },
+          {
+            "title": "Map text size without a restart, sound on a Pi speaker",
+            "shortDescription": "Settings > Waze > Map text size in Car mode, and Settings > Sound.",
+            "descriptionMarkdown": "• Changing Map text size no longer makes Waze restart. Waze's map surface was replaced while the picture of its last frame still pointed at a closed buffer, which cut Waze off the display.\n• Waze's voice on a speaker connected to the Pi: Settings > Sound > Where Waze's sound plays (Car, Pi speaker, Both), with its own volume. A USB sound card or speaker is used when plugged in, else the 3.5 mm jack; plugging in or out takes effect at once."
           }
         ]
       },

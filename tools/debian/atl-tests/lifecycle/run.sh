@@ -39,7 +39,8 @@ if [ "$mode" != run ]; then
 	java -cp "$R8" com.android.tools.r8.D8 --min-api 24 --lib "$BOOT/core-all_classes.jar" \
 		--classpath "$BUILDDIR/src/api-impl/hax.jar" --output "$work" "$work/test.jar" || exit 1
 	[ -n "$apk" ] || apk="$work/lifecycle-test.apk"
-	python3 "$HERE/../embed/mkapk.py" "$apk" "$work/classes.dex" "$PKG" "$MAIN" \
+	# AskActivity's permission, declared as Waze declares it: an app holds only what its manifest requests
+	MKAPK_PERMISSIONS=android.permission.READ_CALENDAR python3 "$HERE/../embed/mkapk.py" "$apk" "$work/classes.dex" "$PKG" "$MAIN" \
 		"$PKG.LifecycleTest\$NowActivity" "$PKG.LifecycleTest\$AskActivity" \
 		"$PKG.LifecycleTest\$TranslucentActivity:0x01030010" || exit 1
 	chmod 644 "$apk"
