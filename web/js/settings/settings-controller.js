@@ -37,7 +37,18 @@
 
       this.sections = [
         // teslalinux: what the device is connected to right now (GET /api/status)
-        { id: "status", title: "Status", icon: "dashboard" },
+        {
+          id: "overview",
+          title: "Overview",
+          icon: "dashboard",
+          render: this._overviewSection,
+          railValue() {
+            if (!this.cache.status) return "";
+            const n = this._attention().length;
+            return n ? n + (n === 1 ? " thing to check" : " things to check") : "All good";
+          },
+        },
+        { id: "status", title: "Status", icon: "info" },
         { id: "display", title: "Display", icon: "desktop_windows" },
         // teslalinux: hotspot and LTE (GET/POST /api/network); upstream's Rear Display is gone (the
         // app is a navigation app shown on the main screen)
@@ -58,9 +69,17 @@
       ];
 
       // the search index: [row id, section, title, the words a driver might use for it]
-      this.index = [];
+      // (the fifth, when set: the setting exists only while this is true, e.g. in one interface)
+      const car = () => this._ifaceNow() === "car";
+      const phone = () => this._ifaceNow() !== "car";
+      this.index = [
+        ["quick.sound", "overview", "Waze's sound", "audio output speaker pi car both sound quick"],
+        ["quick.daynight", "overview", "Day and night", "dark light night day mode theme quick", car],
+        ["quick.restart", "overview", "Restart Waze", "restart waze frozen stuck reload quick"],
+      ];
+      void phone;
 
-      this.activeSectionId = "status";
+      this.activeSectionId = "overview";
       this._pollTimer = null;
       this._renderToken = 0;
 
@@ -2811,7 +2830,210 @@
 
     /** what needs the driver (the Overview's list, and the rail's dots) */
     _attention() {
-      return [];
+      const c = this.cache;
+      const out = [];
+      const st = c.status;
+      if (st) {
+        const hot = st.hotspot || {};
+        const clients = Array.isArray(hot.clients) ? hot.clients : [];
+        if (hot.present === false) {
+          out.push({ icon: "wifi_off", title: "No hotspot", detail: "This device has no Wi-Fi for the car to join.", section: "connections", go: "net.ssid" });
+        } else if (!clients.length) {
+          out.push({ icon: "wifi_off", title: "The car is not on the hotspot", detail: "Join " + (hot.ssid || "the hotspot") + " in the car's Wi-Fi settings.", section: "connections", go: "net.ssid" });
+        }
+        if (st.internet && st.internet.reachable === false) {
+          out.push({ icon: "public_off", title: "No internet", detail: "Waze keeps working with the map it has.", section: "connections", go: "net.internet" });
+        }
+        const modem = st.failover && st.failover.modem;
+        if (modem && modem.simProblem) {
+          out.push({ icon: "sim_card_alert", title: "SIM card problem", detail: modem.simProblem, section: "connections", go: "net.internet" });
+        }
+        const state = st.app && st.app.state;
+        if (state && state !== "active" && APP_WORDS[state]) {
+          out.push({
+            icon: "restart_alt",
+            title: state === "failed" || state === "inactive" ? "Waze is not running" : "Waze is starting",
+            detail: state === "failed" || state === "inactive" ? "Restart it from This device." : "It is back in about a minute.",
+            section: "device",
+            go: "dev.restartapp",
+          });
+        }
+        const th = st.system && st.system.throttled;
+        if (th && (th.underVoltage || th.throttled || th.capped || th.softTempLimit)) {
+          out.push({ icon: "bolt", title: "Power or heat problem", detail: "The Pi slows itself down now: check its power supply and cooling.", section: "device", go: "dev.health" });
+        }
+      }
+      if (c.appUpdate && c.appUpdate.pending && c.appUpdate.pending.versionName) {
+        out.push({ icon: "system_update", title: "Waze " + c.appUpdate.pending.versionName + " is ready", detail: "It installs by itself when the car is not connected.", section: "updates", go: "upd.waze" });
+      }
+      if (c.sys && Array.isArray(c.sys.available)) {
+        const n = c.sys.available.filter((p) => !p.held).length;
+        if (n && !c.sys.running) {
+          out.push({ icon: "security", title: n + (n === 1 ? " system update" : " system updates"), detail: "Fixes for the system underneath.", section: "updates", go: "upd.system" });
+        }
+      }
+      if (c.sys && c.sys.rebootRequired) {
+        out.push({ icon: "power_settings_new", title: "Restart needed", detail: "New system files take effect after a restart.", section: "device", go: "dev.restart" });
+      }
+      if (c.gpu && c.gpu.pendingRestart) {
+        out.push({ icon: "speed", title: "Graphics speed waits for a restart", detail: "The new speed applies when the device starts again.", section: "device", go: "dev.restart" });
+      }
+      return out;
+    }
+
+    // ------------------------------------------------------------------ Overview
+
+    /** the glance: the car, the internet, the position, Waze; each opens where it is explained */
+    _overviewGlance() {
+      const c = this.cache;
+      const st = c.status || {};
+      const hot = st.hotspot || {};
+      const car = (Array.isArray(hot.clients) ? hot.clients : [])[0];
+      const internet = st.internet || {};
+      const up = st.uplink;
+      const modem = (st.failover && st.failover.modem && st.failover.modem.type && st.failover.modem.type !== "none" ? st.failover.modem : null) || null;
+      const gps = st.gps || {};
+      const fix = gps.fix;
+      const state = st.app && st.app.state;
+      const cell = (kind, ic, word, sub, target, focus) =>
+        h(
+          "button",
+          { class: "gl gl--" + kind, type: "button", onclick: () => this.setActiveSection(target, focus) },
+          h("span", { class: "gl-glyph" }, icon(ic)),
+          h("span", { class: "gl-word" }, word),
+          h("span", { class: "gl-sub" }, sub),
+        );
+      let carCell;
+      if (!c.status) carCell = cell("off", "directions_car", "…", "Asking the device", "connections", "net.ssid");
+      else if (car) {
+        const sig = typeof car.signalDbm === "number" ? ", " + UI.fmt.signal(car.signalDbm) + " signal" : "";
+        carCell = cell("ok", "directions_car", "Connected", (car.name || car.ip || car.mac || "The car") + sig, "connections", "net.ssid");
+      } else if (hot.present === false) carCell = cell("bad", "wifi_off", "No hotspot", "No Wi-Fi on this device", "connections", "net.ssid");
+      else carCell = cell("bad", "wifi_off", "No car", "Join " + (hot.ssid || "the hotspot") + " in the car", "connections", "net.ssid");
+
+      const kindWord = { lte: "LTE", wifi: "Wi-Fi", ethernet: "Ethernet", phone: "Phone" };
+      let netCell;
+      if (!c.status) netCell = cell("off", "public", "…", "Asking the device", "connections", "net.internet");
+      else if (internet.reachable) {
+        const via = up ? (up.kind === "lte" && modem && modem.operator ? "LTE " + modem.operator : kindWord[up.kind] || up.kind) : "";
+        const lat = typeof internet.latencyMs === "number" ? internet.latencyMs + " ms" : "";
+        const weak = up && up.kind === "lte" && modem && typeof modem.bars === "number" && modem.bars < 3;
+        netCell = cell(weak ? "warn" : "ok", up && up.kind === "lte" ? "signal_cellular_alt" : up && up.kind === "wifi" ? "wifi" : "public", "Online", [via, lat].filter(Boolean).join(", "), "connections", "net.internet");
+      } else netCell = cell("bad", "public_off", "Offline", "Waze uses the map it has", "connections", "net.internet");
+
+      const gpsOn = !c.config || utils.toInt(c.config["persist.tesla-android.gps.is_active"], 1) === 1;
+      let posCell;
+      if (fix) posCell = cell("ok", "my_location", "Position live", "From the car" + (typeof fix.ageSeconds === "number" ? ", " + fix.ageSeconds + " s ago" : ""), "waze", "waze.gps");
+      else if (!gpsOn) posCell = cell("off", "location_disabled", "No position", "Turn on Car's position", "waze", "waze.gps");
+      else posCell = cell("off", "location_searching", "No position", gps.service === false ? "The position service is not running" : "Waiting for the car's browser", "waze", "waze.gps");
+
+      const appOk = state === "active";
+      const iface = this._ifaceNow() === "car" ? "Car interface" : "Phone interface";
+      const known = Boolean(APP_WORDS[state]);
+      const appCell = cell(
+        !known ? "off" : appOk ? "ok" : state === "failed" || state === "inactive" ? "bad" : "warn",
+        "navigation",
+        known ? "Waze " + appWord(state).toLowerCase() : "Waze",
+        known ? iface : "State unknown",
+        "device",
+        "dev.restartapp",
+      );
+      return h("div", { class: "glance", "data-part": "glance" }, carCell, netCell, posCell, appCell);
+    }
+
+    _overviewAttention() {
+      const items = this._attention();
+      const body = items.length
+        ? items.map((a) =>
+            h(
+              "div",
+              { class: "attn" },
+              icon(a.icon),
+              h("div", null, h("div", { class: "attn-title" }, a.title), h("div", { class: "attn-detail" }, a.detail)),
+              UI.button("Show", () => this.setActiveSection(a.section, a.go)),
+            ),
+          )
+        : [UI.calm("Nothing needs you. The car is connected and everything is up to date.")];
+      const g = UI.group(items.length ? "Needs you" : "All good", body);
+      g.dataset.part = "attention";
+      return g;
+    }
+
+    async _overviewSection(token) {
+      await this._refreshCache();
+      const c = this.cache;
+      const quick = [];
+      if (c.audio) {
+        const out = UI.row({ id: "quick.sound", title: "Waze's sound", stack: true });
+        UI.setControl(
+          out,
+          UI.segmented(this._soundOptions(), c.audio.output, (v) =>
+            UI.save(out, () => this.apiClient.setAudioOutput({ output: v })).then((ok) => {
+              if (ok) {
+                c.audio.output = v;
+                this._renderSidebar();
+              }
+              return ok;
+            }),
+            { label: "Where Waze's sound plays" },
+          ),
+        );
+        quick.push(out);
+      }
+      const car = global.TLCarApp;
+      if (this._ifaceNow() === "car" && car && car.getLook) {
+        const dn = UI.row({ id: "quick.daynight", title: "Day and night", stack: true });
+        UI.setControl(dn, UI.segmented(this._dayNightOptions(), car.getLook().dayNight, (v) => UI.save(dn, () => car.setLook({ dayNight: v }), "Applied")));
+        quick.push(dn);
+      }
+      const ra = UI.row({ id: "quick.restart", title: "Restart Waze", detail: "Back in about a minute" });
+      UI.setControl(ra, UI.armed("Restart", "Tap again to restart", (b) => this._restartApp(ra, b)));
+      quick.push(ra);
+
+      this._pollTimer = global.setTimeout(() => this._pollOverview(token), 3000);
+      return [this._overviewGlance(), this._overviewAttention(), UI.group("Quick controls", quick)];
+    }
+
+    /** every 3 s: the glance and what needs the driver, in place (the quick controls stay as they are) */
+    async _pollOverview(token) {
+      if (token !== this._renderToken) return;
+      if (this._visible()) {
+        try {
+          await this._refreshCache();
+        } catch (_e) {
+          // the next round tries again
+        }
+        if (token !== this._renderToken) return;
+        const glance = this.content.querySelector('[data-part="glance"]');
+        const attention = this.content.querySelector('[data-part="attention"]');
+        if (glance) glance.replaceWith(this._overviewGlance());
+        if (attention) attention.replaceWith(this._overviewAttention());
+      }
+      this._pollTimer = global.setTimeout(() => this._pollOverview(token), 3000);
+    }
+
+    /** restarts the app (POST /api/appRestart), then the header follows it */
+    async _restartApp(r, b) {
+      if (b) b.disabled = true;
+      const ok = await UI.save(r, () => this.apiClient.restartApp(), "Waze is restarting");
+      if (b) b.disabled = false;
+      if (ok) this._watchApp();
+    }
+
+    _soundOptions() {
+      return [
+        { value: "car", label: "Car", icon: "directions_car", caption: "default" },
+        { value: "pi", label: "Pi speaker", icon: "speaker" },
+        { value: "both", label: "Both", icon: "speaker_group" },
+      ];
+    }
+
+    _dayNightOptions() {
+      return [
+        { value: "auto", label: "Automatic", icon: "brightness_auto", caption: "follows the sun" },
+        { value: "day", label: "Day", icon: "wb_sunny" },
+        { value: "night", label: "Night", icon: "nights_stay" },
+      ];
     }
 
     /** the answers the rail and the overview read, all at once; each part null when it fails */
