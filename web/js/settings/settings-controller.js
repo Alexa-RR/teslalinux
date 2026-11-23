@@ -117,7 +117,20 @@
             return n ? n + " waiting" : "Up to date";
           },
         },
-        { id: "device", title: "Device", icon: "memory" },
+        // the device itself: health, how long it took to start, restarts, what it is
+        {
+          id: "device",
+          title: "This device",
+          icon: "memory",
+          render: this._deviceSection,
+          railValue() {
+            const st = this.cache.status;
+            if (!st) return "";
+            const t = st.system && st.system.cpuTemperature;
+            const app = appWord(st.app && st.app.state).toLowerCase();
+            return typeof t === "number" && t >= 0 ? Math.round(t) + " °C, " + app : "Waze " + app;
+          },
+        },
       ];
 
       // the search index: [row id, section, title, the words a driver might use for it]
@@ -168,6 +181,12 @@
         ["upd.play", "updates", "Google Play via a token dispenser", "google play dispenser advanced aurora"],
         ["upd.system", "updates", "System updates", "debian apt os system packages security kernel"],
         ["upd.whatsnew", "updates", "What's new", "release notes changelog version new"],
+        ["dev.health", "device", "Health", "temperature cpu load memory storage power throttled voltage heat"],
+        ["dev.boot", "device", "Start-up time", "boot start startup how long power on fast slow seconds", () => Boolean(this._bootShown())],
+        ["dev.restartapp", "device", "Restart Waze", "restart waze frozen stuck reload"],
+        ["dev.restart", "device", "Restart the device", "reboot restart pi power"],
+        ["dev.info", "device", "Model and serial number", "model serial kernel os about hostname"],
+        ["dev.about", "device", "About Teslalinux", "about credits version licence license tesla android"],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
@@ -244,12 +263,6 @@
         this.content.replaceChildren(...[].concat(nodes).filter(Boolean));
         if (this.pane) this.pane.scrollTop = keepScroll ? scroll : this.pane.scrollTop;
         return;
-      }
-      this.content.innerHTML = "";
-      this._curBody = null;
-
-      if (this.activeSectionId === "device") {
-        await this._renderDeviceSection(token);
       }
     }
 
@@ -423,193 +436,6 @@
         this._pollTimer = global.setTimeout(settle, 400);
       };
       this._pollTimer = global.setTimeout(tick, 700);
-    }
-
-    _fmt() {
-      return {
-        bytes: (n) => {
-          if (typeof n !== "number" || !isFinite(n)) {
-            return "?";
-          }
-          const units = ["B", "KB", "MB", "GB", "TB"];
-          let i = 0;
-          while (n >= 1000 && i < units.length - 1) {
-            n /= 1000;
-            i += 1;
-          }
-          return (i === 0 ? String(n) : n.toFixed(n < 10 ? 1 : 0)) + " " + units[i];
-        },
-        duration: (s) => {
-          const d = Math.floor(s / 86400);
-          const h = Math.floor((s % 86400) / 3600);
-          const m = Math.floor((s % 3600) / 60);
-          if (d) {
-            return d + " d " + h + " h";
-          }
-          if (h) {
-            return h + " h " + m + " min";
-          }
-          return m ? m + " min" : Math.floor(s) + " s";
-        },
-        ago: (unix) => {
-          if (!unix) {
-            return "never";
-          }
-          const s = Math.max(0, Date.now() / 1000 - unix);
-          if (s < 90) {
-            return "just now";
-          }
-          if (s < 5400) {
-            return Math.round(s / 60) + " min ago";
-          }
-          if (s < 129600) {
-            return Math.round(s / 3600) + " h ago";
-          }
-          return Math.round(s / 86400) + " days ago";
-        },
-      };
-    }
-
-    async _renderDeviceSection(token) {
-      this._appendLoadingState();
-
-      let deviceInfo;
-      try {
-        deviceInfo = await this.apiClient.fetchDeviceInfo();
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-
-      if (token !== this._renderToken || this.activeSectionId !== "device") {
-        return;
-      }
-
-      const deviceModel = utils.mapDeviceModelName(deviceInfo.device_model);
-
-      this.content.innerHTML = "";
-
-      this._appendTile({
-        icon: "device_thermostat",
-        title: "CPU Temperature",
-        trailing: this._createTrailingText(String(utils.toInt(deviceInfo.cpu_temperature, 0)) + "\u00B0C"),
-      });
-      this._appendDescription(
-        "CPU temperature should not exceed 80\u00B0C. Make sure the device is actively cooled and proper ventilation is provided.",
-      );
-      this._appendDivider();
-
-      this._appendTile({
-        icon: "perm_device_info",
-        title: "Model",
-        trailing: this._createTrailingText(deviceModel),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "developer_board_rounded",
-        title: "Serial Number",
-        trailing: this._createTrailingText(String(deviceInfo.serial_number || "undefined")),
-        dense: false,
-      });
-      await this._appendAppRestartTile(token);
-    }
-
-    // teslalinux: restart the app (Waze under ATL) without touching the display stream or the page.
-    // GET /api/appState + POST /api/appRestart (services/api/api.py); left out when the API lacks them.
-    async _appendAppRestartTile(token) {
-      let appState;
-      try {
-        appState = await this.apiClient.fetchAppState();
-      } catch (_error) {
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "device") {
-        return;
-      }
-      const describe = (state) => {
-        switch (state) {
-          case "active":
-            return "Running";
-          case "activating":
-          case "restarting":
-            return "Restarting\u2026";
-          case "inactive":
-            return "Stopped";
-          case "failed":
-            return "Stopped after an error";
-          default:
-            return "State unknown";
-        }
-      };
-      this._appendDivider();
-      const tile = this._appendTile({
-        icon: "refresh",
-        title: "Restart Waze",
-        subtitle: describe(appState.state),
-        trailing: this._createActionButton("Restart"),
-        dense: false,
-      });
-      const subtitle = tile.querySelector(".settings-tile-subtitle");
-      const button = tile.querySelector(".settings-action-button");
-      this._appendDescription(
-        "Closes Waze and starts it again (about a minute). The display shows the new start as soon as it is drawn. Use it when Waze stops responding.",
-      );
-
-      let armed = false;
-      let disarmTimer = null;
-      button.addEventListener("click", async () => {
-        // two taps: a stray touch while driving must not restart navigation
-        if (!armed) {
-          armed = true;
-          button.textContent = "Tap again";
-          button.classList.add("armed");
-          disarmTimer = global.setTimeout(() => {
-            armed = false;
-            button.textContent = "Restart";
-            button.classList.remove("armed");
-          }, 4000);
-          return;
-        }
-        global.clearTimeout(disarmTimer);
-        armed = false;
-        button.classList.remove("armed");
-        button.disabled = true;
-        button.textContent = "Restarting\u2026";
-        subtitle.textContent = describe("restarting");
-        try {
-          await this.apiClient.restartApp();
-        } catch (_error) {
-          subtitle.textContent = "Restart failed (service error)";
-          button.disabled = false;
-          button.textContent = "Restart";
-          return;
-        }
-        // follow the service until it runs again (or two minutes pass)
-        const started = Date.now();
-        const poll = async () => {
-          if (!tile.isConnected) {
-            return;
-          }
-          let state = "unknown";
-          try {
-            state = (await this.apiClient.fetchAppState()).state;
-          } catch (_error) {
-            // keep polling
-          }
-          subtitle.textContent = describe(state);
-          if (state === "active" || Date.now() - started > 120000) {
-            button.disabled = false;
-            button.textContent = "Restart";
-            return;
-          }
-          global.setTimeout(poll, 1500);
-        };
-        global.setTimeout(poll, 1500);
-      });
-    }
-
-    _createActionButton(text) {
-      return h("button", { class: "btn settings-action-button", type: "button" }, text);
     }
 
     // ------------------------------------------------------------------ the page frame
@@ -1967,6 +1793,188 @@
       return r;
     }
 
+    // ------------------------------------------------------------------ This device
+
+    /** the start-up time to show (GET /api/status system.boot), or null */
+    _bootShown() {
+      const b = this.cache.status && this.cache.status.system && this.cache.status.system.boot;
+      return b && (b.pageSeconds || (b.history && b.history.length)) ? b : null;
+    }
+
+    /**
+     * The device itself (GET /api/status, /api/deviceInfo, /api/appState): its health, how long it
+     * took to start (host/teslalinux-boottime), restarting Waze and the device, what it is, and the
+     * credits (the page has no bottom bar).
+     */
+    async _deviceSection(token) {
+      const api = this.apiClient;
+      const [st, info, app] = await Promise.all([
+        api.fetchStatus(),
+        api.fetchDeviceInfo().catch(() => null),
+        api.fetchAppState().catch(() => null),
+      ]);
+      this.cache.status = st;
+      const fmt = UI.fmt;
+      const sys = st.system || {};
+      const th = sys.throttled;
+      const temp = typeof sys.cpuTemperature === "number" && sys.cpuTemperature >= 0 ? sys.cpuTemperature : null;
+      const nowBad = th && (th.underVoltage || th.throttled || th.capped || th.softTempLimit);
+      const power = !th ? null : nowBad ? "Problem now" : th.sinceBoot ? "Problem earlier" : "OK";
+      const why = th
+        ? [th.underVoltage ? "under-voltage" : "", th.throttled ? "slowed down" : "", th.capped ? "clock capped" : "", th.softTempLimit ? "temperature limit" : ""].filter(Boolean).join(", ")
+        : "";
+      const mem = sys.memory || {};
+      const disk = sys.disk || {};
+      const health = h(
+        "div",
+        { "data-id": "dev.health" },
+        UI.facts([
+          temp !== null ? ["Temperature", Math.round(temp) + " °C", temp >= 80 ? "bad" : temp >= 70 ? "warn" : "ok"] : null,
+          power ? ["Power", power + (why ? " (" + why + ")" : ""), power === "OK" ? "ok" : "warn"] : null,
+          Array.isArray(sys.load) && sys.load.length ? ["Load", sys.load[0].toFixed(1) + (sys.cpus ? " of " + sys.cpus + " cores" : "")] : null,
+          mem.total ? ["Memory used", fmt.bytes(mem.total - mem.available) + " of " + fmt.bytes(mem.total)] : null,
+          disk.total ? ["Storage free", fmt.bytes(disk.free) + " of " + fmt.bytes(disk.total)] : null,
+          typeof sys.uptimeSeconds === "number" ? ["Running for", fmt.dur(sys.uptimeSeconds)] : null,
+        ]),
+        power && power !== "OK"
+          ? UI.warnbox("Use a power supply that gives 5 V at 3 A or more, and keep the device cool. The Pi slows itself down when it gets too hot or the voltage drops.", "bolt")
+          : temp !== null && temp >= 80
+            ? UI.warnbox("The processor is hot. Above 80 °C the Pi slows itself down: give it a heatsink or a fan and some air.", "device_thermostat")
+            : null,
+      );
+      const out = [UI.group("Health", [health])];
+
+      const boot = this._bootShown();
+      if (boot) out.push(UI.group("Start-up", [this._bootTimeline(boot)]));
+
+      const state = (app && app.state) || (st.app && st.app.state);
+      const ra = UI.row({
+        id: "dev.restartapp",
+        title: "Waze",
+        detail: appWord(state) + (state === "active" ? ". Restart it when it stops responding (about a minute)." : state === "activating" || state === "restarting" ? "…" : ""),
+      });
+      UI.setControl(ra, UI.armed("Restart Waze", "Tap again to restart", (b) => this._restartApp(ra, b)));
+      out.push(UI.group("Restart", [ra, this._restartDeviceRow(Boolean(this.cache.sys && this.cache.sys.rebootRequired))]));
+
+      const hot = st.hotspot || {};
+      out.push(
+        UI.group("About this device", [
+          h(
+            "div",
+            { "data-id": "dev.info" },
+            UI.facts([
+              ["Model", (sys.model && / /.test(sys.model) ? sys.model : info && info.device_model ? utils.mapDeviceModelName(info.device_model) : sys.model || "Unknown").replace(/ Model B.*/, "")],
+              info && info.serial_number ? ["Serial number", String(info.serial_number)] : null,
+              sys.os ? ["System", sys.os.replace(/ GNU\/Linux/, "")] : null,
+              sys.kernel ? ["Kernel", sys.kernel] : null,
+              sys.hostname ? ["Name", sys.hostname] : null,
+              ["Pages showing Waze", String(st.displayViewers || 0)],
+              hot.address ? ["Hotspot address", hot.address] : null,
+            ]),
+          ),
+        ]),
+      );
+
+      // the credits at the end of the page (no bottom bar on Settings; About and Credits stay for the other pages)
+      const notes = TAHtml.releaseNotesData && TAHtml.releaseNotesData.versions;
+      const released = notes && (notes.find((v) => v.versionName !== "Unreleased") || notes[0]);
+      const version = released ? String(released.versionName).split(" · ")[0].replace(/^v/, "") : "";
+      out.push(
+        h(
+          "footer",
+          { class: "credits", "data-id": "dev.about" },
+          h("p", null, h("b", null, "Teslalinux" + (version ? " " + version : "")), ". Waze in the car's browser, from a Raspberry Pi."),
+          h("p", null, "Based on Tesla Android (its web app, protocols and car integration). Apps run on the Android Translation Layer. Text in Inter (SIL Open Font License), icons from Material Icons (Apache License 2.0)."),
+        ),
+      );
+      return out;
+    }
+
+    /** the start-up: a headline, the phases on one time axis, the milestones as legend and table, the last starts */
+    _bootTimeline(b) {
+      const s1 = (x) => UI.fmt.secs(x);
+      const S1 = (x) => h("bdi", null, s1(x));
+      const kernel = b.kernelSeconds;
+      const hot = b.hotspotSeconds;
+      const page = b.pageSeconds;
+      const wrap = h("div", { class: "boot", "data-id": "dev.boot" });
+      const st = h("div", { class: "row-status", "aria-live": "polite" });
+      if (page) {
+        const map = b.appMapSeconds && b.appMapSeconds > page ? b.appMapSeconds : null;
+        const end = map || page;
+        const ph = [];
+        if (kernel) ph.push({ key: "kernel", name: "Kernel", from: 0, to: kernel, what: "The Linux kernel starts and finds the hardware" });
+        const sysEnd = hot && hot < page ? hot : page;
+        if (kernel && sysEnd > kernel) ph.push({ key: "system", name: "System", from: kernel, to: sysEnd, what: hot && hot < page ? "Services start, up to the hotspot the car joins" : "Services start, up to the web server" });
+        if (hot && hot < page) ph.push({ key: "page", name: "Page", from: hot, to: page, what: "The web server that serves this page" });
+        if (map) ph.push({ key: "waze", name: "Waze", from: page, to: map, what: "Waze starts and draws its map" });
+        wrap.append(
+          h(
+            "div",
+            { class: "boot-hero" },
+            h("div", null, h("div", { class: "boot-label" }, "Last start: ready for the car in"), h("div", { class: "boot-value num" }, S1(page))),
+            map
+              ? h("div", { class: "boot-side" }, h("div", { class: "boot-label" }, "Waze's map ready after"), h("div", { class: "boot-value boot-value--2 num" }, S1(map)))
+              : !b.final
+                ? h("div", { class: "boot-side" }, h("div", { class: "boot-label" }, "Waze's map"), h("div", { class: "boot-value boot-value--2 num" }, "measuring…"))
+                : null,
+          ),
+        );
+        // the tall segmented bar: widths in proportion, a label only where it fits
+        const bar = h("div", { class: "boot-bar", role: "img", "aria-label": "Start-up phases: " + ph.map((p) => p.name + " " + s1(p.to - p.from)).join(", ") });
+        ph.forEach((p) => {
+          const share = (p.to - p.from) / end;
+          const seg = h(
+            "button",
+            { class: "boot-seg boot-seg--" + p.key, type: "button", style: "flex-grow:" + share.toFixed(4), title: p.name + ": " + s1(p.from) + " to " + s1(p.to) },
+            share > 0.14 ? h("span", null, p.name + " " + s1(p.to - p.from)) : null,
+          );
+          seg.addEventListener("click", () => {
+            st.className = "row-status is-info";
+            st.replaceChildren(icon("info_outline"), h("span", null, p.name + ", " + s1(p.from) + " to " + s1(p.to) + ": " + p.what + "."));
+          });
+          bar.append(seg);
+        });
+        const ticks = h("div", { class: "boot-axis", "aria-hidden": "true" });
+        const step = end > 60 ? 20 : end > 25 ? 10 : 5;
+        for (let t = 0; t <= end; t += step) ticks.append(h("span", { style: "inset-inline-start:" + ((t / end) * 100).toFixed(2) + "%" }, h("bdi", null, t + " s")));
+        const steps = [
+          kernel ? ["kernel", "Kernel started", kernel] : null,
+          hot ? ["system", "Hotspot on: the car can join", hot] : null,
+          ["page", "This page served", page],
+          b.appFrameSeconds ? ["waze", "Waze's first picture", b.appFrameSeconds] : null,
+          b.appMapSeconds ? ["waze", "Waze's map ready", b.appMapSeconds] : null,
+        ]
+          .filter(Boolean)
+          .sort((x, y) => x[2] - y[2]);
+        const list = h(
+          "ol",
+          { class: "boot-steps" },
+          steps.map((x) => h("li", null, h("span", { class: "boot-key boot-seg--" + x[0], "aria-hidden": "true" }), h("span", null, x[1]), h("span", { class: "num" }, S1(x[2])))),
+        );
+        wrap.append(bar, ticks, st, list);
+        wrap.append(h("p", { class: "group-note" }, "Counted from the kernel's start. The Pi's own firmware runs for a few seconds before that and is not measured."));
+      } else {
+        wrap.append(h("p", { class: "group-note" }, "This start is not measured yet."));
+      }
+      // earlier starts, newest first
+      const hist = (b.history || []).filter((x) => x.pageSeconds);
+      if (hist.length > (page ? 1 : 0)) {
+        const ready = hist.map((x) => x.pageSeconds).sort((x, y) => x - y);
+        const typical = ready[Math.floor(ready.length / 2)];
+        const rows = hist.map((x, i) =>
+          h(
+            "div",
+            { class: "pkg" },
+            h("span", null, i === 0 && page && x.at === b.at ? "This start" : x.at ? new Date(x.at * 1000).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "Earlier"),
+            h("span", { class: "num" }, h("bdi", null, s1(x.pageSeconds) + " ready, map " + (x.appMapSeconds ? s1(x.appMapSeconds) : "not measured"))),
+          ),
+        );
+        wrap.append(...UI.disclosure("Previous starts (typically " + s1(typical) + ")", h("div", { class: "pkgs" }, rows)));
+      }
+      return wrap;
+    }
+
     // ------------------------------------------------------------------ Waze
 
     /**
@@ -2859,87 +2867,6 @@
       } catch (_error) {
         return null;
       }
-    }
-
-    // ------------------------------------------------------------------ the old sections' helpers, on the new rows
-
-    /** the group the old append helpers write into: the current one, else a new untitled one */
-    _body() {
-      const container = this._target || this.content;
-      if (!this._curBody || !this._curBody.isConnected || this._curBody.closest(".group").parentNode !== container) {
-        const g = UI.group(null, []);
-        container.appendChild(g);
-        this._curBody = g.querySelector(".group-body");
-      }
-      return this._curBody;
-    }
-
-    _appendTile(options) {
-      const control = options.trailing || null;
-      const stack = Boolean(control && control.classList && (control.classList.contains("seg") || control.classList.contains("slider")));
-      const r = UI.row({ title: options.title || "", detail: options.subtitle || "", control, stack });
-      // the old sections update their tile's subtitle in place
-      let detail = r.querySelector(".row-detail");
-      if (!detail) {
-        detail = h("div", { class: "row-detail" });
-        detail.hidden = !options.subtitle;
-        r.querySelector(".row-main").append(detail);
-      }
-      detail.classList.add("settings-tile-subtitle");
-      this._body().appendChild(r);
-      return r;
-    }
-
-    _appendDescription(text) {
-      this._body().appendChild(h("p", { class: "group-note" }, text));
-    }
-
-    _appendDivider() {
-      this._curBody = null;
-    }
-
-    _appendHeading(text) {
-      const g = UI.group(text, []);
-      (this._target || this.content).appendChild(g);
-      this._curBody = g.querySelector(".group-body");
-    }
-
-    _appendLoadingState() {
-      this.content.replaceChildren(h("div", { class: "loading" }, "Loading…"));
-      this._curBody = null;
-    }
-
-    /** an error above what the section shows (it no longer wipes the section) */
-    _renderErrorState(message) {
-      if (this.content.querySelector(":scope > .loading")) this.content.replaceChildren();
-      this.content.querySelectorAll(":scope > .error-note").forEach((e) => e.remove());
-      this.content.prepend(h("div", { class: "error-note", role: "alert" }, icon("error_outline"), h("span", null, message)));
-    }
-
-    /** a choice: up to six short ones in a segmented control, more in a picker sheet */
-    _createSelect(options, value, onChange) {
-      const after = async (v) => {
-        await onChange(String(v));
-        if (this.activeSectionId) await this._renderActiveSection(true);
-      };
-      if (options.length <= 6) {
-        return UI.segmented(options.map((o) => ({ value: o.value, label: String(o.label) })), value, after);
-      }
-      const chosen = options.find((o) => String(o.value) === String(value)) || options[0];
-      return UI.tapValue(chosen ? String(chosen.label) : "", async () => {
-        const v = await UI.pickFrom({ title: "Choose", value, options: options.map((o) => ({ value: o.value, label: String(o.label) })) });
-        if (v != null && String(v) !== String(value)) await after(v);
-      });
-    }
-
-    _createSwitch(value, onChange) {
-      return UI.toggle(value, async (checked) => {
-        await onChange(Boolean(checked));
-      });
-    }
-
-    _createTrailingText(text) {
-      return UI.value(text);
     }
   }
 
