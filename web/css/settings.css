@@ -1193,6 +1193,51 @@ body:has(#panel-shell.is-settings:not([hidden])) {
   overflow-wrap: anywhere;
 }
 
+/* a signal strength as bars (SettingsUI.signalBars): in a fact, the rail and the overview glyph */
+#page-settings .sigbars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.12em;
+  height: 0.9em;
+  vertical-align: -0.06em;
+}
+
+#page-settings .sigbar {
+  width: 0.22em;
+  height: calc(var(--h) * 100%);
+  border-radius: 0.06em;
+  background: currentColor;
+  opacity: 0.22;
+}
+
+#page-settings .sigbar.on {
+  opacity: 1;
+}
+
+#page-settings .fact .sigbars {
+  font-size: 1.4em;
+}
+
+#page-settings .rail-value .sigbars {
+  font-size: 1.15em;
+}
+
+#page-settings .rail-value .sigbars--ok {
+  color: var(--green);
+}
+
+#page-settings .rail-value .sigbars--warn {
+  color: var(--amber-ink);
+}
+
+#page-settings .rail-value .sigbars--bad {
+  color: var(--red);
+}
+
+#page-settings .gl-glyph .sigbars {
+  font-size: 26px;
+}
+
 #page-settings .fact dd.ok {
   color: var(--green);
 }

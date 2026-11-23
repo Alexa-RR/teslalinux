@@ -366,6 +366,20 @@
     );
   }
 
+  /**
+   * A signal strength drawn as rising bars filled up to its level, as a phone's status bar shows it
+   * (the words stay for screen readers): green from 3 of 5, amber at 2, red below.
+   */
+  function signalBars(level, max) {
+    const n = max || 5;
+    const lv = Math.max(0, Math.min(n, Math.round(Number(level) || 0)));
+    const tone = lv >= Math.ceil(n * 0.6) ? "ok" : lv >= Math.ceil(n * 0.4) ? "warn" : "bad";
+    const words = lv + " of " + n + " bars";
+    const el = h("span", { class: "sigbars sigbars--" + tone, role: "img", "aria-label": words, title: words });
+    for (let i = 1; i <= n; i += 1) el.append(h("span", { class: "sigbar" + (i <= lv ? " on" : ""), style: "--h:" + (0.28 + (0.72 * i) / n).toFixed(3) }));
+    return el;
+  }
+
   function warnbox(text, ic) {
     return h("div", { class: "warnbox", role: "note" }, icon(ic || "warning"), h("span", null, text));
   }
@@ -599,6 +613,7 @@
     armed,
     group,
     facts,
+    signalBars,
     warnbox,
     calm,
     disclosure,

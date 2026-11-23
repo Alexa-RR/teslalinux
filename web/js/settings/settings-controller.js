@@ -98,7 +98,8 @@
             if (!st.internet || !st.internet.reachable) return "No internet";
             const up = st.uplink || {};
             const m = this._modem(st);
-            if (up.kind === "lte") return "LTE" + (m && typeof m.bars === "number" ? ", " + m.bars + " of 5 bars" : "");
+            // the signal as bars, not words
+            if (up.kind === "lte") return m && typeof m.bars === "number" ? ["LTE ", UI.signalBars(m.bars)] : "LTE";
             return { wifi: "Backup Wi-Fi", ethernet: "Ethernet", phone: "Phone" }[up.kind] || "Online";
           },
         },
@@ -630,7 +631,7 @@
         h(
           "button",
           { class: "gl gl--" + kind, type: "button", onclick: () => this.setActiveSection(target, focus) },
-          h("span", { class: "gl-glyph" }, icon(ic)),
+          h("span", { class: "gl-glyph" }, typeof ic === "string" ? icon(ic) : ic),
           h("span", { class: "gl-word" }, word),
           h("span", { class: "gl-sub" }, sub),
         );
@@ -649,7 +650,9 @@
         const via = up ? (up.kind === "lte" && modem && modem.operator ? "LTE " + modem.operator : kindWord[up.kind] || up.kind) : "";
         const lat = typeof internet.latencyMs === "number" ? internet.latencyMs + " ms" : "";
         const weak = up && up.kind === "lte" && modem && typeof modem.bars === "number" && modem.bars < 3;
-        netCell = cell(weak ? "warn" : "ok", up && up.kind === "lte" ? "signal_cellular_alt" : up && up.kind === "wifi" ? "wifi" : "public", "Online", [via, lat].filter(Boolean).join(", "), "connections", "net.internet");
+        // LTE: the live signal as bars in the glyph
+        const glyph = up && up.kind === "lte" ? (modem && typeof modem.bars === "number" ? UI.signalBars(modem.bars) : "signal_cellular_alt") : up && up.kind === "wifi" ? "wifi" : "public";
+        netCell = cell(weak ? "warn" : "ok", glyph, "Online", [via, lat].filter(Boolean).join(", "), "connections", "net.internet");
       } else netCell = cell("bad", "public_off", "Offline", "Waze uses the map it has", "connections", "net.internet");
 
       const gpsOn = !c.config || utils.toInt(c.config["persist.tesla-android.gps.is_active"], 1) === 1;
@@ -933,7 +936,7 @@
       if (m) {
         const tech = m.networkType && m.technology && m.technology !== m.networkType ? m.networkType + " (" + m.technology + ")" : m.networkType || m.technology;
         facts.push(["Operator", [m.operator || "Unknown", tech, m.roaming ? "roaming" : ""].filter(Boolean).join(", ")]);
-        if (typeof m.bars === "number") facts.push(["Signal", m.bars + " of 5 bars", m.bars >= 3 ? "ok" : "warn"]);
+        if (typeof m.bars === "number") facts.push(["Signal", UI.signalBars(m.bars), m.bars >= 3 ? "ok" : m.bars >= 2 ? "warn" : "bad"]);
         else if (typeof m.signal === "number") facts.push(["Signal", m.signal + " %"]);
         if (m.connection) facts.push(["Modem", cap(m.connection) + (m.connection === "connected" && typeof m.connectedSeconds === "number" ? " for " + fmt.dur(m.connectedSeconds) : "")]);
         if (m.month) facts.push(["This month", data(m.month)]);
