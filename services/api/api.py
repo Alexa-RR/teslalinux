@@ -47,7 +47,7 @@ The GPU speed (new routes only):
 The keyboard (new routes only):
 * GET  /api/keyboard   {"mode": "builtin" | "device"}: the app's own on-screen keyboard, or the keyboard
                        of the device showing the page (the page then types through tacomp's
-                       /sockets/keyboard)
+                       /sockets/keyboard; the default, without a choice in keyboard.env)
 * POST /api/keyboard   JSON {"mode": ...}: `teslalinux-set-keyboard` (one sudoers rule) writes
                        /etc/teslalinux/keyboard.env and restarts the app if the choice changed
 
@@ -655,8 +655,8 @@ def set_gpu_speed(speed):
 def keyboard_state():
     """GET /api/keyboard: {"mode": "builtin"|"device"}: the app's own on-screen keyboard, or the keyboard
     of the device showing the page (teslalinux-set-keyboard; the page then uses /sockets/keyboard)"""
-    mode = _env_file(KEYBOARD_ENV).get("TESLALINUX_KEYBOARD", "builtin")
-    return {"mode": mode if mode in KEYBOARD_MODES else "builtin"}
+    mode = _env_file(KEYBOARD_ENV).get("TESLALINUX_KEYBOARD", "device")  # the default: the car's own
+    return {"mode": mode if mode in KEYBOARD_MODES else "device"}
 
 
 def set_keyboard(mode):

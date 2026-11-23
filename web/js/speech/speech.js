@@ -9,6 +9,10 @@
 
   const Recognition = global.SpeechRecognition || global.webkitSpeechRecognition || null;
   const LANGUAGE_KEY = "teslalinux.voice.language";
+  // the microphone button and the app's speech recognizer are opt-in (Settings > Waze interface >
+  // Voice search): a Tesla's browser has no working speech recognition, and its own keyboard
+  // dictates through its microphone instead
+  const ENABLED_KEY = "teslalinux.voice.enabled";
   const LANGUAGES = [
     { value: "he-IL", label: "עברית (Hebrew)" },
     { value: "en-US", label: "English" },
@@ -31,6 +35,35 @@
     /** whether this browser has speech recognition at all */
     supported() {
       return Recognition !== null;
+    },
+
+    /** whether voice search is switched on in this browser (off by default) */
+    enabled() {
+      try {
+        return global.localStorage.getItem(ENABLED_KEY) === "1";
+      } catch (_e) {
+        return false;
+      }
+    },
+
+    /** whether the page offers voice search: switched on, and the browser can recognise speech */
+    available() {
+      return TLSpeech.supported() && TLSpeech.enabled();
+    },
+
+    setEnabled(on) {
+      try {
+        if (on) global.localStorage.setItem(ENABLED_KEY, "1");
+        else global.localStorage.removeItem(ENABLED_KEY);
+      } catch (_e) {
+        // storage blocked: stays off after a reload
+      }
+      for (const l of TLSpeech._enabledListeners) l(Boolean(on));
+    },
+
+    _enabledListeners: [],
+    onEnabledChange(fn) {
+      TLSpeech._enabledListeners.push(fn);
     },
 
     language() {
@@ -147,8 +180,10 @@
     initialize() {
       const socket = new ReconnectingWebSocket(this.socketUrl);
       socket.onopen = () => {
-        this._send({ type: "hello", recognition: TLSpeech.supported() });
+        this._send({ type: "hello", recognition: TLSpeech.available() });
       };
+      // the app learns at once when voice search is switched on or off here
+      TLSpeech.onEnabledChange(() => this._send({ type: "hello", recognition: TLSpeech.available() }));
       socket.onclose = () => {
         for (const s of this.sessions.values()) s.abort();
         this.sessions.clear();
@@ -176,6 +211,11 @@
 
     _listen(m) {
       const id = m.id;
+      // switched off in this browser: answered as a browser that does not offer recognition
+      if (!TLSpeech.enabled()) {
+        this._send({ type: "error", id, error: "service-not-allowed" });
+        return;
+      }
       // the app's language when it names one this page offers, else this browser's choice
       const asked = String(m.lang || "");
       const lang = TLSpeech.LANGUAGES.some((l) => l.value.split("-")[0] === asked.split("-")[0])

@@ -1021,7 +1021,9 @@
      */
     voiceButton(bar) {
       const speech = global.TLSpeech;
-      if (!speech || !speech.supported()) return null;
+      // only when switched on in Settings (off by default: a Tesla's browser cannot recognise
+      // speech; its keyboard's own microphone dictates into the field instead)
+      if (!speech || !speech.available()) return null;
       const b = document.createElement("button");
       b.type = "button";
       b.className = "carapp-search-mic";

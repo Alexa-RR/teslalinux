@@ -1,10 +1,11 @@
 #!/bin/sh
 # teslalinux: choose which keyboard types into the app, from the settings page. Called by
 # services/api/api.py (POST /api/keyboard) through one sudoers rule, like teslalinux-set-locale.
-#   teslalinux-set-keyboard builtin   the app's own on-screen keyboard, drawn in the app (the default)
-#   teslalinux-set-keyboard device    the keyboard of the device showing the page (the car's, a phone's):
-#                                     tacomp tells the page when a text field wants input (text-input-v3)
-#                                     and the page sends what is typed back; the app's own keyboard is off
+#   teslalinux-set-keyboard device    the keyboard of the device showing the page (the car's, a phone's;
+#                                     the default): tacomp tells the page when a text field wants input
+#                                     (text-input-v3) and the page sends what is typed back; the app's own
+#                                     keyboard is off. The car's keyboard also dictates (its microphone)
+#   teslalinux-set-keyboard builtin   the app's own on-screen keyboard, drawn in the app
 # Writes /etc/teslalinux/keyboard.env (TESLALINUX_KEYBOARD, read by teslalinux-atl.service and the
 # launcher, which turns the app's keyboard off for "device") and restarts only the app, only when the
 # choice changed: the input method is chosen when the app starts.

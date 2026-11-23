@@ -211,7 +211,7 @@
       this._appendTile({
         icon: "keyboard",
         title: "Use this device's keyboard",
-        subtitle: "Type with the car's (or phone's) own keyboard instead of the app's built-in one",
+        subtitle: "On by default: type with the car's (or phone's) own keyboard, and dictate with its microphone. Off: the app's built-in keyboard",
         trailing: this._createSwitch(state.mode === "device", async (checked) => {
           const mode = checked ? "device" : "builtin";
           try {
@@ -450,15 +450,29 @@
     _renderVoiceTiles() {
       const speech = global.TLSpeech;
       if (!speech) return;
+      // opt-in, per browser: a Tesla's browser has no working speech recognition, and the car's
+      // own keyboard dictates through its microphone (Settings > Keyboard: this device's keyboard)
+      const teslaNote = "Does not work in a Tesla's browser: use the microphone on the car's keyboard instead.";
       if (!speech.supported()) {
         this._appendTile({
           icon: "mic_off",
-          title: "Voice search: not available in this browser",
-          subtitle: "This browser has no speech recognition, so the microphone buttons do nothing here",
+          title: "Voice search button: not available in this browser",
+          subtitle: "This browser has no speech recognition. " + teslaNote,
           dense: false,
         });
         return;
       }
+      this._appendTile({
+        icon: "mic",
+        title: "Voice search button",
+        subtitle: "A microphone button in the car interface's search, using this browser's speech recognition. " + teslaNote,
+        trailing: this._createSwitch(speech.enabled(), async (checked) => {
+          speech.setEnabled(checked);
+          await this._renderActiveSection();
+        }),
+        dense: false,
+      });
+      if (!speech.enabled()) return;
       this._appendTile({
         icon: "translate",
         title: "Voice language",

@@ -66,9 +66,10 @@ export ATL_SPEECH_CHANNEL_PORT="${ATL_SPEECH_CHANNEL_PORT:-9994}"
 if [[ "${TESLALINUX_ATL_DEBUG:-0}" != 1 ]]; then
   unset ATL_OSK ATL_CHECK_JNI ATL_DEBUG_DUMPVIEWS ATL_DEBUG_TOUCH ATL_DEBUG_KEY ATL_DEBUG_IME ATL_DEBUG_VSYNC ATL_DEBUG_SURFACE
 fi
-# the keyboard chosen on the settings page (teslalinux-set-keyboard): with the device's own keyboard
-# (the page types through tacomp's text-input-v3) the app's built-in keyboard stays hidden
-if [[ "${TESLALINUX_KEYBOARD:-builtin}" == device ]]; then
+# the keyboard chosen on the settings page (teslalinux-set-keyboard; the device's own by default): with
+# the device's own keyboard (the page types through tacomp's text-input-v3) the app's built-in keyboard
+# stays hidden
+if [[ "${TESLALINUX_KEYBOARD:-device}" == device ]]; then
   export ATL_OSK=none
 fi
 # the app's interface chosen on the settings page (teslalinux-set-app-interface): "car" runs the app's

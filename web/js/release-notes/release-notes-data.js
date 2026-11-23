@@ -11,6 +11,11 @@
         "versionName": "Unreleased",
         "changelogItems": [
           {
+            "title": "The car's keyboard by default, voice search off",
+            "shortDescription": "Settings > Keyboard and Settings > Waze interface > Voice search button.",
+            "descriptionMarkdown": "• Typing into Waze now uses the car's own keyboard by default (also a phone's, when the page is open on one), and the car's keyboard has a microphone for dictating a place. Waze's built-in keyboard is still there: turn \"Use this device's keyboard\" off. A Pi that already has a choice keeps it.\n• The microphone button in the car interface's search is off unless switched on. It uses the browser's speech recognition, which a Tesla's browser does not have, so in the car it did nothing. The setting says so, and the voice language and the microphone test appear only when it is on. With it off, Waze is told that this page cannot recognise speech."
+          },
+          {
             "title": "A smaller turn card",
             "shortDescription": "Car mode, both looks, day and night.",
             "descriptionMarkdown": "The card with the next turn took almost half the screen. It is now about a fifth shorter: a smaller turn sign and lanes row, and the street name gets room for its two lines. The exit and road signs Waze puts in front of a street name were drawn at the height of the letters, too small to read; they now keep their own shape and are a little taller than the text."
