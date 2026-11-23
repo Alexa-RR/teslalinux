@@ -60,7 +60,19 @@
           },
         },
         { id: "status", title: "Status", icon: "info" },
-        { id: "display", title: "Display", icon: "desktop_windows" },
+        // the picture sent to the car (POST /api/displayState) and the Pi's graphics speed
+        {
+          id: "display",
+          title: "Display",
+          icon: "desktop_windows",
+          render: this._displaySection,
+          railValue() {
+            const d = this.cache.display;
+            if (!d) return "";
+            const res = d.resolutionPreset === constants.NATIVE_RESOLUTION_PRESET ? "Native" : utils.resolutionPresetName(d.resolutionPreset);
+            return res + ", " + d.refreshRate + " Hz";
+          },
+        },
         // teslalinux: hotspot and LTE (GET/POST /api/network); upstream's Rear Display is gone (the
         // app is a navigation app shown on the main screen)
         { id: "network", title: "Wi-Fi & LTE", icon: "wifi" },
@@ -100,6 +112,12 @@
         ["waze.mapsize", "waze", "Map text size", "map size street names zoom labels symbols", car],
         ["waze.pacing", "waze", "Map frame rate", "map frame rate fps smooth 60 30", car],
         ["waze.sharpness", "waze", "Map sharpness", "map sharpness render scale blurry", car],
+        ["display.renderer", "display", "Picture format", "renderer h264 mjpeg webcodecs codec stream"],
+        ["display.resolution", "display", "Resolution", "resolution native 832p 720p sharp pixels"],
+        ["display.quality", "display", "Image quality", "quality compression jpeg"],
+        ["display.responsive", "display", "Follow the window size", "dynamic aspect ratio resize window"],
+        ["display.refresh", "display", "Refresh rate", "refresh rate hz fps frames smooth"],
+        ["display.gpu", "display", "Graphics speed", "gpu speed clock overclock fan heatsink"],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
@@ -188,10 +206,6 @@
         await this._renderSystemUpdateSection(token);
         return;
       }
-      if (this.activeSectionId === "display") {
-        await this._renderDisplaySection(token);
-        return;
-      }
       if (this.activeSectionId === "network") {
         await this._renderNetworkSection(token);
         return;
@@ -203,100 +217,6 @@
       if (this.activeSectionId === "device") {
         await this._renderDeviceSection(token);
       }
-    }
-
-    async _renderDisplaySection(token) {
-      this._appendLoadingState();
-
-      let config;
-      try {
-        config = this._normalizeDisplayState(await this.apiClient.fetchDisplayState());
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-
-      if (token !== this._renderToken || this.activeSectionId !== "display") {
-        return;
-      }
-
-      this.content.innerHTML = "";
-
-      this._appendTile({
-        icon: "texture",
-        title: "Renderer",
-        trailing: this._createSelect(constants.DISPLAY_RENDERERS, config.renderer, async (value) => {
-          const renderer = utils.toInt(value, config.renderer);
-          await this._updateDisplayConfig((draft) => {
-            draft.renderer = renderer;
-            draft.isH264 = renderer !== 0 ? 1 : 0;
-            draft.density = utils.densityForResolutionPreset(draft.resolutionPreset, draft.isH264 === 1);
-          });
-        }),
-      });
-      this._appendDescription(
-        "Teslalinux supports both h264 and MJPEG display compression. MJPEG has less visible compression artifacts but needs much more bandwidth.\n\nNOTE: WebCodecs may not work if your car is running Tesla Firmware older than 2025.32.",
-      );
-      this._appendDivider();
-
-      this._appendTile({
-        icon: "display_settings",
-        title: "Resolution",
-        trailing: this._createSelect(constants.DISPLAY_RESOLUTION_PRESETS, config.resolutionPreset, async (value) => {
-          const preset = utils.toInt(value, config.resolutionPreset);
-          await this._updateDisplayConfig((draft) => {
-            draft.resolutionPreset = preset;
-            draft.density = utils.densityForResolutionPreset(draft.resolutionPreset, draft.isH264 === 1);
-          });
-        }),
-      });
-      this._appendDescription(
-        "Choosing a low resolution improves the display performance in Drive. It reduces the browser load, meant for cars equipped with MCU2. Resolutions lower than 720p only work with the MJPEG renderer.",
-      );
-      this._appendDivider();
-
-      this._appendTile({
-        icon: "photo_size_select_actual_outlined",
-        title: "Image quality",
-        trailing: this._createSelect(constants.DISPLAY_QUALITY_PRESETS, config.quality, async (value) => {
-          const quality = utils.toInt(value, config.quality);
-          await this._updateDisplayConfig((draft) => {
-            draft.quality = quality;
-          });
-        }),
-      });
-      this._appendDescription(
-        "Reducing the image quality can significantly improve performance when a higher resolution is used.",
-      );
-      this._appendDivider();
-
-      this._appendTile({
-        icon: "monitor",
-        title: "Refresh rate",
-        trailing: this._createSelect(constants.DISPLAY_REFRESH_RATE_PRESETS, config.refreshRate, async (value) => {
-          const refreshRate = utils.toInt(value, config.refreshRate);
-          await this._updateDisplayConfig((draft) => {
-            draft.refreshRate = refreshRate;
-          });
-        }),
-      });
-      this._appendDescription(
-        "By default Teslalinux is running in 30Hz. You can increase the frame rate with this setting. This feature is experimental.",
-      );
-      this._appendDivider();
-
-      this._appendTile({
-        icon: "photo_size_select_large",
-        title: "Dynamic aspect ratio",
-        trailing: this._createSwitch(config.isResponsive === 1, async (checked) => {
-          await this._updateDisplayConfig((draft) => {
-            draft.isResponsive = checked ? 1 : 0;
-          });
-        }),
-      });
-      this._appendDescription(
-        "Advanced setting, Teslalinux can automatically resize the virtual display when the browser window size changes. If you disable this option, the display aspect will be locked on the current value.",
-      );
     }
 
     // teslalinux: what the device is connected to right now (GET /api/status), refreshed every 3 s while
@@ -1543,56 +1463,6 @@
         dense: false,
       });
       await this._appendAppRestartTile(token);
-      await this._appendGpuSpeedTile(token);
-    }
-
-    // teslalinux: the Pi's GPU clock (teslalinux-set-gpu-speed through /api/gpuSpeed). Waze's map is
-    // limited by the GPU; faster clocks need cooling, and apply at the next restart.
-    async _appendGpuSpeedTile(token) {
-      let st;
-      try {
-        st = await this.apiClient.fetchGpuSpeed();
-      } catch (_error) {
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "device") {
-        return;
-      }
-      const describe = (s) => {
-        const now = [];
-        if (s.gpuMHz) now.push("GPU at " + s.gpuMHz + " MHz");
-        if (s.temperatureC) now.push(Math.round(s.temperatureC) + " \u00b0C");
-        if (s.throttled && s.throttled !== "0x0") now.push("the Pi has slowed itself down (heat or power)");
-        return (s.pendingRestart ? "Applies at the next restart. " : "") + (now.length ? "Now: " + now.join(", ") : "Now: not measured");
-      };
-      this._appendDivider();
-      const select = this._createSelect(
-        [
-          { value: "standard", label: "Standard (500 MHz)" },
-          { value: "faster", label: "Faster (600 MHz)" },
-          { value: "fastest", label: "Fastest (700 MHz)" },
-        ],
-        st.speed,
-        async (value) => {
-          try {
-            st = await this.apiClient.setGpuSpeed(value);
-            subtitle.textContent = describe(st);
-          } catch (_error) {
-            subtitle.textContent = "Not saved (service error)";
-          }
-        },
-      );
-      const gpuRow = this._appendTile({
-        icon: "speed",
-        title: "GPU speed",
-        subtitle: describe(st),
-        trailing: select,
-        dense: false,
-      });
-      const subtitle = gpuRow.querySelector(".settings-tile-subtitle");
-      this._appendDescription(
-        "How fast the Pi's graphics chip runs. Waze's map is drawn by it, so a faster clock makes the map smoother. Faster needs a heatsink, Fastest a heatsink and a fan (it also raises the chip's voltage a little). A Pi that gets too hot slows itself down, so without cooling a faster setting only adds heat. Applies at the next restart.",
-      );
     }
 
     // teslalinux: restart the app (Waze under ATL) without touching the display stream or the page.
@@ -2303,6 +2173,151 @@
       const ok = await UI.save(r, () => this.apiClient.restartApp(), "Waze is restarting");
       if (b) b.disabled = false;
       if (ok) this._watchApp();
+    }
+
+    // ------------------------------------------------------------------ Display
+
+    /**
+     * The picture sent to the car (GET/POST /api/displayState: format, resolution, quality, window
+     * size, refresh rate; each change applies at once and the picture reconnects) and the Pi's
+     * graphics speed (GET/POST /api/gpuSpeed, teslalinux-set-gpu-speed: at the next device start).
+     */
+    async _displaySection(token) {
+      const api = this.apiClient;
+      const [raw, gpu] = await Promise.all([api.fetchDisplayState(), api.fetchGpuSpeed().catch(() => null)]);
+      const ds = this._normalizeDisplayState(raw);
+      this.cache.display = ds;
+      if (gpu) this.cache.gpu = gpu;
+      const rerender = () => global.setTimeout(() => token === this._renderToken && this._rerender(), 300);
+      // every change goes through the device's current state, so two quick changes do not undo each other
+      const post = (r, mutator, text) =>
+        UI.save(r, async () => {
+          if (!(await this._updateDisplayConfig(mutator))) throw new Error("not saved");
+        }, text || "Applied. The picture reconnects in a moment").then((ok) => {
+          if (ok) this._renderSidebar();
+          return ok;
+        });
+      const h264 = ds.renderer !== 0;
+      const density = (d) => {
+        d.density = utils.densityForResolutionPreset(d.resolutionPreset, d.isH264 === 1);
+      };
+
+      const rr = UI.row({
+        id: "display.renderer",
+        title: "Picture format",
+        stack: true,
+        more: [
+          "H.264 needs far less Wi-Fi bandwidth. Motion JPEG shows fewer compression artefacts but needs much more bandwidth.",
+          "H.264 (older cars) is for cars whose browser lacks WebCodecs (Tesla software older than 2025.32).",
+        ],
+        control: UI.segmented(
+          [
+            { value: 1, label: "H.264", caption: "recommended" },
+            { value: 2, label: "H.264", caption: "older cars" },
+            { value: 0, label: "Motion JPEG", caption: "default" },
+          ],
+          ds.renderer,
+          (v) =>
+            post(rr, (d) => {
+              d.renderer = Number(v);
+              d.isH264 = d.renderer !== 0 ? 1 : 0;
+              density(d);
+            }).then((ok) => {
+              if (ok) rerender();
+              return ok;
+            }),
+          { label: "Picture format" },
+        ),
+      });
+      const low = (v) => v >= 2 && v <= 4;
+      const sr = UI.row({
+        id: "display.resolution",
+        title: "Resolution",
+        stack: true,
+        detail: h264 ? "Below 720p needs Motion JPEG" : null,
+        control: UI.segmented(
+          constants.DISPLAY_RESOLUTION_PRESETS.map((p) => ({
+            value: p.value,
+            label: p.value === constants.NATIVE_RESOLUTION_PRESET ? "Native" : p.label,
+            caption: p.value === constants.NATIVE_RESOLUTION_PRESET ? "sharpest" : p.value === 0 ? "default" : null,
+            disabled: h264 && low(p.value),
+            why: h264 && low(p.value) ? "Below 720p needs Motion JPEG" : null,
+          })),
+          ds.resolutionPreset,
+          (v) =>
+            post(sr, (d) => {
+              d.resolutionPreset = Number(v);
+              density(d);
+            }),
+          { label: "Resolution" },
+        ),
+      });
+      const qr = UI.row({
+        id: "display.quality",
+        title: "Image quality",
+        stack: true,
+        control: UI.slider({
+          min: 40,
+          max: 90,
+          step: 10,
+          value: ds.quality,
+          iconLow: "photo",
+          label: "Image quality",
+          onChange: (v) => post(qr, (d) => (d.quality = v)),
+        }),
+      });
+      const ar = UI.row({
+        id: "display.responsive",
+        title: "Follow the window size",
+        more: "Off keeps the current shape even if the browser window changes size.",
+        control: UI.toggle(ds.isResponsive === 1, (on) => post(ar, (d) => (d.isResponsive = on ? 1 : 0)), "Follow the window size"),
+      });
+
+      const fr = UI.row({
+        id: "display.refresh",
+        title: "Refresh rate",
+        chips: [UI.CHIP.plain("Experimental")],
+        control: UI.segmented(
+          constants.DISPLAY_REFRESH_RATE_PRESETS.map((p) => ({ value: p.value, label: p.label, caption: p.value === 30 ? "default" : null })),
+          ds.refreshRate,
+          (v) => post(fr, (d) => (d.refreshRate = Number(v))),
+          { label: "Refresh rate" },
+        ),
+      });
+      const smooth = [fr];
+      if (gpu) {
+        const now = (g) =>
+          "Now " + (g.gpuMHz ? g.gpuMHz + " MHz" : "not measured") + (g.temperatureC ? " at " + Math.round(g.temperatureC) + " °C" : "") +
+          (g.throttled && g.throttled !== "0x0" ? ". The Pi has slowed itself down (heat or power)" : "");
+        const gr = UI.row({
+          id: "display.gpu",
+          title: "Graphics speed",
+          chips: [UI.CHIP.later()],
+          stack: true,
+          detail: now(gpu),
+          more: "How fast the Pi's graphics chip runs; Waze's map is drawn by it. Faster needs a heatsink, Fastest a heatsink and a fan (it also raises the chip's voltage a little). A Pi that gets too hot slows itself down, so without cooling a faster setting only adds heat.",
+          control: UI.segmented(
+            [
+              { value: "standard", label: "Standard", caption: "500 MHz, default" },
+              { value: "faster", label: "Faster", caption: "600 MHz, heatsink" },
+              { value: "fastest", label: "Fastest", caption: "700 MHz, fan" },
+            ],
+            gpu.speed,
+            (v) =>
+              UI.save(gr, async () => {
+                Object.assign(gpu, await api.setGpuSpeed(v));
+                this.cache.gpu = gpu;
+              }, "Saved. Applies when the device starts again").then((ok) => {
+                this._renderSidebar();
+                return ok;
+              }),
+            { label: "Graphics speed" },
+          ),
+        });
+        if (gpu.pendingRestart) UI.status(gr).info("Applies when the device starts again");
+        smooth.push(gr);
+      }
+      return [UI.group("Picture", [rr, sr, qr, ar]), UI.group("Smoothness", smooth)];
     }
 
     // ------------------------------------------------------------------ Waze
