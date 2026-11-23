@@ -197,9 +197,9 @@
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
         ["sound.browservolume", "sound", "Browser volume", "volume loud quiet"],
-        ["sound.voicebutton", "sound", "Voice search button", "voice microphone mic search speech dictation", car],
-        ["sound.voicelang", "sound", "Voice search language", "voice speech hebrew english microphone language", () => car() && this._voiceOn()],
-        ["sound.mictest", "sound", "Test the microphone", "microphone mic test voice", () => car() && this._voiceOn()],
+        ["sound.voicebutton", "sound", "Voice search button", "voice microphone mic search speech dictation"],
+        ["sound.voicelang", "sound", "Voice search language", "voice speech hebrew english microphone language", () => this._voiceOn()],
+        ["sound.mictest", "sound", "Test the microphone", "microphone mic test voice", () => this._voiceOn()],
       ];
 
       // teslalinux: PalGate gates (js/settings/settings-gates.js): its section after Waze, and its search entries
@@ -2602,10 +2602,10 @@
         groups.push(UI.group("Car's browser", [br, bv]));
       }
 
-      if (this._ifaceNow() === "car") {
-        const voice = this._voiceRows(token);
-        if (voice.length) groups.push(UI.group("Voice", voice));
-      }
+      // both interfaces: the car interface's search button, and in the phone interface Waze's own
+      // microphone button (the app's speech recognizer listens through this page)
+      const voice = this._voiceRows(token);
+      if (voice.length) groups.push(UI.group("Voice", voice));
       if (!groups.length) throw new Error("no answer");
       return groups;
     }
@@ -2631,7 +2631,8 @@
 
     /**
      * Voice search (js/speech/speech.js): this browser's microphone and speech recognition, for the
-     * car interface's search. Off by default, per browser: a Tesla's browser has none, and the car's
+     * car interface's search and Waze's own microphone button in the phone interface. Off by
+     * default, per browser: a Tesla's browser has none, and the car's
      * own keyboard dictates through its microphone. Language and test only while it is on.
      */
     _voiceRows(token) {
@@ -2645,7 +2646,7 @@
         id: "sound.voicebutton",
         title: "Voice search button",
         detail: teslaNote,
-        more: "A microphone button in the car interface's search, using this browser's own speech recognition.",
+        more: "A microphone button in the car interface's search, and Waze's own microphone button in the phone interface, using this browser's own speech recognition.",
         control: UI.toggle(speech.enabled(), (on) => {
           speech.setEnabled(on);
           global.setTimeout(() => token === this._renderToken && this._rerender(), 150);

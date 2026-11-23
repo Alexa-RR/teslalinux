@@ -9,8 +9,8 @@
 
   const Recognition = global.SpeechRecognition || global.webkitSpeechRecognition || null;
   const LANGUAGE_KEY = "teslalinux.voice.language";
-  // the microphone button and the app's speech recognizer are opt-in (Settings > Waze interface >
-  // Voice search): a Tesla's browser has no working speech recognition, and its own keyboard
+  // the microphone button and the app's speech recognizer are opt-in (Settings > Sound > Voice
+  // search button): a Tesla's browser has no working speech recognition, and its own keyboard
   // dictates through its microphone instead
   const ENABLED_KEY = "teslalinux.voice.enabled";
   const LANGUAGES = [
