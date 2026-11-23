@@ -34,6 +34,9 @@
       this._cacheAt = 0;
       // changes that restart Waze, waiting together in one bar: key -> {label, value, saved, apply}
       this.restart = new Map();
+      // hotspot and LTE changes, waiting for Apply now / At next start (the backup Wi-Fi applies at once)
+      this.netDraft = { hotspot: {}, lte: {}, props: {} };
+      this._lteManaged = false;
 
       this.sections = [
         // teslalinux: what the device is connected to right now (GET /api/status)
@@ -59,7 +62,6 @@
             return this._ifaceNow() === "car" ? "Car interface" : "Phone interface";
           },
         },
-        { id: "status", title: "Status", icon: "info" },
         // the picture sent to the car (POST /api/displayState) and the Pi's graphics speed
         {
           id: "display",
@@ -73,9 +75,6 @@
             return res + ", " + d.refreshRate + " Hz";
           },
         },
-        // teslalinux: hotspot and LTE (GET/POST /api/network); upstream's Rear Display is gone (the
-        // app is a navigation app shown on the main screen)
-        { id: "network", title: "Wi-Fi & LTE", icon: "wifi" },
         {
           id: "sound",
           title: "Sound",
@@ -84,6 +83,23 @@
           railValue() {
             const a = this.cache.audio;
             return a ? { car: "Plays in the car", pi: "Plays on the Pi", both: "Car and Pi" }[a.output] || "" : "";
+          },
+        },
+        // teslalinux: the internet now, the hotspot, the LTE modem and the backup Wi-Fi (GET /api/status,
+        // GET/POST /api/network); upstream's Rear Display is gone (the app is shown on the main screen)
+        {
+          id: "connections",
+          title: "Connections",
+          icon: "wifi",
+          render: this._connectionsSection,
+          railValue() {
+            const st = this.cache.status;
+            if (!st) return "";
+            if (!st.internet || !st.internet.reachable) return "No internet";
+            const up = st.uplink || {};
+            const m = this._modem(st);
+            if (up.kind === "lte") return "LTE" + (m && typeof m.bars === "number" ? ", " + m.bars + " of 5 bars" : "");
+            return { wifi: "Backup Wi-Fi", ethernet: "Ethernet", phone: "Phone" }[up.kind] || "Online";
           },
         },
         // teslalinux: automatic Waze updates from Google Play (GET/POST /api/appUpdate*)
@@ -118,6 +134,20 @@
         ["display.responsive", "display", "Follow the window size", "dynamic aspect ratio resize window"],
         ["display.refresh", "display", "Refresh rate", "refresh rate hz fps frames smooth"],
         ["display.gpu", "display", "Graphics speed", "gpu speed clock overclock fan heatsink"],
+        ["net.internet", "connections", "Internet now", "internet lte signal latency online modem operator data sim"],
+        ["net.ssid", "connections", "Hotspot name", "wifi hotspot name ssid network car connected"],
+        ["net.psk", "connections", "Hotspot password", "wifi password key psk"],
+        ["net.country", "connections", "Country", "country channels regulatory"],
+        ["net.band", "connections", "Band and channel", "band channel 5 ghz 2.4 bluetooth"],
+        ["net.offline", "connections", "Keep the car on the hotspot", "offline connectivity check no internet"],
+        ["net.telemetry", "connections", "Tesla telemetry", "telemetry data saver mobile data"],
+        ["net.firmware", "connections", "Tesla software downloads", "firmware software update downloads data"],
+        ["net.apn", "connections", "APN", "apn lte operator mobile carrier sim"],
+        ["net.roaming", "connections", "Data roaming", "roaming abroad", () => this._lteManaged],
+        ["net.mobiledata", "connections", "Mobile data", "mobile data lte off", () => this._lteManaged],
+        ["net.backup", "connections", "Backup Wi-Fi", "backup wifi second card garage underground failover"],
+        ["net.prefer", "connections", "When to use backup Wi-Fi", "prefer wifi lte save data"],
+        ["net.add", "connections", "Add a Wi-Fi network", "add wifi network scan join home phone hotspot"],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
@@ -198,16 +228,8 @@
       this.content.innerHTML = "";
       this._curBody = null;
 
-      if (this.activeSectionId === "status") {
-        await this._renderStatusSection(token);
-        return;
-      }
       if (this.activeSectionId === "system") {
         await this._renderSystemUpdateSection(token);
-        return;
-      }
-      if (this.activeSectionId === "network") {
-        await this._renderNetworkSection(token);
         return;
       }
       if (this.activeSectionId === "updates") {
@@ -219,790 +241,6 @@
       }
     }
 
-    // teslalinux: what the device is connected to right now (GET /api/status), refreshed every 3 s while
-    // the section is open: the car (and anything else) on the hotspot, the internet uplink and the LTE
-    // modem, the car's GPS position, the app, and the device itself.
-    async _renderStatusSection(token, refresh) {
-      if (!refresh) {
-        this._appendLoadingState();
-      }
-      let st;
-      try {
-        st = await this.apiClient.fetchStatus();
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "status") {
-        return;
-      }
-      const scroll = this.content.scrollTop;
-      this.content.innerHTML = "";
-      const fmt = this._fmt();
-      const hot = st.hotspot || {};
-      const sys = st.system || {};
-
-      this._appendHeading("Car");
-      const clients = Array.isArray(hot.clients) ? hot.clients : [];
-      if (!hot.present) {
-        this._appendTile({
-          icon: "wifi_off",
-          title: "No hotspot",
-          subtitle: "This device has no Wi-Fi interface " + (hot.interface || "") + ": the car cannot join it",
-          dense: false,
-        });
-      } else if (clients.length === 0) {
-        this._appendTile({
-          icon: "wifi_find",
-          title: "Nothing connected to " + (hot.ssid || "the hotspot"),
-          subtitle: hot.running ? "The hotspot is on and waiting for the car" : "The hotspot is not running",
-          dense: false,
-        });
-      } else {
-        clients.forEach((c) => {
-          const parts = [];
-          if (c.ip) {
-            parts.push(c.ip);
-          }
-          if (typeof c.connectedSeconds === "number") {
-            parts.push("connected " + fmt.duration(c.connectedSeconds));
-          }
-          if (typeof c.txMbps === "number") {
-            parts.push(Math.round(c.txMbps) + " Mbit/s");
-          }
-          this._appendTile({
-            icon: "directions_car",
-            title: c.name || c.mac,
-            subtitle: parts.join(" · "),
-            trailing: this._createTrailingText(typeof c.signalDbm === "number" ? c.signalDbm + " dBm" : ""),
-            dense: false,
-          });
-        });
-      }
-      this._appendTile({
-        icon: "cast_connected",
-        title: "Pages showing the app",
-        trailing: this._createTrailingText(String(st.displayViewers || 0)),
-      });
-      this._appendDivider();
-
-      this._appendHeading("Internet");
-      const up = st.uplink;
-      const net = st.internet || {};
-      const kindName = { lte: "LTE modem", wifi: "Wi-Fi", ethernet: "Ethernet", phone: "Phone (USB tethering)" };
-      if (!up) {
-        this._appendTile({ icon: "public_off", title: "No internet connection", subtitle: "No route to the internet", dense: false });
-      } else {
-        this._appendTile({
-          icon: up.kind === "lte" ? "cell_tower" : up.kind === "wifi" ? "wifi" : "lan",
-          title: "Through " + (kindName[up.kind] || up.kind) + " (" + up.interface + ")",
-          subtitle: [up.address, up.gateway ? "gateway " + up.gateway : ""].filter(Boolean).join(" · "),
-          trailing: this._createTrailingText(
-            net.reachable ? "Online" + (typeof net.latencyMs === "number" ? ", " + net.latencyMs + " ms" : "") : "No internet",
-          ),
-          dense: false,
-        });
-        if (typeof up.rxBytes === "number") {
-          this._appendTile({
-            icon: "data_usage",
-            title: "Data since start",
-            trailing: this._createTrailingText("↓ " + fmt.bytes(up.rxBytes) + "  ↑ " + fmt.bytes(up.txBytes)),
-          });
-        }
-      }
-      // teslalinux-uplink: which uplink carries the traffic and why; every uplink's own check
-      const fo = st.failover;
-      if (fo && Array.isArray(fo.candidates)) {
-        const kinds = { lte: "LTE", wifi: "Backup Wi-Fi", ethernet: "Ethernet", phone: "Phone" };
-        if (fo.reason) {
-          this._appendTile({
-            icon: "alt_route",
-            title: "Using " + (kinds[fo.activeKind] || fo.activeKind) + " instead",
-            subtitle: fo.reason.replace(/^lte\b/, "LTE").replace(/^wifi\b/, "Wi-Fi") + " · since " + fmt.duration(Math.max(0, st.time - fo.since)),
-            dense: false,
-          });
-        }
-        if (fo.candidates.length > 1) {
-          fo.candidates.forEach((c) => {
-            this._appendTile({
-              icon: c.ok ? "check_circle" : "cancel",
-              title: (kinds[c.kind] || c.kind) + " (" + c.iface + ")" + (c.iface === fo.active ? " · in use" : ""),
-              trailing: this._createTrailingText(c.ok ? "Online" + (typeof c.latencyMs === "number" ? ", " + c.latencyMs + " ms" : "") : "No internet"),
-            });
-          });
-        }
-        if (fo.wifi && fo.wifi.iface && fo.wifi.ssid && fo.activeKind !== "wifi") {
-          this._appendTile({
-            icon: "wifi",
-            title: "Backup Wi-Fi ready",
-            subtitle: fo.wifi.ssid + (typeof fo.wifi.signalDbm === "number" ? " · " + fo.wifi.signalDbm + " dBm" : ""),
-            dense: false,
-          });
-        }
-      }
-      const modem = st.modem;
-      // teslalinux-uplink's view of the stick (HiLink web API or ModemManager, every field optional) and its
-      // automatic recovery; the API's own modem reading is the fallback when the daemon has none
-      const mr = fo && fo.modem && fo.modem.type && fo.modem.type !== "none" ? fo.modem : null;
-      if (mr) {
-        const bars = typeof mr.bars === "number" ? mr.bars : null;
-        const tech = mr.networkType && mr.technology && mr.technology !== mr.networkType ? mr.networkType + " (" + mr.technology + ")" : mr.networkType || mr.technology;
-        const conn = mr.connection ? mr.connection.charAt(0).toUpperCase() + mr.connection.slice(1) : "";
-        this._appendTile({
-          icon: mr.simProblem ? "signal_cellular_no_sim" : bars === 0 ? "signal_cellular_0_bar" : bars !== null && bars >= 4 ? "signal_cellular_4_bar" : "signal_cellular_alt",
-          title: (mr.operator || "LTE modem") + (mr.model ? " · " + mr.model : ""),
-          subtitle: [tech, conn, mr.roaming ? "Roaming" : "", typeof mr.connectedSeconds === "number" && mr.connection === "connected" ? "for " + fmt.duration(mr.connectedSeconds) : ""]
-            .filter(Boolean)
-            .join(" · "),
-          trailing: this._createTrailingText(bars !== null ? "Signal " + bars + "/5" : typeof mr.signal === "number" ? "Signal " + mr.signal + " %" : ""),
-          dense: false,
-        });
-        if (mr.simProblem) {
-          this._appendTile({ icon: "sim_card_alert", title: "SIM card", subtitle: mr.simProblem, dense: false });
-        }
-        const radio = mr.radio || {};
-        const radioBits = [
-          radio.rsrp ? "RSRP " + radio.rsrp : "",
-          radio.rsrq ? "RSRQ " + radio.rsrq : "",
-          radio.sinr ? "SINR " + radio.sinr : "",
-          radio.rssi && !radio.rsrp ? "RSSI " + radio.rssi : "",
-          radio.band ? "band " + radio.band : "",
-          radio.cellId ? "cell " + radio.cellId : "",
-        ].filter(Boolean);
-        if (radioBits.length) {
-          this._appendTile({ icon: "cell_tower", title: "Radio", subtitle: radioBits.join(" · "), dense: false });
-        }
-        const data = (d) => (d ? "↓ " + (d.down || "?") + "  ↑ " + (d.up || "?") : "");
-        if (mr.session || mr.month) {
-          this._appendTile({
-            icon: "data_usage",
-            title: "Mobile data",
-            subtitle: [mr.session ? "This session " + data(mr.session) : "", mr.month ? "This month " + data(mr.month) : ""].filter(Boolean).join(" · "),
-            dense: false,
-          });
-        }
-        const actionNames = {
-          reconnect: mr.type === "hilink" ? "mobile data off and on" : "reconnect",
-          "modem-reset": "modem restart",
-          "usb-reenumerate": "USB re-enumeration",
-          "usb-power-cycle": "USB power cycle",
-        };
-        if (mr.lastAction || (mr.status && mr.status !== "working")) {
-          const last = mr.lastAction
-            ? "Last: " + (actionNames[mr.lastAction] || mr.lastAction) + ", " + fmt.duration(Math.max(0, st.time - mr.lastActionAt)) + " ago" +
-              (mr.lastResult && mr.lastResult !== "done" ? " (" + mr.lastResult + ")" : "")
-            : "";
-          this._appendTile({
-            icon: "restart_alt",
-            title: "Modem recovery" + (mr.recovery === "off" ? " (off)" : ""),
-            subtitle: [mr.status ? mr.status.charAt(0).toUpperCase() + mr.status.slice(1) : "", last].filter(Boolean).join(" · "),
-            trailing: this._createTrailingText(
-              typeof mr.nextActionAt === "number" && mr.nextActionAt > st.time ? "Next step in " + fmt.duration(mr.nextActionAt - st.time) : "",
-            ),
-            dense: false,
-          });
-        }
-      } else if (modem) {
-        const bits = [modem.technology, modem.state].filter(Boolean);
-        this._appendTile({
-          icon: "signal_cellular_alt",
-          title: (modem.operator || "LTE modem") + (modem.model ? " · " + modem.model : ""),
-          subtitle: bits.join(" · "),
-          trailing: this._createTrailingText(typeof modem.signalPercent === "number" ? "Signal " + modem.signalPercent + " %" : ""),
-          dense: false,
-        });
-      } else {
-        this._appendTile({ icon: "signal_cellular_off", title: "LTE modem", trailing: this._createTrailingText("Not detected") });
-      }
-      this._appendDivider();
-
-      this._appendHeading("Hotspot");
-      const band = hot.frequencyMhz ? (hot.frequencyMhz >= 5000 ? "5 GHz" : "2.4 GHz") : "";
-      this._appendTile({
-        icon: hot.running ? "wifi_tethering" : "wifi_tethering_off",
-        title: hot.ssid || "Hotspot",
-        subtitle: hot.present
-          ? [hot.running ? "On" : "Off", band, hot.channel ? "channel " + hot.channel : "", hot.widthMhz ? hot.widthMhz + " MHz" : "", hot.address]
-              .filter(Boolean)
-              .join(" · ")
-          : "No Wi-Fi interface",
-        dense: false,
-      });
-      this._appendDivider();
-
-      this._appendHeading("Location and app");
-      const gps = st.gps || {};
-      const fix = gps.fix;
-      this._appendTile({
-        icon: fix ? "my_location" : "location_disabled",
-        title: fix ? fix.latitude.toFixed(5) + ", " + fix.longitude.toFixed(5) : "No position from the car",
-        subtitle: fix
-          ? [
-              typeof fix.speedMps === "number" ? Math.round(fix.speedMps * 3.6) + " km/h" : "",
-              typeof fix.accuracyM === "number" ? "±" + Math.round(fix.accuracyM) + " m" : "",
-              typeof fix.ageSeconds === "number" ? fix.ageSeconds + " s ago" : "",
-            ]
-              .filter(Boolean)
-              .join(" · ")
-          : gps.service
-            ? "The car's browser sends its position while GPS is on in Settings > GPS"
-            : "The GPS service is not running",
-        dense: false,
-      });
-      const appState = (st.app || {}).state;
-      this._appendTile({
-        icon: "navigation",
-        title: "Waze",
-        trailing: this._createTrailingText(
-          { active: "Running", activating: "Starting", restarting: "Restarting", inactive: "Stopped", failed: "Stopped after an error" }[appState] ||
-            "Unknown",
-        ),
-      });
-      this._appendDivider();
-
-      this._appendHeading("Device");
-      this._appendTile({
-        icon: "memory",
-        title: sys.model || "Device",
-        subtitle: [sys.os, sys.kernel ? "kernel " + sys.kernel : ""].filter(Boolean).join(" · "),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "schedule",
-        title: "Running for",
-        trailing: this._createTrailingText(typeof sys.uptimeSeconds === "number" ? fmt.duration(sys.uptimeSeconds) : "unknown"),
-      });
-      if (typeof sys.cpuTemperature === "number" && sys.cpuTemperature >= 0) {
-        this._appendTile({
-          icon: "device_thermostat",
-          title: "CPU temperature",
-          trailing: this._createTrailingText(sys.cpuTemperature + "°C"),
-        });
-      }
-      if (Array.isArray(sys.load) && sys.load.length) {
-        this._appendTile({
-          icon: "speed",
-          title: "Load (1 / 5 / 15 min)",
-          subtitle: sys.cpus ? sys.cpus + " CPU cores" : "",
-          trailing: this._createTrailingText(sys.load.map((v) => v.toFixed(2)).join(" / ")),
-          dense: false,
-        });
-      }
-      if (sys.memory && sys.memory.total) {
-        this._appendTile({
-          icon: "memory_alt",
-          title: "Memory in use",
-          trailing: this._createTrailingText(fmt.bytes(sys.memory.total - sys.memory.available) + " of " + fmt.bytes(sys.memory.total)),
-        });
-      }
-      if (sys.disk && sys.disk.total) {
-        this._appendTile({
-          icon: "storage",
-          title: "Storage free",
-          trailing: this._createTrailingText(fmt.bytes(sys.disk.free) + " of " + fmt.bytes(sys.disk.total)),
-        });
-      }
-      const th = sys.throttled;
-      if (th && (th.underVoltage || th.throttled || th.capped || th.softTempLimit || th.sinceBoot)) {
-        const now = [th.underVoltage ? "under-voltage" : "", th.throttled ? "throttled" : "", th.capped ? "frequency capped" : "", th.softTempLimit ? "temperature limit" : ""]
-          .filter(Boolean)
-          .join(", ");
-        this._appendTile({
-          icon: "warning",
-          title: "Power or heat problem",
-          subtitle: now ? "Now: " + now : "Seen since start (not now)",
-          dense: false,
-        });
-        this._appendDescription("Use a power supply that gives 5 V at 3 A or more, and keep the device cool.");
-      }
-      this.content.scrollTop = scroll;
-      this._pollTimer = global.setTimeout(() => {
-        if (token !== this._renderToken || this.activeSectionId !== "status") {
-          return;
-        }
-        if (!global.document.hidden) {
-          this._renderStatusSection(token, true);
-        } else {
-          // the page is in the background: look again later
-          this._pollTimer = global.setTimeout(() => this._renderStatusSection(token, true), 3000);
-        }
-      }, 3000);
-    }
-
-    // teslalinux: the hotspot (name, password, country, band and channel), what the car may reach
-    // without internet, and the LTE modem's APN (GET/POST /api/network, host/teslalinux-network).
-    // Band, channel and the offline switches are upstream's settings (POST /api/softAp* etc.).
-    async _renderNetworkSection(token) {
-      this._appendLoadingState();
-      let net;
-      try {
-        net = await this.apiClient.fetchNetwork();
-        this.systemConfigCache = await this.apiClient.fetchSystemConfiguration();
-      } catch (_error) {
-        this._renderErrorState("Failed to fetch the network settings from your device.");
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "network") {
-        return;
-      }
-      this.content.innerHTML = "";
-      const saved = this._networkPendingFromSystemConfig(this.systemConfigCache);
-      const draft = Object.assign({}, saved);
-      const hot = net.hotspot || {};
-
-      this._appendHeading("Hotspot");
-      if (!hot.present) {
-        this._appendDescription(
-          "This device has no Wi-Fi interface (" + (hot.interface || "wlan0") + "): the settings below are kept and take effect on a device with one.",
-        );
-      }
-      const ssid = this._createTextInput(hot.ssid || "", { maxLength: 32, placeholder: "Network name" });
-      this._appendTile({ icon: "wifi", title: "Network name", trailing: ssid, dense: false });
-      const psk = this._createTextInput("", {
-        type: "password",
-        maxLength: 64,
-        placeholder: hot.pskSet ? "Unchanged" : "At least 8 characters",
-        autocomplete: "new-password",
-      });
-      this._appendTile({
-        icon: "password",
-        title: "Password",
-        subtitle: "The car forgets the old one: enter the new password in the car's Wi-Fi settings",
-        trailing: psk,
-        dense: false,
-      });
-      const country = this._createTextInput(hot.country || "", { maxLength: 2, placeholder: "US", width: "90px" });
-      country.addEventListener("input", () => {
-        country.value = country.value.toUpperCase().replace(/[^A-Z]/g, "");
-      });
-      this._appendTile({
-        icon: "public",
-        title: "Country",
-        subtitle: "Two-letter code: decides which channels and power the hotspot may use",
-        trailing: country,
-        dense: false,
-      });
-      this._appendTile({
-        icon: "wifi_channel",
-        title: "Frequency band and channel",
-        trailing: this._createSelect(
-          constants.SOFT_AP_BANDS.map((item) => ({ value: item.key, label: item.name })),
-          saved.bandType.key,
-          async (value) => {
-            const selected = this._bandByKey(value);
-            if (selected) {
-              draft.bandType = selected;
-            }
-          },
-        ),
-      });
-      this._appendDescription(
-        "5 GHz is faster and leaves the car's Bluetooth alone; if the car does not see the network, try another channel (allowed channels differ by country). On 2.4 GHz the hotspot shares the radio with Bluetooth, which can drop frames while Bluetooth audio plays.",
-      );
-      this._appendDivider();
-
-      this._appendHeading("When there is no internet");
-      this._appendTile({
-        icon: "wifi_off",
-        title: "Keep the car on the hotspot",
-        subtitle: "Answer the car's connectivity check here",
-        trailing: this._createSwitch(saved.isOfflineModeEnabled, async (checked) => {
-          draft.isOfflineModeEnabled = checked;
-        }),
-        dense: false,
-      });
-      this._appendDescription(
-        "The car leaves Wi-Fi networks that have no internet. With this on it stays connected to this device even without LTE; the car's own online features (the Tesla app, live traffic of the car's maps) then need the LTE modem.",
-      );
-      this._appendTile({
-        icon: "data_thresholding",
-        title: "Tesla telemetry",
-        subtitle: "Turn off to save mobile data",
-        trailing: this._createSwitch(saved.isOfflineModeTelemetryEnabled, async (checked) => {
-          draft.isOfflineModeTelemetryEnabled = checked;
-        }),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "update",
-        title: "Tesla software downloads",
-        subtitle: "Turn off to save mobile data; the car still sees that an update exists",
-        trailing: this._createSwitch(saved.isOfflineModeTeslaFirmwareDownloadsEnabled, async (checked) => {
-          draft.isOfflineModeTeslaFirmwareDownloadsEnabled = checked;
-        }),
-        dense: false,
-      });
-      this._appendDivider();
-
-      this._appendHeading("LTE");
-      const lte = net.lte;
-      let lteFields = null;
-      if (lte && lte.managed) {
-        const apn = this._createTextInput(lte.apn || "", { maxLength: 63, placeholder: "Automatic" });
-        this._appendTile({ icon: "cell_tower", title: "APN", subtitle: "From your mobile operator; empty uses the modem's default", trailing: apn, dense: false });
-        const user = this._createTextInput(lte.user || "", { maxLength: 64, placeholder: "None" });
-        this._appendTile({ icon: "person", title: "APN user name", trailing: user, dense: false });
-        const pass = this._createTextInput("", {
-          type: "password",
-          maxLength: 64,
-          placeholder: lte.passwordSet ? "Unchanged" : "None",
-          autocomplete: "new-password",
-        });
-        this._appendTile({ icon: "key", title: "APN password", trailing: pass, dense: false });
-        const lteDraft = { roaming: Boolean(lte.roaming), enabled: lte.enabled !== false };
-        this._appendTile({
-          icon: "travel_explore",
-          title: "Data roaming",
-          trailing: this._createSwitch(lteDraft.roaming, async (checked) => {
-            lteDraft.roaming = checked;
-          }),
-        });
-        this._appendTile({
-          icon: "signal_cellular_alt",
-          title: "Mobile data",
-          trailing: this._createSwitch(lteDraft.enabled, async (checked) => {
-            lteDraft.enabled = checked;
-          }),
-        });
-        lteFields = { apn, user, pass, lteDraft };
-      } else {
-        this._appendTile({
-          icon: "cell_tower",
-          title: "LTE modem",
-          trailing: this._createTrailingText(net.modemDetected ? "Detected" : "Not detected"),
-        });
-        this._appendDescription(
-          net.modemDetected
-            ? "This modem is a router of its own (a USB \"HiLink\" stick such as the Huawei E3372): it keeps its APN itself. Change it on the modem's own web page from a computer, or plug it into one once. Its operator and signal show on the Status page."
-            : "Plug in a USB LTE modem. HiLink sticks (Huawei E3372 and similar) work without settings; modems that need an APN here are managed by ModemManager, which this system does not run.",
-        );
-      }
-      this._appendDivider();
-
-      const message = utils.createElement("div", "settings-description settings-save-message", "");
-      message.hidden = true;
-      const row = utils.createElement("div", "settings-save-row", null);
-      const now = this._createActionButton("Save and apply now");
-      const later = this._createActionButton("Save for next start");
-      row.appendChild(now);
-      row.appendChild(later);
-      this.content.appendChild(row);
-      this.content.appendChild(message);
-      this._appendDescription(
-        "Apply now restarts the hotspot: the car drops off the Wi-Fi for a few seconds and joins again (with the new password, if you changed it, after you enter it in the car). LTE settings always take effect right away.",
-      );
-
-      const show = (text, error) => {
-        message.textContent = text;
-        message.classList.toggle("settings-error-text", Boolean(error));
-        message.hidden = false;
-      };
-      const submit = async (when) => {
-        const request = { when, hotspot: {} };
-        const name = ssid.value;
-        if (new TextEncoder().encode(name).length < 1 || new TextEncoder().encode(name).length > 32) {
-          ssid.classList.add("invalid");
-          show("The network name needs 1 to 32 characters.", true);
-          return;
-        }
-        ssid.classList.remove("invalid");
-        if (name !== (hot.ssid || "")) {
-          request.hotspot.ssid = name;
-        }
-        if (psk.value) {
-          if (!/^(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})$/.test(psk.value)) {
-            psk.classList.add("invalid");
-            show("The password needs 8 to 63 characters (letters, digits, symbols).", true);
-            return;
-          }
-          request.hotspot.psk = psk.value;
-        }
-        psk.classList.remove("invalid");
-        if (country.value !== (hot.country || "")) {
-          if (!/^[A-Z]{2}$/.test(country.value)) {
-            country.classList.add("invalid");
-            show("The country is a two-letter code, such as US, GB or DE.", true);
-            return;
-          }
-          request.hotspot.country = country.value;
-        }
-        country.classList.remove("invalid");
-        if (lteFields) {
-          if (!/^(?:[A-Za-z0-9][A-Za-z0-9.-]{0,62})?$/.test(lteFields.apn.value)) {
-            lteFields.apn.classList.add("invalid");
-            show("The APN may hold letters, digits, dots and dashes.", true);
-            return;
-          }
-          lteFields.apn.classList.remove("invalid");
-          request.lte = {
-            apn: lteFields.apn.value,
-            user: lteFields.user.value,
-            roaming: lteFields.lteDraft.roaming,
-            enabled: lteFields.lteDraft.enabled,
-          };
-          if (lteFields.pass.value) {
-            request.lte.password = lteFields.pass.value;
-          }
-        }
-        now.disabled = later.disabled = true;
-        show("Saving…", false);
-        try {
-          await this.apiClient.setSoftApBand(draft.bandType.band);
-          await this.apiClient.setSoftApChannelWidth(draft.bandType.channelWidth);
-          await this.apiClient.setSoftApChannel(draft.bandType.channel);
-          await this.apiClient.setOfflineModeState(draft.isOfflineModeEnabled ? 1 : 0);
-          await this.apiClient.setOfflineModeTelemetryState(draft.isOfflineModeTelemetryEnabled ? 1 : 0);
-          await this.apiClient.setOfflineModeTeslaFirmwareDownloads(draft.isOfflineModeTeslaFirmwareDownloadsEnabled ? 1 : 0);
-        } catch (_error) {
-          show("The device did not save the hotspot settings.", true);
-          now.disabled = later.disabled = false;
-          return;
-        }
-        const result = await this.apiClient.setNetwork(request);
-        now.disabled = later.disabled = false;
-        if (!result.ok) {
-          show("Not saved: " + (result.message || "service error"), true);
-          return;
-        }
-        psk.value = "";
-        if (lteFields) {
-          lteFields.pass.value = "";
-        }
-        await this._handleSystemConfigurationChanged();
-        show(
-          when === "now"
-            ? "Saved. The hotspot restarts in a moment; the car reconnects by itself."
-            : "Saved. The hotspot changes take effect at the next start.",
-          false,
-        );
-      };
-      now.addEventListener("click", () => submit("now"));
-      later.addEventListener("click", () => submit("boot"));
-
-      // the backup Wi-Fi: its own block, redrawn by itself after each change (changes apply at once)
-      this._appendDivider();
-      const wifiBlock = utils.createElement("div", "settings-wifi-block", null);
-      this.content.appendChild(wifiBlock);
-      this._renderBackupWifi(token, wifiBlock, net.wifi);
-    }
-
-    // teslalinux: a second Wi-Fi card joins a saved network (home, a phone's hotspot, a garage) and
-    // host/teslalinux-uplink routes through it when LTE has no internet, e.g. underground, or whenever
-    // it is connected. POST /api/network {"wifi": ...}, GET /api/wifiScan.
-    _renderBackupWifi(token, block, wifi) {
-      const stillHere = () => token === this._renderToken && this.activeSectionId === "network" && block.isConnected;
-      block.innerHTML = "";
-      this._withTarget(block, () => {
-        this._appendHeading("Backup Wi-Fi");
-        if (!wifi) {
-          this._appendDescription("The backup Wi-Fi settings are not available on this device.");
-          return;
-        }
-        const redraw = async () => {
-          let fresh = null;
-          try {
-            fresh = (await this.apiClient.fetchNetwork()).wifi;
-          } catch (_error) {
-            fresh = wifi;
-          }
-          if (stillHere()) {
-            this._renderBackupWifi(token, block, fresh);
-          }
-        };
-        const message = utils.createElement("div", "settings-description settings-save-message", "");
-        message.hidden = true;
-        const show = (text, error) => {
-          message.textContent = text;
-          message.classList.toggle("settings-error-text", Boolean(error));
-          message.hidden = false;
-        };
-        const send = async (ops, doneText) => {
-          show("Saving…", false);
-          const r = await this.apiClient.setNetwork({ when: "now", wifi: ops });
-          if (!r.ok) {
-            show("Not saved: " + (r.message || "service error"), true);
-            return false;
-          }
-          await redraw();
-          if (doneText) {
-            const again = block.querySelector(".settings-save-message");
-            if (again) {
-              again.textContent = doneText;
-              again.hidden = false;
-            }
-          }
-          return true;
-        };
-
-        if (!wifi.present) {
-          this._appendTile({
-            icon: "wifi_off",
-            title: "No second Wi-Fi card",
-            subtitle: "The built-in Wi-Fi (" + (wifi.apIface || "wlan0") + ") runs the hotspot",
-            dense: false,
-          });
-          this._appendDescription(
-            "Plug in a USB Wi-Fi adapter to join a known network when LTE has no signal, for example in an underground car park. Networks saved below are used as soon as one is plugged in.",
-          );
-        } else {
-          this._appendTile({
-            icon: wifi.ssid ? "wifi" : "wifi_off",
-            title: wifi.ssid ? "Connected to " + wifi.ssid : "Not connected",
-            subtitle:
-              (wifi.iface || "") +
-              (typeof wifi.signalDbm === "number" ? " · signal " + wifi.signalDbm + " dBm" : "") +
-              (wifi.enabled ? "" : " · switched off"),
-            dense: false,
-          });
-        }
-        this._appendTile({
-          icon: "wifi_tethering",
-          title: "Use backup Wi-Fi",
-          trailing: this._createSwitch(wifi.enabled !== false, async (checked) => {
-            await send({ enabled: checked });
-          }),
-        });
-        this._appendTile({
-          icon: "alt_route",
-          title: "Use Wi-Fi",
-          trailing: this._createSelect(
-            [
-              { value: "lte", label: "When LTE has no internet" },
-              { value: "wifi", label: "Whenever connected" },
-            ],
-            wifi.prefer === "wifi" ? "wifi" : "lte",
-            async (value) => {
-              await send({ prefer: value });
-            },
-          ),
-          dense: false,
-        });
-        this._appendDescription(
-          "\"When LTE has no internet\" keeps LTE in use and switches to a saved Wi-Fi within about 10 seconds of LTE losing the internet, and back once LTE works again. \"Whenever connected\" uses the Wi-Fi first to save mobile data (at home, on a phone's hotspot).",
-        );
-
-        this._appendHeading("Saved networks");
-        const networks = Array.isArray(wifi.networks) ? wifi.networks : [];
-        if (!networks.length) {
-          this._appendDescription("No networks saved yet.");
-        }
-        networks.forEach((n) => {
-          const remove = this._createActionButton("Remove");
-          this._appendTile({
-            icon: n.open ? "lock_open" : "lock",
-            title: n.ssid,
-            subtitle: [n.open ? "Open" : "Password saved", n.hidden ? "hidden" : "", wifi.ssid === n.ssid ? "connected" : ""]
-              .filter(Boolean)
-              .join(" · "),
-            trailing: remove,
-            dense: false,
-          });
-          this._armButton(remove, "Remove", async () => {
-            remove.disabled = true;
-            await send({ remove: n.ssid });
-          });
-        });
-
-        this._appendHeading("Add a network");
-        const ssid = this._createTextInput("", { maxLength: 32, placeholder: "Network name" });
-        this._appendTile({ icon: "wifi", title: "Network name", trailing: ssid, dense: false });
-        const pass = this._createTextInput("", { type: "password", maxLength: 64, placeholder: "Password (empty: open network)", autocomplete: "new-password" });
-        this._appendTile({ icon: "password", title: "Password", trailing: pass, dense: false });
-        let hidden = false;
-        this._appendTile({
-          icon: "visibility_off",
-          title: "Hidden network",
-          subtitle: "It does not announce its name",
-          trailing: this._createSwitch(false, async (checked) => {
-            hidden = checked;
-          }),
-        });
-        const row = utils.createElement("div", "settings-save-row", null);
-        const add = this._createActionButton("Add network");
-        const scan = this._createActionButton("Scan for networks");
-        scan.disabled = !wifi.present;
-        row.appendChild(add);
-        row.appendChild(scan);
-        block.appendChild(row);
-        block.appendChild(message);
-        const found = utils.createElement("div", "settings-scan-list", null);
-        block.appendChild(found);
-
-        add.addEventListener("click", async () => {
-          const name = ssid.value;
-          const bytes = new TextEncoder().encode(name).length;
-          if (bytes < 1 || bytes > 32) {
-            ssid.classList.add("invalid");
-            show("The network name needs 1 to 32 characters.", true);
-            return;
-          }
-          ssid.classList.remove("invalid");
-          if (pass.value && !/^(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})$/.test(pass.value)) {
-            pass.classList.add("invalid");
-            show("A Wi-Fi password has 8 to 63 characters.", true);
-            return;
-          }
-          pass.classList.remove("invalid");
-          add.disabled = true;
-          const ok = await send(
-            { add: { ssid: name, psk: pass.value, hidden, open: pass.value === "" } },
-            "Saved “" + name + "”. The backup card joins it when it is in range.",
-          );
-          add.disabled = false;
-          if (ok) {
-            pass.value = "";
-          }
-        });
-
-        scan.addEventListener("click", async () => {
-          scan.disabled = true;
-          scan.textContent = "Scanning…";
-          found.innerHTML = "";
-          let result;
-          try {
-            result = await this.apiClient.scanWifi();
-          } catch (_error) {
-            result = { networks: [], error: "scan failed" };
-          }
-          if (!stillHere()) {
-            return;
-          }
-          scan.disabled = false;
-          scan.textContent = "Scan again";
-          const list = Array.isArray(result.networks) ? result.networks : [];
-          if (!list.length) {
-            found.appendChild(utils.createElement("p", "settings-description", result.error ? "The scan failed." : "No networks found."));
-            return;
-          }
-          list.forEach((n) => {
-            const item = utils.createElement("button", "settings-scan-item", null);
-            item.type = "button";
-            const icon = utils.createElement("span", "material-symbols-rounded settings-scan-icon", this._wifiBars(n));
-            const name = utils.createElement("span", "settings-scan-name", n.ssid);
-            const meta = utils.createElement(
-              "span",
-              "settings-scan-meta",
-              [n.band, n.secure ? "secured" : "open", typeof n.signalDbm === "number" ? n.signalDbm + " dBm" : typeof n.signalPercent === "number" ? n.signalPercent + " %" : ""]
-                .filter(Boolean)
-                .join(" · "),
-            );
-            item.appendChild(icon);
-            item.appendChild(name);
-            item.appendChild(meta);
-            item.addEventListener("click", () => {
-              ssid.value = n.ssid;
-              pass.value = "";
-              if (n.secure) {
-                pass.focus();
-              }
-              found.querySelectorAll(".settings-scan-item").forEach((el) => el.classList.toggle("active", el === item));
-            });
-            found.appendChild(item);
-          });
-        });
-      });
-    }
-
     _wifiBars(n) {
       const pct = typeof n.signalPercent === "number" ? n.signalPercent : typeof n.signalDbm === "number" ? Math.min(100, Math.max(0, 2 * (n.signalDbm + 100))) : 0;
       // the bundled Material Icons font has full, partial and empty Wi-Fi glyphs (no 1-3 bar ones)
@@ -1010,17 +248,6 @@
         return n.secure ? "signal_wifi_4_bar_lock" : "signal_wifi_4_bar";
       }
       return pct >= 30 ? "network_wifi" : "signal_wifi_0_bar";
-    }
-
-    // the append helpers write into this element instead of the section's content while fn runs
-    _withTarget(el, fn) {
-      const previous = this._target;
-      this._target = el;
-      try {
-        fn();
-      } finally {
-        this._target = previous;
-      }
     }
 
     // teslalinux: updates of the operating system underneath the app (apt on Pi OS, apk on Alpine),
@@ -2320,6 +1547,584 @@
       return [UI.group("Picture", [rr, sr, qr, ar]), UI.group("Smoothness", smooth)];
     }
 
+    // ------------------------------------------------------------------ Connections
+
+    /** teslalinux-uplink's view of the LTE stick (HiLink web API or ModemManager), when there is one */
+    _modem(st) {
+      const m = st && st.failover && st.failover.modem;
+      return m && m.type && m.type !== "none" ? m : null;
+    }
+
+    /**
+     * The internet now (GET /api/status, refreshed every 3 s): the uplink in use, the LTE modem
+     * (operator, bars, this month's data), the backup uplinks' own checks, a note while another
+     * uplink stands in for LTE or the SIM has a problem, and the modem's radio and recovery folded.
+     */
+    _internetBlock(st) {
+      const fmt = UI.fmt;
+      const net = st.internet || {};
+      const up = st.uplink;
+      const fo = st.failover || {};
+      const m = this._modem(st);
+      const kindName = { lte: "LTE modem", wifi: "Backup Wi-Fi", ethernet: "Ethernet", phone: "Phone (USB tethering)" };
+      const kinds = { lte: "LTE", wifi: "Backup Wi-Fi", ethernet: "Ethernet", phone: "Phone" };
+      const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
+      const data = (d) => (d ? "↓ " + (d.down || "?") + "  ↑ " + (d.up || "?") : "");
+      const notes = [];
+      if (fo.reason && fo.activeKind) {
+        const why = fo.reason.replace(/^lte\b/, "LTE").replace(/^wifi\b/, "Wi-Fi");
+        notes.push(UI.warnbox("Using " + (kinds[fo.activeKind] || fo.activeKind) + " instead: " + why + (fo.since && st.time ? ", since " + fmt.dur(Math.max(0, st.time - fo.since)) : "") + ".", "alt_route"));
+      }
+      if (m && m.simProblem) notes.push(UI.warnbox("SIM card: " + m.simProblem, "sim_card_alert"));
+      const facts = [
+        ["Internet", net.reachable ? "Online" + (typeof net.latencyMs === "number" ? ", " + net.latencyMs + " ms" : "") : "No internet", net.reachable ? "ok" : "bad"],
+        up ? ["Through", (kindName[up.kind] || up.kind) + " (" + up.interface + ")"] : ["Through", "No route to the internet", "bad"],
+        up && up.address ? ["Address", up.address + (up.gateway ? ", gateway " + up.gateway : "")] : null,
+      ];
+      if (m) {
+        const tech = m.networkType && m.technology && m.technology !== m.networkType ? m.networkType + " (" + m.technology + ")" : m.networkType || m.technology;
+        facts.push(["Operator", [m.operator || "Unknown", tech, m.roaming ? "roaming" : ""].filter(Boolean).join(", ")]);
+        if (typeof m.bars === "number") facts.push(["Signal", m.bars + " of 5 bars", m.bars >= 3 ? "ok" : "warn"]);
+        else if (typeof m.signal === "number") facts.push(["Signal", m.signal + " %"]);
+        if (m.connection) facts.push(["Modem", cap(m.connection) + (m.connection === "connected" && typeof m.connectedSeconds === "number" ? " for " + fmt.dur(m.connectedSeconds) : "")]);
+        if (m.month) facts.push(["This month", data(m.month)]);
+      } else if (st.modem) {
+        const o = st.modem;
+        facts.push(["LTE modem", [o.operator, o.model, o.technology, o.state, typeof o.signalPercent === "number" ? "signal " + o.signalPercent + " %" : ""].filter(Boolean).join(", ") || "Detected"]);
+      } else {
+        facts.push(["LTE modem", "Not detected"]);
+      }
+      if ((!m || !m.month) && up && typeof up.rxBytes === "number") facts.push(["Data since start", "↓ " + fmt.bytes(up.rxBytes) + "  ↑ " + fmt.bytes(up.txBytes)]);
+      // the other uplinks' own checks (the one in use is above)
+      (Array.isArray(fo.candidates) && fo.candidates.length > 1 ? fo.candidates : []).forEach((c) => {
+        if (up && c.iface === up.interface) return;
+        const on = c.kind === "wifi" && fo.wifi && fo.wifi.ssid ? fo.wifi.ssid + ": " : "";
+        facts.push([(kinds[c.kind] || c.kind) + " (" + c.iface + ")", on + (c.ok ? "Ready, online" + (typeof c.latencyMs === "number" ? ", " + c.latencyMs + " ms" : "") : "No internet"), c.ok ? "ok" : null]);
+      });
+      const parts = [notes, UI.facts(facts)];
+      if (m) {
+        const radio = m.radio || {};
+        const actionNames = {
+          reconnect: m.type === "hilink" ? "mobile data off and on" : "reconnect",
+          "modem-reset": "modem restart",
+          "usb-reenumerate": "USB re-enumeration",
+          "usb-power-cycle": "USB power cycle",
+        };
+        const details = UI.facts([
+          m.model ? ["Model", m.model] : null,
+          radio.rsrp ? ["RSRP", radio.rsrp] : null,
+          radio.rsrq ? ["RSRQ", radio.rsrq] : null,
+          radio.sinr ? ["SINR", radio.sinr] : null,
+          radio.rssi && !radio.rsrp ? ["RSSI", radio.rssi] : null,
+          radio.band ? ["Band", radio.band] : null,
+          radio.cellId ? ["Cell", radio.cellId] : null,
+          m.session ? ["This session", data(m.session)] : null,
+          ["Recovery", (m.recovery === "off" ? "Off" : "Automatic") + (m.status ? ", " + m.status : "")],
+          m.lastAction
+            ? ["Last step", (actionNames[m.lastAction] || m.lastAction) + ", " + fmt.dur(Math.max(0, st.time - m.lastActionAt)) + " ago" + (m.lastResult && m.lastResult !== "done" ? " (" + m.lastResult + ")" : "")]
+            : null,
+          typeof m.nextActionAt === "number" && m.nextActionAt > st.time ? ["Next step", "in " + fmt.dur(m.nextActionAt - st.time)] : null,
+        ]);
+        const [b, body] = UI.disclosure("Modem details", details, this._modemOpen);
+        b.addEventListener("click", () => (this._modemOpen = !body.hidden));
+        parts.push(b, body);
+      }
+      return h("div", { "data-id": "net.internet", "data-part": "internet" }, parts);
+    }
+
+    /** who is on the hotspot (GET /api/status), refreshed with the internet */
+    _clientsBlock(st) {
+      const hot = st.hotspot || {};
+      const clients = Array.isArray(hot.clients) ? hot.clients : [];
+      const fmt = UI.fmt;
+      let items;
+      if (hot.present === false) {
+        items = [UI.listItem("wifi_off", "No hotspot", "This device has no Wi-Fi interface (" + (hot.interface || "wlan0") + "): the car cannot join it. The settings below are kept for a device with one.")];
+      } else if (!clients.length) {
+        items = [UI.listItem("wifi_find", "Nothing connected", hot.running === false ? "The hotspot is not running" : "The hotspot is on and waiting for the car")];
+      } else {
+        items = clients.map((c) =>
+          UI.listItem(
+            "directions_car",
+            c.name || c.ip || c.mac,
+            [
+              typeof c.signalDbm === "number" ? fmt.signal(c.signalDbm) + " signal (" + c.signalDbm + " dBm)" : "",
+              typeof c.txMbps === "number" ? Math.round(c.txMbps) + " Mbit/s" : "",
+              typeof c.connectedSeconds === "number" ? "for " + fmt.dur(c.connectedSeconds) : "",
+              c.ip && c.name ? c.ip : "",
+            ].filter(Boolean).join(", "),
+            UI.CHIP.plain("Connected"),
+          ),
+        );
+      }
+      return h("div", { "data-part": "clients" }, items);
+    }
+
+    async _connectionsSection(token) {
+      const api = this.apiClient;
+      const [net, conf, st] = await Promise.all([api.fetchNetwork(), this._fetchSystemConfigurationSafe(), api.fetchStatus().catch(() => this.cache.status || null)]);
+      if (st) this.cache.status = st;
+      const draft = this.netDraft;
+      const redraw = () => token === this._renderToken && this._rerender();
+      const hot = net.hotspot || {};
+      const out = [];
+
+      if (st) out.push(UI.group("Internet now", [this._internetBlock(st)]));
+
+      // --- the hotspot: edits wait in the draft until Apply
+      const val = (k, v) => (k in draft.hotspot ? draft.hotspot[k] : v);
+      const ss = UI.row({
+        id: "net.ssid",
+        title: "Hotspot name",
+        control: UI.tapValue(val("ssid", hot.ssid || ""), async () => {
+          const v = await UI.editText({
+            title: "Hotspot name",
+            value: val("ssid", hot.ssid || ""),
+            maxLength: 32,
+            help: "The car shows this name in its Wi-Fi list.",
+            validate: (x) => {
+              const n = new TextEncoder().encode(x).length;
+              return n < 1 || n > 32 ? "The name needs 1 to 32 characters." : "";
+            },
+          });
+          if (v == null) return;
+          if (v === (hot.ssid || "")) delete draft.hotspot.ssid;
+          else draft.hotspot.ssid = v;
+          redraw();
+        }, "ssid" in draft.hotspot),
+      });
+      const pw = UI.row({
+        id: "net.psk",
+        title: "Hotspot password",
+        detail: "The car needs the new one typed in once",
+        control: UI.tapValue("psk" in draft.hotspot ? "New password" : hot.pskSet ? "Set" : "None", async () => {
+          const v = await UI.editText({
+            title: "Hotspot password",
+            type: "password",
+            maxLength: 64,
+            placeholder: "At least 8 characters",
+            help: "After applying, enter it in the car's Wi-Fi settings: the car forgets the old one.",
+            validate: (x) => (/^(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})$/.test(x) ? "" : "The password needs 8 to 63 characters (letters, digits, symbols)."),
+          });
+          if (v == null) return;
+          draft.hotspot.psk = v;
+          redraw();
+        }, "psk" in draft.hotspot),
+      });
+      const co = UI.row({
+        id: "net.country",
+        title: "Country",
+        more: "Decides which channels and power the hotspot may use.",
+        control: UI.tapValue(val("country", hot.country || "") || "Not set", async () => {
+          const v = await UI.editText({
+            title: "Country",
+            value: val("country", hot.country || ""),
+            maxLength: 2,
+            placeholder: "US",
+            help: "Two letters, such as US, GB, DE or IL.",
+            transform: (x) => x.toUpperCase().replace(/[^A-Z]/g, ""),
+            validate: (x) => (/^[A-Z]{2}$/.test(x) ? "" : "The country is a two-letter code."),
+          });
+          if (v == null) return;
+          if (v === (hot.country || "")) delete draft.hotspot.country;
+          else draft.hotspot.country = v;
+          redraw();
+        }, "country" in draft.hotspot),
+      });
+      const bands = constants.SOFT_AP_BANDS;
+      const savedBand = conf ? utils.mapSoftApBandFromConfig(conf) : bands[1];
+      const band = draft.props.band || savedBand;
+      const setBand = (b) => {
+        if (b.key === savedBand.key) delete draft.props.band;
+        else draft.props.band = b;
+        redraw();
+        return true;
+      };
+      const bd = UI.row({
+        id: "net.band",
+        title: "Band",
+        stack: true,
+        detail: band.band === 2 ? null : "Shares the radio with Bluetooth: Bluetooth audio can drop out",
+        more: "If the car does not see the network, try another channel. Allowed channels differ by country.",
+        control: UI.segmented(
+          [
+            { value: 1, label: "2.4 GHz" },
+            { value: 2, label: "5 GHz", caption: "recommended" },
+          ],
+          band.band,
+          (v) => setBand(Number(v) === 1 ? bands[0] : savedBand.band === 2 ? savedBand : bands[1]),
+          { label: "Band" },
+        ),
+      });
+      if (draft.props.band) bd.querySelector(".seg").classList.add("is-changed");
+      const hotRows = [this._clientsBlock(st || { hotspot: hot }), ss, pw, co, bd];
+      if (band.band === 2) {
+        const ch = UI.row({
+          id: "net.channel",
+          title: "5 GHz channel",
+          stack: true,
+          control: UI.segmented(
+            bands.filter((b) => b.band === 2).map((b) => ({ value: b.key, label: String(b.channel), caption: b.channel === 36 ? "default" : null })),
+            band.key,
+            (k) => setBand(bands.find((b) => b.key === k)),
+            { label: "5 GHz channel" },
+          ),
+        });
+        hotRows.push(ch);
+      }
+      out.push(UI.group("Hotspot", hotRows));
+
+      // --- what the car may reach without internet (upstream's offline mode), also in the draft
+      if (conf) {
+        const props = [
+          ["offline", "persist.tesla-android.offline-mode.is_enabled"],
+          ["telemetry", "persist.tesla-android.offline-mode.telemetry.is_enabled"],
+          ["firmware", "persist.tesla-android.offline-mode.tesla-firmware-downloads"],
+        ];
+        const saved = {};
+        props.forEach(([k, key]) => (saved[k] = utils.toInt(conf[key], 0) === 1));
+        const propToggle = (k, label) =>
+          UI.toggle(k in draft.props ? draft.props[k] : saved[k], (on) => {
+            if (on === saved[k]) delete draft.props[k];
+            else draft.props[k] = on;
+            redraw();
+            return true;
+          }, label);
+        out.push(
+          UI.group(
+            "Without internet",
+            [
+              UI.row({
+                id: "net.offline",
+                title: "Keep the car on the hotspot",
+                detail: "Even without internet",
+                more: "The car leaves Wi-Fi networks that have no internet. With this on it stays connected to this device even without LTE; the car's own online features (the Tesla app, live traffic of the car's maps) then need the LTE modem.",
+                control: propToggle("offline", "Keep the car on the hotspot"),
+              }),
+              UI.row({ id: "net.telemetry", title: "Tesla telemetry", control: propToggle("telemetry", "Tesla telemetry") }),
+              UI.row({ id: "net.firmware", title: "Tesla software downloads", detail: "Off: the car still sees that an update exists", control: propToggle("firmware", "Tesla software downloads") }),
+            ],
+            "Turning telemetry and downloads off saves mobile data. These apply when the hotspot restarts.",
+          ),
+        );
+      }
+
+      // --- LTE: the APN for a ModemManager modem; a HiLink stick keeps its own
+      const lte = net.lte;
+      this._lteManaged = Boolean(lte && lte.managed);
+      let lteRows;
+      if (lte && lte.managed) {
+        const lv = (k, v) => (k in draft.lte ? draft.lte[k] : v);
+        const lteText = (k, title, o) => {
+          const r = UI.row({
+            id: o.id,
+            title,
+            detail: o.detail || null,
+            control: UI.tapValue(o.type === "password" ? ("password" in draft.lte ? "New password" : o.empty) : lv(k, lte[k] || "") || o.empty, async () => {
+              const v = await UI.editText({ title, value: o.type === "password" ? "" : lv(k, lte[k] || ""), type: o.type, maxLength: o.maxLength || 64, placeholder: o.empty, help: o.help, validate: o.validate });
+              if (v == null) return;
+              if (o.type !== "password" && v === (lte[k] || "")) delete draft.lte[k];
+              else draft.lte[k] = v;
+              redraw();
+            }, k in draft.lte),
+          });
+          return r;
+        };
+        const lteToggle = (k, id, title, detail) => {
+          const saved = k === "enabled" ? lte.enabled !== false : Boolean(lte[k]);
+          return UI.row({
+            id,
+            title,
+            detail,
+            control: UI.toggle(lv(k, saved), (on) => {
+              if (on === saved) delete draft.lte[k];
+              else draft.lte[k] = on;
+              redraw();
+              return true;
+            }, title),
+          });
+        };
+        lteRows = [
+          lteText("apn", "APN", {
+            id: "net.apn",
+            empty: "Automatic",
+            detail: "From your mobile operator",
+            maxLength: 63,
+            help: "Empty uses the modem's default.",
+            validate: (x) => (/^(?:[A-Za-z0-9][A-Za-z0-9.-]{0,62})?$/.test(x) ? "" : "The APN may hold letters, digits, dots and dashes."),
+          }),
+          lteText("user", "APN user name", { id: "net.apnuser", empty: "None" }),
+          lteText("password", "APN password", { id: "net.apnpass", empty: lte.passwordSet ? "Set" : "None", type: "password" }),
+          lteToggle("roaming", "net.roaming", "Data roaming", "Use other operators' networks abroad"),
+          lteToggle("enabled", "net.mobiledata", "Mobile data", "Off: no internet over LTE"),
+        ];
+      } else {
+        lteRows = [
+          UI.row({
+            id: "net.apn",
+            title: "APN",
+            detail: net.modemDetected
+              ? "This modem keeps its own APN. Change it on the modem's web page from a computer."
+              : "Plug in a USB LTE modem. HiLink sticks work without settings.",
+            more: net.modemDetected
+              ? "This modem is a router of its own (a USB \"HiLink\" stick such as the Huawei E3372): it keeps its APN itself. Change it on the modem's own web page from a computer, or plug it into one once."
+              : "Modems that need an APN here are managed by ModemManager.",
+            control: UI.value(net.modemDetected ? "Set on the modem" : "No modem"),
+          }),
+        ];
+      }
+      out.push(UI.group("LTE", lteRows));
+
+      // --- backup Wi-Fi: applies at once
+      if (net.wifi) out.push(UI.group("Backup Wi-Fi", this._backupWifiRows(net.wifi, redraw)));
+
+      // --- the apply bar for the hotspot and LTE draft
+      const n = Object.keys(draft.hotspot).length + Object.keys(draft.lte).length + Object.keys(draft.props).length;
+      if (n) {
+        const bar = h(
+          "div",
+          { class: "pendbar", role: "region", "aria-label": "Changes not applied" },
+          h("div", { class: "pendbar-text" }, h("b", null, n + (n === 1 ? " change" : " changes") + " not applied"), "Apply now restarts the hotspot: the car drops off for a few seconds."),
+          UI.button("Discard", () => {
+            this.netDraft = { hotspot: {}, lte: {}, props: {} };
+            redraw();
+          }, "btn--ghost"),
+          UI.button("At next start", () => this._applyNetwork("boot", net, bar), "btn--ghost"),
+          UI.button("Apply now", () => this._applyNetwork("now", net, bar), "btn--primary"),
+        );
+        out.push(bar);
+      }
+
+      // the internet and the car on the hotspot follow every 3 s
+      const poll = async () => {
+        if (token !== this._renderToken) return;
+        if (this._visible()) {
+          try {
+            const fresh = await api.fetchStatus();
+            if (token !== this._renderToken) return;
+            this.cache.status = fresh;
+            const a = this.content.querySelector('[data-part="internet"]');
+            const b = this.content.querySelector('[data-part="clients"]');
+            if (a) a.replaceWith(this._internetBlock(fresh));
+            if (b) b.replaceWith(this._clientsBlock(fresh));
+            this._renderSidebar();
+          } catch (_e) {
+            // the next round tries again
+          }
+        }
+        this._pollTimer = global.setTimeout(poll, 3000);
+      };
+      this._pollTimer = global.setTimeout(poll, 3000);
+      return out;
+    }
+
+    /** the hotspot and LTE draft to the device: upstream's band and offline settings, then POST /api/network */
+    async _applyNetwork(when, net, bar) {
+      const draft = this.netDraft;
+      const api = this.apiClient;
+      bar.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      const text = bar.querySelector(".pendbar-text");
+      text.replaceChildren(h("b", null, "Applying…"), "Saving the settings on the device.");
+      UI.busy(1);
+      try {
+        const p = draft.props;
+        if (p.band) {
+          await api.setSoftApBand(p.band.band);
+          await api.setSoftApChannelWidth(p.band.channelWidth);
+          await api.setSoftApChannel(p.band.channel);
+        }
+        if ("offline" in p) await api.setOfflineModeState(p.offline ? 1 : 0);
+        if ("telemetry" in p) await api.setOfflineModeTelemetryState(p.telemetry ? 1 : 0);
+        if ("firmware" in p) await api.setOfflineModeTeslaFirmwareDownloads(p.firmware ? 1 : 0);
+        const req = { when, hotspot: Object.assign({}, draft.hotspot) };
+        const lte = net.lte;
+        if (lte && lte.managed && Object.keys(draft.lte).length) {
+          req.lte = Object.assign({ apn: lte.apn || "", user: lte.user || "", roaming: Boolean(lte.roaming), enabled: lte.enabled !== false }, draft.lte);
+        }
+        const r = await api.setNetwork(req);
+        if (!r.ok) throw UI.userError(r.message || "the device did not answer");
+        this.netDraft = { hotspot: {}, lte: {}, props: {} };
+        await this._handleSystemConfigurationChanged().catch(() => null);
+        UI.toast(when === "now" ? "Applied. The hotspot restarts; the car reconnects by itself." : "Saved. The hotspot changes apply at the next start.");
+        await this._rerender();
+      } catch (e) {
+        text.replaceChildren(h("b", null, "Not applied"), (e && e.userMessage ? e.userMessage : "The device did not answer") + ". Your changes are kept.");
+        bar.querySelectorAll("button").forEach((b) => (b.disabled = false));
+      } finally {
+        UI.busy(-1);
+      }
+    }
+
+    /**
+     * A second Wi-Fi card joins a saved network (home, a phone's hotspot, a garage) and
+     * host/teslalinux-uplink routes through it when LTE has no internet, or whenever it is
+     * connected. POST /api/network {"wifi": ...} applies at once; GET /api/wifiScan.
+     */
+    _backupWifiRows(wifi, redraw) {
+      const api = this.apiClient;
+      const send = async (ops) => {
+        const r = await api.setNetwork({ when: "now", wifi: ops });
+        if (!r.ok) throw UI.userError("Not saved: " + (r.message || "the device did not answer") + ".");
+      };
+      const enabled = wifi.enabled !== false;
+      const state = !wifi.present
+        ? "Plug in a second (USB) Wi-Fi card. Saved networks are used as soon as one is in."
+        : wifi.ssid
+          ? "Connected to " + wifi.ssid + (typeof wifi.signalDbm === "number" ? ", " + UI.fmt.signal(wifi.signalDbm) + " signal (" + wifi.signalDbm + " dBm)" : "")
+          : "A second Wi-Fi card (" + (wifi.iface || "USB") + ") joins a saved network when it is in range";
+      const wst = UI.row({
+        id: "net.backup",
+        title: "Use backup Wi-Fi",
+        detail: state,
+        more: "For places where LTE has no signal, such as an underground car park. The built-in Wi-Fi (" + (wifi.apIface || "wlan0") + ") runs the hotspot, so this needs a second card.",
+        control: UI.toggle(enabled, (on) =>
+          UI.save(wst, () => send({ enabled: on }), on ? "On" : "Off").then((ok) => {
+            if (ok) global.setTimeout(redraw, 400);
+            return ok;
+          }), "Use backup Wi-Fi"),
+      });
+      const wp = UI.row({
+        id: "net.prefer",
+        title: "Use it",
+        stack: true,
+        dim: !enabled,
+        more: "When LTE fails: LTE stays in use; a saved Wi-Fi takes over within about 10 seconds of LTE losing the internet, and LTE comes back once it works again. Always when in range: Wi-Fi first, to save mobile data at home or on a phone's hotspot.",
+        control: UI.segmented(
+          [
+            { value: "lte", label: "When LTE fails", caption: "default" },
+            { value: "wifi", label: "Always when in range", caption: "saves mobile data" },
+          ],
+          wifi.prefer === "wifi" ? "wifi" : "lte",
+          (v) => UI.save(wp, () => send({ prefer: v })),
+          { label: "When to use backup Wi-Fi" },
+        ),
+      });
+      const networks = Array.isArray(wifi.networks) ? wifi.networks : [];
+      const saved = networks.map((n) =>
+        UI.listItem(
+          n.open ? "lock_open" : "lock",
+          n.ssid,
+          (n.open ? "Open network" : "Password saved") + (n.hidden ? ", hidden" : "") + (wifi.ssid === n.ssid ? ", connected" : ""),
+          UI.armed("Remove", "Tap again", async (b) => {
+            b.disabled = true;
+            try {
+              await send({ remove: n.ssid });
+              UI.toast("Removed “" + n.ssid + "”.");
+              redraw();
+            } catch (e) {
+              UI.toast(e.userMessage || "Not removed: the device did not answer.");
+              b.disabled = false;
+            }
+          }),
+        ),
+      );
+      const add = h("div", { class: "row-actions", "data-id": "net.add" }, UI.button("Add a network", () => this._addNetwork(wifi).then((ok) => ok && redraw()), null, "add"));
+      return [wst, wp, networks.length ? h("div", null, saved) : h("p", { class: "group-note" }, "No networks saved yet."), add];
+    }
+
+    /** the "Add a network" sheet: scan, name, password, hidden */
+    _addNetwork(wifi) {
+      const name = h("input", { id: "add-ssid", class: "settings-field-input", maxlength: 32, placeholder: "Network name", autocomplete: "off", spellcheck: "false", autocapitalize: "off" });
+      const pass = h("input", { id: "add-psk", class: "settings-field-input", type: "password", maxlength: 64, placeholder: "Empty for an open network", autocomplete: "new-password" });
+      let hidden = false;
+      const err = h("div", { class: "field-err", "aria-live": "assertive" });
+      const found = h("div", { role: "listbox" });
+      const scan = UI.button("Scan for networks", null, null, "wifi_tethering");
+      if (!wifi.present) {
+        scan.disabled = true;
+        scan.title = "No second Wi-Fi card";
+      }
+      scan.addEventListener("click", async () => {
+        scan.disabled = true;
+        scan.replaceChildren(h("span", { class: "spin" }), h("span", null, "Scanning…"));
+        let r;
+        try {
+          r = await this.apiClient.scanWifi();
+        } catch (_e) {
+          r = { networks: [], error: "scan failed" };
+        }
+        scan.disabled = false;
+        scan.replaceChildren(icon("refresh"), h("span", null, "Scan again"));
+        const list = Array.isArray(r.networks) ? r.networks : [];
+        found.replaceChildren(
+          ...(list.length
+            ? list.map((n) =>
+                h(
+                  "button",
+                  {
+                    class: "pick",
+                    type: "button",
+                    role: "option",
+                    onclick: () => {
+                      name.value = n.ssid;
+                      pass.value = "";
+                      found.querySelectorAll(".pick").forEach((x) => x.setAttribute("aria-selected", String(x.textContent.startsWith(n.ssid))));
+                      if (n.secure) pass.focus();
+                    },
+                  },
+                  h(
+                    "span",
+                    null,
+                    n.ssid,
+                    h("small", null, "  " + [n.band, n.secure ? "secured" : "open", typeof n.signalDbm === "number" ? UI.fmt.signal(n.signalDbm) : typeof n.signalPercent === "number" ? n.signalPercent + " %" : ""].filter(Boolean).join(", ")),
+                  ),
+                  icon(this._wifiBars(n)),
+                ),
+              )
+            : [h("p", { class: "results-empty" }, r.error ? "The scan failed." : "No networks found.")]),
+        );
+      });
+      const ok = h("button", { class: "btn btn--primary", type: "button" }, "Save network");
+      const hiddenRow = UI.row({ title: "Hidden network", control: UI.toggle(false, (on) => {
+        hidden = on;
+        return true;
+      }, "Hidden network") });
+      const p = UI.openSheet({
+        title: "Add a network",
+        body: [
+          h("div", { class: "sheet-scan" }, scan),
+          found,
+          h("div", { class: "field" }, h("label", { for: "add-ssid" }, "Network name"), name),
+          h("div", { class: "field" }, h("label", { for: "add-psk" }, "Password"), pass, h("div", { class: "field-help" }, "Stored on the device as the Wi-Fi key, never as the password.")),
+          hiddenRow,
+          err,
+        ],
+        actions: [h("button", { class: "btn", type: "button", onclick: () => p.finish(false) }, "Cancel"), ok],
+      });
+      ok.addEventListener("click", async () => {
+        name.classList.remove("invalid");
+        pass.classList.remove("invalid");
+        const n = new TextEncoder().encode(name.value).length;
+        if (n < 1 || n > 32) {
+          err.textContent = "The network name needs 1 to 32 characters.";
+          name.classList.add("invalid");
+          return;
+        }
+        if (pass.value && !/^(?:[\x20-\x7e]{8,63}|[0-9A-Fa-f]{64})$/.test(pass.value)) {
+          err.textContent = "A Wi-Fi password has 8 to 63 characters.";
+          pass.classList.add("invalid");
+          return;
+        }
+        ok.disabled = true;
+        ok.textContent = "Saving…";
+        let r;
+        try {
+          r = await this.apiClient.setNetwork({ when: "now", wifi: { add: { ssid: name.value, psk: pass.value, hidden, open: pass.value === "" } } });
+        } catch (_e) {
+          r = { ok: false };
+        }
+        if (!r.ok) {
+          err.textContent = "Not saved: " + (r.message || "the device did not answer") + ".";
+          ok.disabled = false;
+          ok.textContent = "Save network";
+          return;
+        }
+        UI.toast("Saved “" + name.value + "”. The backup card joins it when it is in range.");
+        p.finish(true);
+      });
+      return p;
+    }
+
     // ------------------------------------------------------------------ Waze
 
     /**
@@ -3196,32 +3001,6 @@
         isRearDisplayEnabled: utils.toInt(raw.isRearDisplayEnabled, 0),
         isRearDisplayPrioritised: utils.toInt(raw.isRearDisplayPrioritised, 0),
       };
-    }
-
-    _networkPendingFromSystemConfig(config) {
-      return {
-        bandType: utils.mapSoftApBandFromConfig(config),
-        isSoftApEnabled:
-          utils.toInt(config["persist.tesla-android.softap.is_enabled"], 1) === 1,
-        isOfflineModeEnabled:
-          utils.toInt(config["persist.tesla-android.offline-mode.is_enabled"], 0) === 1,
-        isOfflineModeTelemetryEnabled:
-          utils.toInt(config["persist.tesla-android.offline-mode.telemetry.is_enabled"], 0) === 1,
-        isOfflineModeTeslaFirmwareDownloadsEnabled:
-          utils.toInt(
-            config["persist.tesla-android.offline-mode.tesla-firmware-downloads"],
-            0,
-          ) === 1,
-      };
-    }
-
-    _bandByKey(key) {
-      for (let index = 0; index < constants.SOFT_AP_BANDS.length; index += 1) {
-        if (constants.SOFT_AP_BANDS[index].key === key) {
-          return constants.SOFT_AP_BANDS[index];
-        }
-      }
-      return null;
     }
 
     async _handleSystemConfigurationChanged() {

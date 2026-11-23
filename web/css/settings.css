@@ -1511,8 +1511,23 @@ body:has(#panel-shell.is-settings:not([hidden])) {
   border-top: 1px solid var(--line);
 }
 
-#page-settings .group-body > .list-item:first-child {
+#page-settings .group-body > .list-item:first-child,
+#page-settings .group-body > :first-child > .list-item:first-child {
   border-top: 0;
+}
+
+/* a button under a list (Add a network), and the scan button at the top of a sheet */
+#page-settings .row-actions {
+  padding: 12px 0 0;
+}
+
+#page-settings .sheet-scan {
+  margin-bottom: 12px;
+}
+
+/* a draft value that is not applied yet */
+#page-settings .seg.is-changed .seg-opt[aria-checked="true"] {
+  color: var(--blue-ink);
 }
 
 #page-settings .list-item > .icon {
