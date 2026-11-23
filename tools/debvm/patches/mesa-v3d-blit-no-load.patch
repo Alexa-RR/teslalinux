@@ -1,0 +1,53 @@
+v3d: don't load the destination of a blit that overwrites all of it
+
+A render blit draws into a job that loads the destination into the tile buffer first unless the
+destination is known to be undefined. When the blit writes every pixel of a single-level,
+single-layer colour destination (no scissor, no window rectangles, no active render condition, no
+blending, every channel), its earlier contents cannot show: the destination is invalidated before
+the blit, so its job clears the tiles instead of loading them, and a pending job's store of it is
+dropped. An app's final full-window copy (Godot's, Waze's map) hits this every frame; the window's
+back buffer is otherwise loaded although nothing of it survives.
+
+Measured on a Pi 4 (stock clocks), Waze's car map at 1184x928: 26.1/26.5 -> 26.8/27.2 frames/s
+(with mesa-v3d-vs-texture-bin-sync.patch: 27.6/28.0). tools/debian/v3d-mesa-test.c checks that a
+blit over the whole destination gives exactly the blit's pixels and one over part of it keeps the
+rest, with the destination drawn into just before.
+
+Applies to Mesa 26.3.1 (tools/debvm/versions.env MESA_*), patch -p1 in the source tree.
+
+diff --git a/src/gallium/drivers/v3d/v3d_blit.c b/src/gallium/drivers/v3d/v3d_blit.c
+index 7317a4120a0..4cf76c3d201 100644
+--- a/src/gallium/drivers/v3d/v3d_blit.c
++++ b/src/gallium/drivers/v3d/v3d_blit.c
+@@ -138,6 +138,31 @@ v3d_render_blit(struct pipe_context *ctx, struct pipe_blit_info *info)
+
+         MESA_TRACE_FUNC();
+
++        /* A colour blit that writes every pixel of a single-level, single-
++         * layer destination makes its earlier contents irrelevant: mark it
++         * invalidated, so the blit's job neither loads them into the tile
++         * buffer nor waits for a store of them (an app's final copy into its
++         * window, every frame).  Not when a scissor, window rectangles, a
++         * render condition (which can skip the blit), blending or a partial
++         * channel mask could leave pixels of the destination as they were.
++         */
++        struct pipe_resource *pdst = info->dst.resource;
++        if (pdst != info->src.resource &&
++            !util_format_is_depth_or_stencil(info->dst.format) &&
++            (info->mask & PIPE_MASK_RGBA) == PIPE_MASK_RGBA &&
++            !info->scissor_enable && !info->num_window_rectangles &&
++            !info->alpha_blend &&
++            !(info->render_condition_enable && v3d->cond_query) &&
++            pdst->last_level == 0 && pdst->array_size == 1 &&
++            pdst->depth0 == 1 && pdst->nr_samples <= 1 &&
++            info->dst.level == 0 &&
++            info->dst.box.x == 0 && info->dst.box.y == 0 &&
++            info->dst.box.z == 0 && info->dst.box.depth == 1 &&
++            info->dst.box.width == pdst->width0 &&
++            info->dst.box.height == pdst->height0) {
++                ctx->invalidate_resource(ctx, pdst);
++        }
++
+         v3d_blitter_save(v3d, info->render_condition_enable ?
+                          V3D_BLIT_COND : V3D_BLIT);
+         util_blitter_blit(v3d->blitter, info, NULL);

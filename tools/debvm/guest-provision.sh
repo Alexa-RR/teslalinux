@@ -62,6 +62,10 @@ inst \
   libffi-dev libxml2-dev expat libpixman-1-dev libgbm-dev xkb-data bison flex \
   libwebsockets-dev libturbojpeg0-dev libjpeg62-turbo-dev libx264-dev linux-libc-dev hwdata glslang-tools
 
+log "the app's Mesa deps (build-dist.sh step mesa: v3d/vc4, EGL on Wayland, GBM, glvnd)"
+inst \
+  python3-yaml python3-packaging libglvnd-dev libwayland-egl-backend-dev libzstd-dev patch
+
 if [ $MODE = vm ]; then
   log "runtime for testing in the VM (llvmpipe, headless compositors, fonts)"
   inst \

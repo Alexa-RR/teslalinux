@@ -4,7 +4,7 @@
 #
 #   build-dist.sh [all]          every step in order, skipping steps already done for the same pins
 #   build-dist.sh STEP...        only these: vixl wolfssl bionic art libcored8 coreoj wolfjsse opensles atl
-#                                wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay
+#                                wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp mesa tlplay
 #   build-dist.sh --force STEP   redo a step although its stamp says done
 #   build-dist.sh status         which steps are done, for which pins
 # Then tools/debvm/pack-dist.sh packs the prefix for tools/pios/install.sh.
@@ -419,6 +419,42 @@ step_tacomp() {
   ldd "$TPREFIX/bin/tacomp" | grep -E "wlroots|wayland-server|drm|xkbcommon" | sed 's/^/  /'
 }
 
+# --- the app's Mesa ($PREFIX/mesa): Mesa MESA_VERSION with tools/debvm/patches/mesa-*.patch (V3D
+# work for Waze's map: a bin job waits for rendering only when a vertex texture may still be being
+# written, and a blit over all of its destination does not load it first). Only the app uses it:
+# the launcher puts $PREFIX/mesa/lib first on its library path, so glvnd's libEGL (the system's,
+# whose vendor file names libEGL_mesa.so.0) loads this libEGL_mesa and its libgallium; tacomp and
+# the rest of the system keep the system's Mesa. v3d (the Pi 4's GPU) and vc4 (its display, which
+# hands rendering to v3d), EGL on Wayland, GBM, GL and GLES 1-3 through glvnd: GLES 1 too, because an
+# eglChooseConfig without EGL_RENDERABLE_TYPE (GTK's) asks for EGL_OPENGL_ES_BIT.
+step_mesa() {
+  cpu_env
+  local d="$SRCDIR/mesa" t="$B/mesa-$MESA_VERSION.tar.xz"
+  if [[ ! -f "$t" ]] || [[ "$(sha256sum "$t" | cut -d' ' -f1)" != "$MESA_SHA256" ]]; then
+    curl -fsSL --retry 3 -o "$t.tmp" "$MESA_URL"
+    [[ "$(sha256sum "$t.tmp" | cut -d' ' -f1)" == "$MESA_SHA256" ]] || die "Mesa tarball checksum mismatch"
+    mv "$t.tmp" "$t"
+  fi
+  rm -rf "$d"; mkdir -p "$d"
+  tar -xJf "$t" -C "$d" --strip-components=1
+  local p
+  for p in "$DEBVM_PATCHES"/mesa-*.patch; do
+    log "mesa: $(basename "$p")"
+    patch -d "$d" -p1 --no-backup-if-mismatch -s < "$p"
+  done
+  # Mesa takes wayland-protocols 1.49 from its own wrap (trixie has 1.45), whose XML needs
+  # wayland-scanner 1.24 (trixie has 1.23): tacomp's private wayland provides the scanner only
+  local pc="$B/mesa-pkgconfig"
+  rm -rf "$pc"; mkdir -p "$pc"
+  cp "$TPREFIX/lib/pkgconfig/wayland-scanner.pc" "$pc/"
+  PKG_CONFIG_PATH="$pc" meson_build "$d" "$PREFIX/mesa" -Db_ndebug=true -Dplatforms=wayland \
+    -Dgallium-drivers=v3d,vc4 -Dvulkan-drivers= -Dglx=disabled -Dgles1=enabled -Dgles2=enabled \
+    -Dopengl=true -Degl=enabled -Dgbm=enabled -Dglvnd=enabled -Dllvm=disabled -Dgallium-va=disabled \
+    -Dvideo-codecs= -Dvalgrind=disabled -Dlibunwind=disabled -Dbuild-tests=false -Dtools=
+  rm -rf "$PREFIX/mesa/include" "$PREFIX/mesa/lib/pkgconfig"
+  ls -la "$PREFIX/mesa/lib" | sed 's/^/  /'
+}
+
 # --- tlplay: the app updater's download tool (tools/appupdate), into $PREFIX/bin for the installer ---
 have_tlplay_inputs() { command -v cargo >/dev/null 2>&1 && [[ -f "$TLPLAY_SRC/Cargo.toml" ]]; }
 step_tlplay() {
@@ -431,7 +467,7 @@ step_tlplay() {
   install -m 0755 "$CARGO_TARGET_DIR/release/tlplay" "$PREFIX/bin/tlplay"
 }
 
-ALL=(vixl wolfssl bionic art libcored8 coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay)
+ALL=(vixl wolfssl bionic art libcored8 coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp mesa tlplay)
 pins_of() { # what a step's stamp records: its pins plus the hash of the patches it applies
   case "$1" in
     vixl) echo "$VIXL_URL $VIXL_MESON_PATCH_SHA256" ;;
@@ -460,6 +496,8 @@ pins_of() { # what a step's stamp records: its pins plus the hash of the patches
     xkbcommon) echo "$XKBCOMMON_TAG" ;;
     wlroots) echo "$WLROOTS_TAG" ;;
     tacomp) echo "$(find "$TACOMP_SRC" -path "$TACOMP_SRC/build" -prune -o -type f -exec cat {} + 2>/dev/null | sha256sum | cut -c1-16)" ;;
+    # the patches too, and tacomp's wayland (its scanner generates part of the build)
+    mesa) echo "$MESA_VERSION $MESA_SHA256 ${TL_CPU_CFLAGS:-} $WAYLAND_TAG $(cat "$DEBVM_PATCHES"/mesa-*.patch 2>/dev/null | sha256sum | cut -c1-16)" ;;
     tlplay) echo "${TL_RUST_TARGET_CPU:-} $(find "$TLPLAY_SRC/src" "$TLPLAY_SRC/Cargo.toml" "$TLPLAY_SRC/Cargo.lock" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum | cut -c1-16)" ;;
   esac
 }

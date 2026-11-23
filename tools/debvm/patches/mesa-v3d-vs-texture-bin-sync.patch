@@ -1,0 +1,234 @@
+v3d: block the binner only when a vertex texture may still be being written
+
+The binner runs the coordinate shader before the job's render, and the kernel orders a bin job only
+by its explicit in_sync, so a vertex shader that samples a texture a still running GPU job writes
+must wait for it. v3d made every bin job of a draw with any vertex texture wait for the context's
+last render ("rather than tracking the last rendering to each texture's BO"). Godot's vertex shaders
+(Waze's map) sample textures that no GPU job writes, so every bin job of the frame waited for the
+render before it, and V3D's render engine idled while each bin ran (Pi 4, Waze at 1184x928: bin jobs
+waited 3.5 s per second for renders; the render engine was busy 81% of the time).
+
+Each resource now remembers the context and the submit sequence number of the last render or TFU
+job that writes it (cbufs, zsbuf and its separate stencil, the TLB blit destination, the job's
+write set and transform feedback targets, the TFU's destination), and the context remembers up to
+which sequence number every job had completed when a bin job that waited on out_sync was submitted
+(bin jobs run in submission order). A draw's bin job waits when a sampled vertex texture (the
+view's resource, or the shadow copy the TMU samples) was last written by a job of this context
+after that point, or by another context (as before: wait on our own last render). Indirect drawing
+still always waits; compute writes keep sync_on_last_compute_job.
+
+Measured on a Pi 4 (stock clocks), Waze's car map at 1184x928: bin jobs no longer wait (mean wait
+31.8 ms -> 0.7 ms), the render engine busy 81% -> 91%, 26.1/26.5 -> 26.8/27.4 frames/s.
+tools/debian/v3d-mesa-test.c checks it against the GL's results (a vertex shader reading what a
+slow draw, a clear and glGenerateMipmap's TFU just wrote, and a CPU upload; a build without the
+wait fails 272 of 900 checks, this one passes all).
+
+Applies to Mesa 26.3.1 (tools/debvm/versions.env MESA_*), patch -p1 in the source tree.
+
+diff --git a/src/gallium/drivers/v3d/v3d_context.c b/src/gallium/drivers/v3d/v3d_context.c
+index d639c688637..1f091b0284f 100644
+--- a/src/gallium/drivers/v3d/v3d_context.c
++++ b/src/gallium/drivers/v3d/v3d_context.c
+@@ -26,6 +26,7 @@
+
+ #include "pipe/p_defines.h"
+ #include "util/hash_table.h"
++#include "util/u_atomic.h"
+ #include "util/ralloc.h"
+ #include "util/u_inlines.h"
+ #include "util/u_memory.h"
+@@ -141,6 +142,64 @@ v3d_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
+         }
+ }
+
++/**
++ * A render or TFU job this context is about to submit (as submit_seqno)
++ * writes PRSC.
++ */
++void
++v3d_resource_gpu_written(struct v3d_context *v3d, struct pipe_resource *prsc)
++{
++        if (!prsc)
++                return;
++        struct v3d_resource *rsc = v3d_resource(prsc);
++        rsc->gpu_write_ctx = v3d->ctx_id;
++        rsc->gpu_write_seqno = v3d->submit_seqno;
++        if (rsc->separate_stencil) {
++                rsc->separate_stencil->gpu_write_ctx = v3d->ctx_id;
++                rsc->separate_stencil->gpu_write_seqno = v3d->submit_seqno;
++        }
++}
++
++/**
++ * Whether a draw whose vertex (coordinate) shader samples the bound vertex
++ * textures needs its bin job to wait for the last rendering: the binner runs
++ * the coordinate shader before the job's render, and the kernel orders bin
++ * jobs only by their explicit in_sync, so a texture a still running GPU job
++ * writes must be waited for.  That is the case when the texture's last GPU
++ * write was a job of this context after the last bin job that waited (it may
++ * still be running), or a job of another context (which nothing here can tell
++ * finished: as before, wait on our own last rendering).  A texture no GPU job
++ * wrote (uploaded through a CPU map, which waits for the BO to be idle) or
++ * whose writer completed before an earlier waiting bin job needs no wait.
++ */
++bool
++v3d_vs_textures_need_bin_sync(struct v3d_context *v3d)
++{
++        struct v3d_texture_stateobj *stage_tex = &v3d->tex[MESA_SHADER_VERTEX];
++
++        for (int i = 0; i < stage_tex->num_textures; i++) {
++                struct pipe_sampler_view *pview = stage_tex->textures[i];
++                if (!pview)
++                        continue;
++                /* the view's own resource, and the shadow copy the TMU
++                 * actually samples when there is one (written by a blit) */
++                struct pipe_resource *sampled[2] = {
++                        pview->texture, v3d_sampler_view(pview)->texture
++                };
++                for (int j = 0; j < 2; j++) {
++                        if (!sampled[j])
++                                continue;
++                        struct v3d_resource *rsc = v3d_resource(sampled[j]);
++                        if (!rsc->gpu_write_ctx)
++                                continue;
++                        if (rsc->gpu_write_ctx != v3d->ctx_id ||
++                            rsc->gpu_write_seqno > v3d->bin_synced_seqno)
++                                return true;
++                }
++        }
++        return false;
++}
++
+ /**
+  * Flushes the current job to get up-to-date primitive counts written to the
+  * primitive counts BO, then accumulates the transform feedback primitive count
+@@ -451,6 +510,9 @@ v3d_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
+                 return NULL;
+         }
+
++        static uint32_t next_ctx_id;
++        v3d->ctx_id = p_atomic_inc_return(&next_ctx_id);
++
+         pctx->screen = pscreen;
+         pctx->priv = priv;
+         pctx->destroy = v3d_context_destroy;
+diff --git a/src/gallium/drivers/v3d/v3d_context.h b/src/gallium/drivers/v3d/v3d_context.h
+index 272ab925710..1d922af452b 100644
+--- a/src/gallium/drivers/v3d/v3d_context.h
++++ b/src/gallium/drivers/v3d/v3d_context.h
+@@ -614,6 +614,17 @@ struct v3d_context {
+         /** Sync object that our RCL or TFU job will update as its out_sync. */
+         uint32_t out_sync;
+
++        /**
++         * This context's id (unique in the process) and the sequence number
++         * of its last submitted render or TFU job.  bin_synced_seqno: every
++         * job up to that number has completed before any bin job submitted
++         * from now on runs (a bin job that waited on out_sync was submitted
++         * after it; bin jobs run in submission order).
++         */
++        uint32_t ctx_id;
++        uint64_t submit_seqno;
++        uint64_t bin_synced_seqno;
++
+         /* Stream uploader used by gallium internals.  This could also be used
+          * by driver internals, but we tend to use the v3d_cl.h interfaces
+          * instead.
+@@ -825,6 +836,8 @@ struct v3d_cl_reloc v3d_write_uniforms(struct v3d_context *v3d,
+                                        mesa_shader_stage stage);
+
+ void v3d_flush(struct pipe_context *pctx);
++void v3d_resource_gpu_written(struct v3d_context *v3d, struct pipe_resource *prsc);
++bool v3d_vs_textures_need_bin_sync(struct v3d_context *v3d);
+ void v3d_job_init(struct v3d_context *v3d);
+ struct v3d_job *v3d_job_create(struct v3d_context *v3d);
+ void v3d_job_free(struct v3d_context *v3d, struct v3d_job *job);
+diff --git a/src/gallium/drivers/v3d/v3d_job.c b/src/gallium/drivers/v3d/v3d_job.c
+index 229754c761a..1a62ae4232b 100644
+--- a/src/gallium/drivers/v3d/v3d_job.c
++++ b/src/gallium/drivers/v3d/v3d_job.c
+@@ -708,6 +708,26 @@ v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
+
+         v3d_clif_dump(v3d, job);
+
++        /* A bin job that waits on our out_sync runs after every job this
++         * context submitted before it has completed.  Then number this job
++         * and mark what it writes (v3d_vs_textures_need_bin_sync()).
++         */
++        if (job->submit.in_sync_bcl == v3d->out_sync)
++                v3d->bin_synced_seqno = v3d->submit_seqno;
++        v3d->submit_seqno++;
++        for (int i = 0; i < job->nr_cbufs; i++)
++                v3d_resource_gpu_written(v3d, job->cbufs[i].texture);
++        v3d_resource_gpu_written(v3d, job->zsbuf.texture);
++        v3d_resource_gpu_written(v3d, job->dbuf.texture);
++        if (job->write_prscs) {
++                set_foreach(job->write_prscs, entry)
++                        v3d_resource_gpu_written(v3d, (struct pipe_resource *)entry->key);
++        }
++        if (job->tf_write_prscs) {
++                set_foreach(job->tf_write_prscs, entry)
++                        v3d_resource_gpu_written(v3d, (struct pipe_resource *)entry->key);
++        }
++
+         if (!V3D_DBG(NORAST)) {
+                 int ret;
+                 ret = v3d_ioctl(v3d->fd, DRM_IOCTL_V3D_SUBMIT_CL, &job->submit);
+diff --git a/src/gallium/drivers/v3d/v3d_resource.h b/src/gallium/drivers/v3d/v3d_resource.h
+index d698ae7872b..a3cd4b93f6f 100644
+--- a/src/gallium/drivers/v3d/v3d_resource.h
++++ b/src/gallium/drivers/v3d/v3d_resource.h
+@@ -77,6 +77,16 @@ struct v3d_resource {
+          */
+         uint64_t writes;
+
++        /**
++         * The last GPU job (render or TFU) submitted that writes this
++         * resource: the id of the context that submitted it (0: none yet) and
++         * that context's submit sequence number for it.  A coordinate shader
++         * that samples the resource only needs to wait for rendering when
++         * that job may still be running (v3d_vs_textures_need_bin_sync()).
++         */
++        uint32_t gpu_write_ctx;
++        uint64_t gpu_write_seqno;
++
+         /**
+          * Bitmask of PIPE_CLEAR_COLOR0, PIPE_CLEAR_DEPTH, PIPE_CLEAR_STENCIL
+          * for which parts of the resource are defined.
+diff --git a/src/gallium/drivers/v3d/v3dx_draw.c b/src/gallium/drivers/v3d/v3dx_draw.c
+index f26b2cb8afb..0e30bad7f97 100644
+--- a/src/gallium/drivers/v3d/v3dx_draw.c
++++ b/src/gallium/drivers/v3d/v3dx_draw.c
+@@ -1175,11 +1175,13 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
+          * ensure that that rendering is complete before we run a coordinate
+          * shader that depends on it.
+          *
+-         * Given that doing that is unusual, for now we just block the binner
+-         * on the last submitted render, rather than tracking the last
+-         * rendering to each texture's BO.
++         * We block the binner on the last submitted render when a vertex
++         * texture's last GPU write may still be running (each resource
++         * remembers the job that last wrote it: v3d_vs_textures_need_bin_sync),
++         * and always for indirect drawing.  The jobs writing a sampled
++         * texture were flushed above (v3d_predraw_check_stage_inputs).
+          */
+-        if (v3d->tex[MESA_SHADER_VERTEX].num_textures || (indirect && indirect->buffer)) {
++        if (v3d_vs_textures_need_bin_sync(v3d) || (indirect && indirect->buffer)) {
+                 static bool warned = false;
+                 if (!warned) {
+                         perf_debug("Blocking binner on last render due to "
+diff --git a/src/gallium/drivers/v3d/v3dx_tfu.c b/src/gallium/drivers/v3d/v3dx_tfu.c
+index 45ae1d9739c..b29e2c45be6 100644
+--- a/src/gallium/drivers/v3d/v3dx_tfu.c
++++ b/src/gallium/drivers/v3d/v3dx_tfu.c
+@@ -201,6 +201,10 @@ v3dX(tfu)(struct pipe_context *pctx,
+         tfu.v71.ioc |= (last_level - base_level) << V3D71_TFU_IOC_NUMMM_SHIFT;
+ #endif /* V3D_VERSION >= 71*/
+
++        /* the TFU writes the destination (v3d_vs_textures_need_bin_sync()) */
++        v3d->submit_seqno++;
++        v3d_resource_gpu_written(v3d, pdst);
++
+         int ret = v3d_ioctl(screen->fd, DRM_IOCTL_V3D_SUBMIT_TFU, &tfu);
+         if (ret != 0) {
+                 mesa_loge("Failed to submit TFU job: %d", ret);
