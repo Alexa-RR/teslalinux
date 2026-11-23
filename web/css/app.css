@@ -213,34 +213,58 @@
       }
     }
 
+    /* teslalinux: the page's own buttons over the display (sound, settings) are floating map
+       buttons like the car interface's (js/carapp/carapp.css .carapp-fab): round dark buttons with
+       the cards' lift, apart, inset from the top right corner. In Car mode the car interface sets
+       their size and inset to its own map buttons' (carapp-controller.js placePageControls, never
+       below a 56 px touch target), and the Graphite look makes them one frosted tile group. */
     #home-controls {
+      --hc-size: 56px;
+      --hc-inset: 12px;
+      --hc-gap: 12px;
+      --hc-surface: #1e2125;
+      --hc-pressed: #353a40;
+      --hc-on-surface: #f1f3f4;
+      --hc-lift: 0 6px 24px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
       position: absolute;
-      top: 0;
-      right: 0;
+      top: var(--hc-top, var(--hc-inset));
+      right: var(--hc-right, var(--hc-inset));
       z-index: 40;
       display: flex;
-      gap: 0;
-      background: rgba(0, 0, 0, 0.8);
-      border-bottom-left-radius: 18px;
-      overflow: hidden;
+      gap: var(--hc-gap);
+      pointer-events: none; /* only the buttons take touches; the map between them stays the app's */
     }
 
     .home-control-button {
-      width: 48px;
-      height: 48px;
+      width: var(--hc-size);
+      height: var(--hc-size);
       border: 0;
-      background: transparent;
-      color: #fff;
+      border-radius: 999px;
+      background: var(--hc-surface);
+      color: var(--hc-on-surface);
+      box-shadow: var(--hc-lift);
       cursor: pointer;
-      padding: 8px;
+      padding: 0;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      transition: background 120ms ease;
+      pointer-events: auto;
+      -webkit-tap-highlight-color: transparent;
+      transition: background-color 120ms ease, transform 120ms ease;
     }
 
-    .home-control-button:hover {
-      background: rgba(255, 255, 255, 0.09);
+    .home-control-button:active {
+      background: var(--hc-pressed);
+      transform: scale(0.96);
+    }
+
+    .home-control-button:focus-visible {
+      outline: 3px solid #8ab4f8;
+      outline-offset: 2px;
+    }
+
+    .home-control-button[hidden] {
+      display: none;
     }
 
     .home-control-button.update {
@@ -257,7 +281,25 @@
     }
 
     .home-control-icon {
-      font-size: 20px;
+      font-size: calc(var(--hc-size) * 0.45);
+      line-height: 1;
+    }
+
+    /* a phone's width: the same buttons a little closer to the corner */
+    @media (max-width: 480px) {
+      #home-controls {
+        --hc-inset: 8px;
+        --hc-gap: 8px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .home-control-button {
+        transition: none;
+      }
+      .home-control-button:active {
+        transform: none;
+      }
     }
 
     .home-control-button.update .home-control-icon {

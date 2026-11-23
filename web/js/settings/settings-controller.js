@@ -155,6 +155,7 @@
         ["waze.mapsize", "waze", "Map text size", "map size street names zoom labels symbols", car],
         ["waze.pacing", "waze", "Map frame rate", "map frame rate fps smooth 60 30", car],
         ["waze.sharpness", "waze", "Map sharpness", "map sharpness render scale blurry", car],
+        ["waze.typing", "waze", "Typing while driving", "typing keyboard driving moving passenger restriction search locked type", car],
         ["waze.appsettings", "waze", "Waze's settings", "waze own settings voice alerts reports units navigation avoid tolls sound", car],
         ["display.renderer", "display", "Picture format", "renderer h264 mjpeg webcodecs codec stream"],
         ["display.resolution", "display", "Resolution", "resolution native 832p 720p sharp pixels"],
@@ -190,6 +191,7 @@
         ["dev.restartapp", "device", "Restart Waze", "restart waze frozen stuck reload"],
         ["dev.restart", "device", "Restart the device", "reboot restart pi power"],
         ["dev.info", "device", "Model and serial number", "model serial kernel os about hostname"],
+        ["dev.emulate", "device", "Emulate the Model 3 screen", "debug test emulate model 3 tesla car screen resolution scaling pixel ratio dpr computer"],
         ["dev.about", "device", "About Teslalinux", "about credits version licence license tesla android"],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
@@ -1892,6 +1894,7 @@
           ),
         ]),
       );
+      out.push(this._debugGroup());
 
       // the credits at the end of the page (no bottom bar on Settings; About and Credits stay for the other pages)
       const notes = TAHtml.releaseNotesData && TAHtml.releaseNotesData.versions;
@@ -1906,6 +1909,32 @@
         ),
       );
       return out;
+    }
+
+    /**
+     * Debug, for testing the car page on a computer (this browser only, nothing on the device):
+     * the Model 3 screen emulator (js/core/screen-emulation.js, emulate.html). Folded away unless
+     * something in it is on.
+     */
+    _debugGroup() {
+      const emu = global.TLScreenEmulation;
+      const p = emu && emu.PROFILES.model3;
+      const on = Boolean(emu && (emu.active || emu.chosen));
+      const er = UI.row({
+        id: "dev.emulate",
+        title: "Emulate the Model 3 screen",
+        chips: [UI.CHIP.plain("This browser only")],
+        detail: p
+          ? "This page as a Model 3's browser shows it: " + Math.round(p.cssWidth) + " × " + Math.round(p.cssHeight) + " at " + p.devicePixelRatio + " pixels per point, scaled to fit this window."
+          : "",
+        more: [
+          "The display size this page asks the device for, the picture's pixels and the layout all come out as in the car, so a computer shows what the car shows. A bar above it says the emulation is on.",
+          "Like every browser showing Waze, it sets the device's display to its own size: the car's, while this is on.",
+        ],
+        control: UI.toggle(on, (v) => (emu ? emu.set(v ? "model3" : null) : false), "Emulate the Model 3 screen"),
+      });
+      const [b, body] = UI.disclosure(on ? "Debug options (on)" : "Debug options", [er], on);
+      return UI.group("Debug", [b, body], "For testing on a computer.", "debug");
     }
 
     /** the start-up: a headline, the phases on one time axis, the milestones as legend and table, the last starts */
@@ -2320,6 +2349,7 @@
         });
         const showSkinWarning = unverified && this._staged("mapcolours", savedColours) === "graphite";
         out.push(UI.group("Map", [showSkinWarning ? UI.warnbox(this._skinUnavailable(look)) : null, mr, zr, pc, sh].filter(Boolean)));
+        out.push(UI.group("While driving", [this._typingWhileDrivingRow(car)]));
       }
       // Waze's own car settings, drawn from its settings screens (js/carapp/carapp-settings-view.js):
       // only while the car interface runs (its channel is there), not while Car is only staged
@@ -2328,6 +2358,53 @@
         out.push(view.element());
       }
       return out;
+    }
+
+    /**
+     * Typing while driving: the car's UX restriction mode in the car interface's host (ATL's
+     * ATLCarVehicle). Off is the baseline, AOSP's restrictions as Android Auto has them: while the car
+     * moves, no keyboard input (the search field is off, voice search stays). On is the passenger
+     * mode: the same restrictions without the keyboard one. The host applies it at once and keeps it
+     * on the device; only while the car interface runs (the host is there to ask).
+     */
+    _typingWhileDrivingRow(car) {
+      const running = car.mode === "car" && Boolean(car.restrictions);
+      const mode = running ? car.getRestrictionMode() : null;
+      const why = !running
+        ? "Available while the car interface is running."
+        : mode === null
+          ? "This device's app runtime cannot allow typing while driving: update the device."
+          : null;
+      const tr = UI.row({
+        id: "waze.typing",
+        title: "Typing while driving",
+        stack: true,
+        detail: "Off: while the car moves, the search field takes no typing, as in Android Auto. Voice search still works.",
+        more: [
+          "On: a passenger can type in the car interface's search while the car moves. Lists stay as short as Off has them.",
+          "Applies at once, for every screen showing Waze, and stays after a restart.",
+        ],
+        after: [
+          why ? UI.warnbox(why, "info_outline") : null,
+          UI.warnbox("Typing while the car moves is the driver's responsibility. Turn it on for a passenger, never to type while driving yourself."),
+        ].filter(Boolean),
+        control: UI.segmented(
+          [
+            { value: "off", label: "Off", caption: "default, as Android Auto", disabled: Boolean(why) },
+            { value: "on", label: "On", caption: "for a passenger", disabled: Boolean(why) },
+          ],
+          mode === "passenger" ? "on" : "off",
+          (v) =>
+            UI.save(
+              tr,
+              () => car.setRestrictionMode(v === "on" ? "passenger" : "baseline"),
+              v === "on" ? "On: a passenger can type while the car moves" : "Off: no typing while the car moves",
+              "Not changed: the car interface did not answer.",
+            ),
+          { label: "Typing while driving" },
+        ),
+      });
+      return tr;
     }
 
     /**

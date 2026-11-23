@@ -4,6 +4,8 @@
   const TAHtml = global.TAHtml;
 
   document.addEventListener("DOMContentLoaded", () => {
+    // teslalinux: on the way to the screen emulator (js/core/screen-emulation.js), the app starts in its frame
+    if (global.TLScreenEmulation && global.TLScreenEmulation.leaving) return;
     void bootstrap();
   });
 

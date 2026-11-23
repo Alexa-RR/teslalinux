@@ -535,6 +535,8 @@
     }
 
     async start() {
+      // on the way to the screen emulator (js/core/screen-emulation.js): the car interface starts in its frame
+      if (global.TLScreenEmulation && global.TLScreenEmulation.leaving) return;
       let mode = "phone";
       let state = null;
       try {
@@ -579,6 +581,8 @@
       this.speedo = new TLCarSpeedometer(this.speedoEl);
       this.overlay.appendChild(this.popupsEl);
       displayRoot.appendChild(this.overlay);
+      // panels measured while they slide in are measured again where they come to rest
+      for (const el of [this.surfaceEl, this.popupsEl]) el.addEventListener("animationend", () => this.movePanelsBelowPageControls());
       this.style = style;
       new ResizeObserver(() => this.fit()).observe(displayRoot);
       this.connect();
@@ -623,6 +627,38 @@
 
     send(msg) {
       if (this.socket && this.socket.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(msg));
+    }
+
+    /**
+     * The car's UX restriction mode, as the host last said (its "restrictions" message): "baseline"
+     * (typing off while the car moves, as Android Auto) or "passenger" (typing allowed); null while
+     * the host has not said, or when its runtime has no restriction modes (no "mode" in the message).
+     */
+    getRestrictionMode() {
+      const r = this.restrictions;
+      return r && typeof r.mode === "string" ? r.mode : null;
+    }
+
+    /**
+     * Asks the host for a restriction mode ("baseline" or "passenger"); the host applies it at once
+     * and keeps it for the app's next starts. Resolves when the host's restrictions name the mode,
+     * rejects when it does not within 4 s (no channel, or a runtime without restriction modes).
+     */
+    setRestrictionMode(mode) {
+      if (this.getRestrictionMode() === mode) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+          reject(new Error("no car channel"));
+          return;
+        }
+        const waiter = { mode, resolve, timer: null };
+        waiter.timer = setTimeout(() => {
+          this.modeWaiters = (this.modeWaiters || []).filter((w) => w !== waiter);
+          reject(new Error("the host did not apply restriction mode " + mode));
+        }, 4000);
+        this.modeWaiters = (this.modeWaiters || []).concat(waiter);
+        this.send({ type: "restrictionMode", mode });
+      });
     }
 
     onMessage(m) {
@@ -678,15 +714,25 @@
           this.applyLook();
           break;
         case "restrictions":
-          // the car's driving restrictions (state): lists capped, typing off while moving
+          // the car's driving restrictions (state): lists capped, typing off while moving (unless
+          // the car is in the passenger restriction mode: Settings > Waze > Typing while driving)
           this.restrictions = m;
           if (this.renderer) this.renderer.setRestrictions(m);
+          if (this.modeWaiters && this.modeWaiters.length) {
+            const done = this.modeWaiters.filter((w) => w.mode === m.mode);
+            this.modeWaiters = this.modeWaiters.filter((w) => w.mode !== m.mode);
+            for (const w of done) {
+              clearTimeout(w.timer);
+              w.resolve();
+            }
+          }
           break;
         case "toast":
           if (this.renderer) this.renderer.toast(this.popupsEl, m.text, m.long);
           break;
         case "alert":
           if (this.renderer) this.renderer.alert(this.popupsEl, m.alert);
+          this.sendVisibleArea(); // below the page's buttons where it reaches under them
           break;
         case "alertDismiss":
           if (this.renderer) this.renderer.removeAlert(this.popupsEl, m.id);
@@ -753,21 +799,122 @@
         s.height = this.surface.height + "px";
         s.transform = "scale(" + box.width / this.surface.width + "," + box.height / this.surface.height + ")";
       }
-      // the page's own buttons (mute, settings: #home-controls) stand over the display's top right
+      this.placePageControls(box);
+      // the page's own buttons (sound, settings: #home-controls) stand over the display's top right
       // corner: the strip at the top right starts below them (carapp.css, --page-inset-top, in
       // surface pixels), and the map area sent to the app follows
       let inset = 0;
+      // and full-screen panels keep their right side clear of them (--page-inset-right)
+      let side = 0;
       const controls = document.getElementById("home-controls");
       if (controls && box.height > 0) {
         const b = controls.getBoundingClientRect();
-        if (b.height > 0 && b.left < box.right && b.right > box.left && b.bottom > box.top && b.top < box.bottom)
+        if (b.height > 0 && b.left < box.right && b.right > box.left && b.bottom > box.top && b.top < box.bottom) {
           inset = Math.ceil((b.bottom - box.top) * this.surface.height / box.height);
+          side = Math.ceil((box.right - b.left) * this.surface.width / box.width);
+        }
       }
       const value = inset + "px";
+      this.surfaceEl.style.setProperty("--page-inset-right", side + "px");
       if (this.surfaceEl.style.getPropertyValue("--page-inset-top") !== value) {
         this.surfaceEl.style.setProperty("--page-inset-top", value);
+        this.popupsEl.style.setProperty("--page-inset-top", value);
         this.sendVisibleArea();
       }
+    }
+
+    /**
+     * Panels that reach under the buttons at the top right, the page's own and the app's top strip
+     * (on a narrow display a card is as wide as the display), start below the lowest of them
+     * (carapp.css .under-page-controls, --clear-top in surface pixels), so those buttons never
+     * cover a card's own buttons, the turn card or an alert.
+     */
+    movePanelsBelowPageControls() {
+      if (!this.surfaceEl || !this.overlay || !this.surface.height) return;
+      const box = this.overlay.getBoundingClientRect();
+      if (!(box.height > 0)) return;
+      const rect = (e) => {
+        const b = e.getBoundingClientRect();
+        return b.width > 0 && b.height > 0 ? b : null;
+      };
+      // the page's buttons count wherever a panel reaches under them; the app's top strip buttons
+      // only where a panel reaches past their middle (a card's corner may touch them, as the
+      // host's layout has it on a car display)
+      const controls = document.getElementById("home-controls");
+      const ours = controls ? [rect(controls)].filter(Boolean) : [];
+      const strip = [...this.surfaceEl.querySelectorAll(".carapp-strip.top > *")].map(rect).filter(Boolean);
+      const panels = [
+        ...this.surfaceEl.querySelectorAll(".carapp-card:not(.travel), .carapp-pill"),
+        ...this.popupsEl.querySelectorAll(".carapp-alert"),
+      ];
+      for (const el of panels) {
+        const r = el.getBoundingClientRect();
+        let bottom = -Infinity; // nothing above it (the display may start above the window: Native)
+        if (r.width > 0) {
+          for (const b of ours) if (r.right > b.left && r.left < b.right) bottom = Math.max(bottom, b.bottom);
+          for (const b of strip) {
+            const mid = (b.left + b.right) / 2;
+            if (r.right > mid && r.left < mid) bottom = Math.max(bottom, b.bottom);
+          }
+        }
+        const clear = bottom > box.top ? Math.ceil((bottom - box.top) * this.surface.height / box.height) : 0;
+        el.classList.toggle("under-page-controls", clear > 0);
+        if (clear > 0) el.style.setProperty("--clear-top", clear + "px");
+        else el.style.removeProperty("--clear-top");
+      }
+    }
+
+    /**
+     * The page's own buttons (#home-controls, css/app.css) as the car interface's map buttons: a
+     * map button's size (never below a 56 px touch target), the map buttons' gap, and their inset
+     * from the shown display's top right corner, all in CSS px; the app's map buttons are measured
+     * where there are some, else the host's touch target and strip padding stand in. Returns
+     * whether anything changed.
+     */
+    placePageControls(box) {
+      const controls = document.getElementById("home-controls");
+      if (!controls || !this.surfaceEl || !this.surface.width) return false;
+      box = box || this.overlay.getBoundingClientRect();
+      const stage = controls.offsetParent ? controls.offsetParent.getBoundingClientRect() : null;
+      if (!(box.width > 0) || !stage) return false;
+      const scale = box.width / this.surface.width;
+      const root = this.surfaceEl.querySelector(".carapp-root");
+      const cs = root ? getComputedStyle(root) : null;
+      const prop = (name) => (cs ? parseFloat(cs.getPropertyValue(name)) || 0 : 0);
+      let size = prop("--touch-target") * scale;
+      let inset = prop("--strip-pad") * scale;
+      let gap = prop("--pad-2") * scale;
+      const fab = this.surfaceEl.querySelector(".carapp-strip.map .carapp-fab") || this.surfaceEl.querySelector(".carapp-strip .carapp-fab");
+      if (fab) {
+        const f = fab.getBoundingClientRect();
+        if (f.height > 0) {
+          size = f.height; // a titled button is wider than it is tall: its height
+          inset = Math.max(0, box.right - f.right);
+          const strip = fab.closest(".carapp-strip");
+          const g = parseFloat(getComputedStyle(strip).rowGap) || 0;
+          if (g > 0) gap = g * scale;
+        }
+      }
+      // a screen without map buttons (a full-screen list, search) keeps the map buttons' measure
+      // of the same look, panel size and display, so the page's buttons keep their size
+      const key = this.lookStyle + "/" + this.panelSize + "/" + Math.round(box.width) + "x" + Math.round(box.height);
+      const measured = fab && fab.getBoundingClientRect().height > 0;
+      if (measured) this.pageControlMeasure = { key, size, inset, gap };
+      else if (this.pageControlMeasure && this.pageControlMeasure.key === key) ({ size, inset, gap } = this.pageControlMeasure);
+      const px = (v) => Math.round(v * 2) / 2 + "px";
+      const vars = {
+        "--hc-size": px(Math.max(56, size)),
+        "--hc-gap": px(Math.max(8, gap)),
+        "--hc-top": px(Math.max(0, box.top - stage.top) + Math.max(8, inset)),
+        "--hc-right": px(Math.max(0, stage.right - box.right) + Math.max(8, inset)),
+      };
+      let changed = false;
+      for (const k in vars) {
+        if (controls.style.getPropertyValue(k) === vars[k]) continue;
+        controls.style.setProperty(k, vars[k]);
+        changed = true;
+      }
+      return changed;
     }
 
     /** The map area the panels leave free goes to the app (it keeps its car and route there). */
@@ -775,6 +922,10 @@
       if (!this.renderer || !this.surface.width) return;
       requestAnimationFrame(() => {
         if (!this.renderer) return;
+        // the panels as now drawn (a new look or panel size redraws them): the page's buttons follow
+        // the map buttons, and the top strip moves below them again
+        if (this.placePageControls()) this.fit();
+        this.movePanelsBelowPageControls();
         const a = this.renderer.visibleArea(this.surface.width, this.surface.height);
         // the speedometer stands at the area's bottom right, as the app placed its own; none over
         // a full-screen panel

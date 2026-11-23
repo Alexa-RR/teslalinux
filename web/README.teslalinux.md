@@ -153,8 +153,17 @@ Changes from upstream:
   buttons) and "Graphite" (frosted light or dark cards with hairline dividers, a single turn card
   with lanes and the next step, a trip card with an "End drive" foot, the map buttons as frosted
   tile columns, the search as a card over the live map; `.carapp-graphite` in `carapp.css`, a few
-  structural branches in the renderer; the page's own mute and settings buttons, `#home-controls`,
-  follow it as a frosted chip through `carapp-page-graphite`/`carapp-page-night` on the body).
+  structural branches in the renderer; the page's own buttons, `#home-controls`, follow it as a
+  frosted tile group through `carapp-page-graphite`/`carapp-page-night` on the body).
+  The page's own buttons over the display (sound, settings; upstream's black tab in the top right
+  corner, `css/app.css`) are floating map buttons like the car interface's: round dark buttons with
+  the cards' lift, apart, inset from the corner (also in Phone mode and at phone width), and in the
+  Graphite look one frosted tile group. In Car mode `carapp-controller.js` `placePageControls` gives
+  them the app's map buttons' size, gap and inset (measured; never below 56 px), the top strip
+  starts below them, a panel that reaches under them or past the middle of a top strip button (a
+  narrow display) starts below those (`movePanelsBelowPageControls`), and full-screen panels keep
+  their right side clear of them. The settings button shows `tune`, not a gear: the app's car
+  interface has its own settings gear among its map buttons.
   Graphite follows day and night: the driver's choice
   (Settings > Waze interface > Day and night, `teslalinux.carDayNight`, sent to the car-app host
   as `dayNight`, so the app's map switches too) or, on Automatic, the host's `dayNight` state.
@@ -211,6 +220,21 @@ Changes from upstream:
   the app's screens with `back`, one per answered template, until the map is its screen again.
   Where the app's current screen has no settings action (a question over the map), the group says
   so instead. `test.html?view=settings` draws the `settings*` samples this way.
+  "Typing while driving" (Settings > Waze, While driving, while the car interface runs): Off (the
+  default, as Android Auto) or On, the car-app host's UX restriction mode ("baseline" or
+  "passenger", `restrictionMode` on `/sockets/carapp`; `carapp-controller.js`
+  `getRestrictionMode`/`setRestrictionMode`, which waits for the host's `restrictions` naming the
+  mode). On, a passenger can type in the search field while the car moves; lists stay capped. The
+  device keeps it; the row says when the runtime has no restriction modes.
+* `emulate.html`, `js/core/screen-emulation.js` (new; the script is the first in `index.html`'s
+  head, not deferred): Settings > This device > Debug > "Emulate the Model 3 screen", for testing
+  on a computer, per browser (`localStorage` `teslalinux.debug.emulateScreen`). While it is on the
+  page goes to `emulate.html`, which shows it in a frame with a Model 3 browser's viewport
+  (773.2 x 601.3 CSS px, docs/CAR-SCREENS.md) scaled to fit the window (or one car pixel per screen
+  pixel), under a bar that says so; in that frame `devicePixelRatio` is the car's 1.53, so the
+  layout, the display size the page asks for (Native: 1184 x 928 at density 284) and the stream
+  canvas's backing store come out as in the car. `app.js`, `carapp-controller.js` and
+  `device-keyboard.js` do not start in the page that is leaving for the emulator.
 * `fonts/Inter-Regular-car.woff2`, `fonts/Inter-Bold-car.woff2` (new): the Graphite look's text
   face, Inter 4.001 by The Inter Project Authors (SIL Open Font License 1.1, `fonts/Inter-OFL.txt`,
   github.com/rsms/inter), the static Regular and Bold cut to Latin, Latin-1 and Latin Extended-A

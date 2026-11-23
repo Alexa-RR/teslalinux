@@ -104,10 +104,13 @@ Host to page:
 - `{"type":"navigation","active":B}`: whether the app navigates (`NavigationManager.navigationStarted`
   / `navigationEnded`); state, sent to every new page. While it does, the page offers the end-drive
   control and keeps the next step in view as a pill over side panels.
-- `{"type":"restrictions","active":B,"noKeyboard":B,"maxItems":N,"maxString":N}`: the car's UX
-  restrictions (driving state from the GPS speed, AOSP's default restriction map); state, sent to
-  every new page. While they apply the page caps lists at the host's content limits and turns the
-  search field off when `noKeyboard`.
+- `{"type":"restrictions","active":B,"noKeyboard":B,"maxItems":N,"maxString":N,"mode":M}`: the car's
+  UX restrictions (driving state from the GPS speed, the car's UX restrictions configuration: AOSP's
+  default restriction map unless the car service has a production configuration) in the car's
+  restriction mode `M` ("baseline", or "passenger": the moving restrictions without
+  `NO_KEYBOARD`); state, sent to every new page and again when the mode changes. While they apply
+  the page caps lists at the host's content limits and turns the search field off when
+  `noKeyboard`. A runtime without restriction modes sends no `mode`.
 - `{"type":"dayNight","night":B}`: the car's night mode as the app hears it (`CarContext.isDarkMode`);
   state, sent to every new page and again when it changes. The page's Graphite look draws its
   panels by day or by night with it (unless the driver fixed day or night on the page).
@@ -152,6 +155,12 @@ Page to host:
   default, or `ATL_CAR_DAY_NIGHT`) follows the sun at the car's position. The app hears it as the
   configuration's night mode (`CarContext.isDarkMode`). The page sends it when the driver changes
   it (Settings > Waze interface > Day and night) and, when it is not "auto", on every connection.
+- `{"type":"restrictionMode","mode":M}`: the car's UX restriction mode (AOSP
+  `CarUxRestrictionsManager.setRestrictionMode`), Settings > Waze > Typing while driving: "baseline"
+  (Off, the default, as Android Auto) or "passenger" (On). The host applies it at once (the next
+  `restrictions` names it) and keeps it for the app's next starts (`ux_restrictions_host_mode` in
+  the car service's directory, `<app data>/_system_/car`); a mode the configuration does not
+  define falls back to the baseline's restrictions. A name that is not a mode name is ignored.
 - `{"type":"mapScale","scale":S}`: the size of the app's map text and symbols (Settings > Waze
   interface > Map size: 0.85, 1, 1.25 or 1.5), a factor 0.5 to 2 on the display's density. The car
   display's density becomes the display's times S: the host gives it to the app as the

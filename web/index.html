@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="./css/app.css" />
   <link rel="stylesheet" href="./css/settings.css" />
 
+  <!-- teslalinux: Settings > This device > Debug, the Model 3 screen emulator (emulate.html); first and not deferred -->
+  <script src="./js/core/screen-emulation.js"></script>
 
   <script defer src="./js/vendor/reconnecting/reconnecting-websocket.js"></script>
   <script defer src="./js/gps/estimator.js"></script>
@@ -70,8 +72,9 @@
         <button id="home-update-button" class="home-control-button update" type="button" title="Open updater" hidden>
           <span class="material-symbols-rounded home-control-icon">download</span>
         </button>
-        <button id="home-settings-button" class="home-control-button" type="button" title="Open app pages">
-          <span class="material-symbols-rounded home-control-icon">settings</span>
+        <!-- "tune", not a gear: Waze's car interface has its own settings gear among its map buttons -->
+        <button id="home-settings-button" class="home-control-button" type="button" title="Settings" aria-label="Settings">
+          <span class="material-symbols-rounded home-control-icon" aria-hidden="true">tune</span>
         </button>
       </div>
     </div>

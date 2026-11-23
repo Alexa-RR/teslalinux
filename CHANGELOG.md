@@ -19,6 +19,37 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### New settings and sound buttons on the map
+
+*Both interfaces, both looks, day and night.*
+
+- The settings and sound buttons are no longer a small black tab squeezed into the top right
+  corner. They are map buttons like Waze's own on the car screen: round and dark with the
+  Rounded look, a frosted tile with Graphite, the same size as Waze's map buttons and lined up
+  with them, never smaller than a fingertip.
+- They never cover Waze's buttons, the directions or a card: on a narrow screen, such as a
+  phone's, the cards start below them, and full-screen lists and search end before them.
+- The settings button now shows sliders, so it is not mistaken for Waze's own settings gear.
+
+### Typing while driving, for a passenger
+
+*Car mode. Settings > Waze > While driving > Typing while driving.*
+
+- Off (the default) is as in Android Auto: while the car moves the search field takes no typing,
+  and voice search still works. On lets a passenger type a destination while the car moves; lists
+  stay as short as before.
+- It applies at once, without restarting Waze, on every screen showing Waze, and stays on after a
+  restart. Typing while driving is the driver's responsibility: turn it on for a passenger.
+
+### See the car's screen on a computer
+
+*Settings > This device > Debug.*
+
+- "Emulate the Model 3 screen" shows this page on a computer exactly as a Model 3's browser shows
+  it: its window size and pixel density, the picture size it asks the Pi for and its sharpness,
+  scaled to fit the window or one car pixel per screen pixel. A bar above it says the emulation
+  is on, with a button to stop. It is for this browser only.
+
 ### Map frame rate: Automatic
 
 *Car mode. Settings > Waze interface > Map frame rate. Measured on a Raspberry Pi 4 at its standard

@@ -270,6 +270,8 @@
   }
 
   async function init() {
+    // on the way to the screen emulator (js/core/screen-emulation.js): the keyboard starts in its frame
+    if (global.TLScreenEmulation && global.TLScreenEmulation.leaving) return;
     try {
       // Car mode (Settings > Waze interface): the car interface's text fields are this page's own
       // (js/carapp), typed into with the device keyboard directly; the app's phone screens, whose

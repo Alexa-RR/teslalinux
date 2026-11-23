@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Model 3 screen</title>
+  <link rel="icon" type="image/png" href="./assets/teslalinux-logo.png" />
+  <!-- teslalinux: the screen emulator of Settings > This device > Debug (js/core/screen-emulation.js):
+       the car page in a frame with a Model 3 browser's viewport and pixel ratio (docs/CAR-SCREENS.md),
+       scaled to fit this window (or one car pixel per screen pixel), with a bar that says so. -->
+  <style>
+    @font-face {
+      font-family: "Inter Car";
+      src: url("./fonts/Inter-Regular-car.woff2") format("woff2");
+      font-weight: 100 549;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "Inter Car";
+      src: url("./fonts/Inter-Bold-car.woff2") format("woff2");
+      font-weight: 550 900;
+      font-display: swap;
+    }
+    :root {
+      --bg: #17181a;
+      --bar: #232427;
+      --line: rgba(255, 255, 255, 0.08);
+      --text: #ececee;
+      --text-2: #9d9fa4;
+      --accent: #f5a524; /* the "this is not the real screen" colour: the bar's mark and the frame's edge */
+      --seg: rgba(255, 255, 255, 0.07);
+      --seg-on: #ececee;
+      --seg-on-text: #17181a;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.35 "Inter Car", system-ui, sans-serif;
+      font-variant-numeric: tabular-nums;
+      overflow: hidden;
+    }
+    .bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-height: 48px;
+      padding: 6px 16px;
+      background: var(--bar);
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    .mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+    .mark::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.22);
+    }
+    .facts { color: var(--text-2); flex: 1 1 auto; min-width: 0; }
+    .facts b { color: var(--text); font-weight: 500; }
+    .seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--seg); }
+    .seg button {
+      font: inherit;
+      color: var(--text-2);
+      background: transparent;
+      border: 0;
+      border-radius: 7px;
+      padding: 6px 12px;
+      cursor: pointer;
+    }
+    .seg button[aria-pressed="true"] { background: var(--seg-on); color: var(--seg-on-text); font-weight: 600; }
+    .stop {
+      font: inherit;
+      font-weight: 600;
+      color: var(--text);
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 10px;
+      padding: 7px 14px;
+      cursor: pointer;
+    }
+    .stop:hover, .seg button:hover { filter: brightness(1.15); }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .stage { position: relative; overflow: auto; }
+    .screen {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform-origin: 0 0;
+      /* a hairline of the accent: the car's screen edge, so the letterbox is never mistaken for it */
+      outline: 1px solid var(--accent);
+    }
+    .screen iframe { display: block; border: 0; width: 100%; height: 100%; background: #000; }
+    @media (max-width: 600px) {
+      .bar { gap: 8px 12px; padding: 6px 12px; }
+      .facts { flex-basis: 100%; order: 3; }
+    }
+  </style>
+</head>
+<body>
+  <header class="bar" role="status">
+    <span class="mark" id="emu-name">Model 3 screen</span>
+    <span class="facts" id="emu-facts"></span>
+    <span class="seg" role="group" aria-label="Size">
+      <button type="button" data-zoom="fit" aria-pressed="true">Fit</button>
+      <button type="button" data-zoom="pixels" aria-pressed="false">Car pixels</button>
+    </span>
+    <button class="stop" type="button" id="emu-stop">Stop emulating</button>
+  </header>
+  <main class="stage" id="emu-stage">
+    <div class="screen" id="emu-screen">
+      <iframe id="emu-frame" title="The car page as a Model 3 shows it" data-tl-emulation="model3"
+        allow="geolocation; microphone; autoplay; fullscreen; clipboard-read; clipboard-write; screen-wake-lock"></iframe>
+    </div>
+  </main>
+  <script src="./js/core/screen-emulation.js"></script>
+  <script>
+    (function () {
+      "use strict";
+      const emu = window.TLScreenEmulation;
+      const id = (emu && emu.chosen) || "model3";
+      const p = emu.PROFILES[id];
+      const frame = document.getElementById("emu-frame");
+      const screen = document.getElementById("emu-screen");
+      const stage = document.getElementById("emu-stage");
+      const facts = document.getElementById("emu-facts");
+      const ZOOM_KEY = "teslalinux.debug.emulateScreenZoom";
+      let zoom = "fit";
+      try {
+        if (localStorage.getItem(ZOOM_KEY) === "pixels") zoom = "pixels";
+      } catch (e) {
+        // storage off: fit
+      }
+      frame.dataset.tlEmulation = p.id;
+      document.getElementById("emu-name").textContent = p.name + " screen";
+      screen.style.width = p.cssWidth + "px";
+      screen.style.height = p.cssHeight + "px";
+      const devW = Math.round(p.cssWidth * p.devicePixelRatio);
+      const devH = Math.round(p.cssHeight * p.devicePixelRatio);
+
+      function layout() {
+        const w = stage.clientWidth;
+        const h = stage.clientHeight;
+        // fit: the whole car window in this one; car pixels: one of the car's device pixels per
+        // device pixel of this screen
+        const s = zoom === "pixels" ? p.devicePixelRatio / (window.devicePixelRatio || 1) : Math.min(w / p.cssWidth, h / p.cssHeight);
+        const sw = p.cssWidth * s;
+        const sh = p.cssHeight * s;
+        screen.style.transform = "scale(" + s + ")";
+        screen.style.left = Math.max(0, (w - sw) / 2) + "px";
+        screen.style.top = Math.max(0, (h - sh) / 2) + "px";
+        // the stage scrolls when the car pixels are larger than this window (a pixel at the far corner)
+        let pad = document.getElementById("emu-pad");
+        if (!pad) {
+          pad = document.createElement("div");
+          pad.id = "emu-pad";
+          pad.style.position = "absolute";
+          pad.style.width = "1px";
+          pad.style.height = "1px";
+          stage.appendChild(pad);
+        }
+        pad.style.left = Math.max(0, sw - 1) + "px";
+        pad.style.top = Math.max(0, sh - 1) + "px";
+        facts.replaceChildren();
+        const add = (label, value) => {
+          const b = document.createElement("b");
+          b.textContent = value;
+          facts.append(label, b, "  ");
+        };
+        add("Window ", Math.round(p.cssWidth) + " × " + Math.round(p.cssHeight));
+        add("at ", String(p.devicePixelRatio));
+        add("= ", devW + " × " + devH + " pixels");
+        add("shown at ", Math.round(s * 100) + "%");
+        for (const b of document.querySelectorAll(".seg button")) b.setAttribute("aria-pressed", String(b.dataset.zoom === zoom));
+      }
+
+      for (const b of document.querySelectorAll(".seg button")) {
+        b.addEventListener("click", () => {
+          zoom = b.dataset.zoom;
+          try {
+            localStorage.setItem(ZOOM_KEY, zoom);
+          } catch (e) {
+            // storage off: for this page only
+          }
+          layout();
+        });
+      }
+      document.getElementById("emu-stop").addEventListener("click", () => emu.set(null));
+      new ResizeObserver(layout).observe(stage);
+      // a pixel ratio change (the window moved to another screen, browser zoom) changes "car pixels"
+      matchMedia("(resolution: " + (window.devicePixelRatio || 1) + "dppx)").addEventListener("change", layout);
+      layout();
+      // the car page, with the address's fragment (e.g. a settings section)
+      frame.src = "./" + location.hash;
+    })();
+  </script>
+</body>
+</html>
