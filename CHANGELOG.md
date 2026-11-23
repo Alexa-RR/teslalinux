@@ -95,6 +95,27 @@ speed, on a road route.*
   version the device has checked (5.27.5); with another version Waze keeps its own rate, and the
   setting says so.
 
+### Waze starts in seconds after a mode change
+
+*Both interfaces. Measured on a Raspberry Pi 4 at its standard speed.*
+
+- Switching between the phone and car interfaces, or changing Map frame rate, no longer prepares
+  Waze's code all over again: Waze is back on the map in about 6 seconds (9 in the phone
+  interface) instead of about 2 minutes.
+- After an install or an update, the code is prepared once during the install (about 2 minutes on
+  a Pi 4), and the first start in the car then takes about 6 seconds instead of 2 more minutes.
+
+### The car screen says what Waze is doing while it starts
+
+*Both interfaces, day and night.*
+
+- While Waze is not on the screen yet, the car screen says whether Waze is being prepared for this
+  device (once, after an update or a mode change), starting, or restarting after it stopped,
+  instead of a dark screen.
+- While Waze is being prepared, a bar shows how far along it is and about how long is left,
+  measured from the last time on this device (the first time it says that it takes a few
+  minutes), with the steps that follow. It goes away as soon as Waze draws its map.
+
 ### Waze's own settings in Settings
 
 *Car mode. Settings > Waze > Waze's settings.*
@@ -278,6 +299,17 @@ In ATL (the fork):
   `tools/debian/atl-tests/natives/` checks them.
 - `tools/debian/pi-bench.py --procs NAME,... --gpu --per-second`: each process's CPU and V3D
   share (DRM fdinfo) over the measured seconds, and the frames of every second.
+- One class path for every start: the launcher loads the speedometer and frame limiter overrides
+  whatever the interface and Map frame rate (they are part of the app's class loader context, so a
+  different list made ART compile Waze again), the frame rate is ATL's `ATL_FRAME_RATE` policy at run
+  time (`boost`, `display`, `app`), `waze-map-pacing.py` makes only the limiter class (its whole-dex
+  "full" copy is gone), and `teslalinux-atl --compile` compiles with the same overrides (ATL's
+  `TlPrewarm`). `ClassLoaderContext ... mismatch` no longer appears after a switch.
+- `GET /api/appState` `start` (and `?wait=SEQ` long polls): the app's start for the car page's
+  overlay, from `host/teslalinux-app-log-watch.py` (the launcher's log filter, its state file in
+  `/run/tesla`) and the app's dex2oat in /proc, whose CPU time against the last complete compile of
+  the same file (`~/.cache/teslalinux/compile-times.json`) is its progress (dex2oat writes its
+  output only at its end). `pi-bench.py` reports main-thread CPU (`cpu_main`).
 - `tools/debian/carapp-probe.py`: the car-app channel from a shell: each template's class, screen
   stack and every action and row with its icon's resource name and callback; click, back, any
   message, and a socket that vanishes without a close frame.
