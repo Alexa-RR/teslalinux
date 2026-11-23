@@ -91,6 +91,12 @@ read; they now keep their own shape and are a little taller than the text.
 
 In ATL (the fork):
 
+- OpenGL apps get the whole Android GL API: every `android.opengl.GLES10`-`GLES32` call and the
+  GL10/GL11 interface of GLSurfaceView renderers (AOSP's own bindings), with KHR_debug's message
+  callback and log. Apps can draw into a `SurfaceTexture` with a `Canvas` (`Surface.lockCanvas`),
+  also with `ATL_DIRECT_EGL`. The Android keystore makes RSA and EC key pairs with their
+  certificate, signs, decrypts, agrees ECDH keys and imports keys as Android does on a device
+  without secure hardware or attestation keys.
 - Android apps see the real audio outputs: the car, a USB sound card, the 3.5 mm jack, and are
   told when one is plugged in or out (`AudioManager` devices from PipeWire's pulse server through
   libpulse, with AOSP's device types, `AudioDeviceCallback`s and `AUDIO_BECOMING_NOISY`).

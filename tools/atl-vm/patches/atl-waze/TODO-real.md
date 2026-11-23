@@ -14,8 +14,17 @@ replaced; each is removed from this list only when the real behavior is in.
 ## Open after the Nov 23 integration (fork tracks A, B and C)
 - `Bitmap.getPixel`/`getPixels` return premultiplied colour (AOSP: unpremultiplied); fix together
   with `setPixels`. (Track D is fixing it.)
-- `android.opengl.GLES20` lacks ~80 natives (`glScissor`, `glIsTexture`, `glFinish`, most
-  `glUniform*`, `glStencil*`): track E is implementing them.
+- OpenGL ES 1 contexts: Debian's Mesa is built without GLES1 (`eglCreateContext` fails with
+  `EGL_BAD_ALLOC`, also without ATL); GLES10/GLES11/GL10 apps (a GLSurfaceView renderer that never
+  sets a client version) need an ES 1 on ES 2 layer.
+- AndroidKeyStore: Curve 25519 keys (x25519/ed25519), XDH KeyAgreement, Ed25519 Signature.
+- `Bitmap.copy` keeps the new bitmap's blank snapshot, so drawing on a copy starts empty.
+- Canvas on a Bitmap: a clip still pushed when the bitmap is read loses the drawing made before the
+  clip (GTK keeps only the innermost state).
+- `bionic_eglQuerySurface` answers only `EGL_WIDTH`/`EGL_HEIGHT` for ATL's own surfaces; other
+  attributes go to Mesa with ATL's pointer.
+- A KHR_debug Java callback's global reference leaks when its GL context is destroyed with the
+  callback still set.
 
 ## Placeholders seen in the upstream ATL merge (added 2026-11-11, fix in the fork)
 - Keystore backend: the fork's KeyStoreStorage is kept. Upstream's libsecret natives
