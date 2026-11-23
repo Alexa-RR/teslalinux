@@ -48,6 +48,17 @@
             return n ? n + (n === 1 ? " thing to check" : " things to check") : "All good";
           },
         },
+        // teslalinux: the app's interface, keyboard, language, position, and the car interface's look and map
+        {
+          id: "waze",
+          title: "Waze",
+          icon: "navigation",
+          render: this._wazeSection,
+          railValue() {
+            if (!this.cache.iface && !global.TLCarApp) return "";
+            return this._ifaceNow() === "car" ? "Car interface" : "Phone interface";
+          },
+        },
         { id: "status", title: "Status", icon: "info" },
         { id: "display", title: "Display", icon: "desktop_windows" },
         // teslalinux: hotspot and LTE (GET/POST /api/network); upstream's Rear Display is gone (the
@@ -63,13 +74,6 @@
             return a ? { car: "Plays in the car", pi: "Plays on the Pi", both: "Car and Pi" }[a.output] || "" : "";
           },
         },
-        { id: "gps", title: "GPS", icon: "gps_fixed" },
-        // teslalinux: the device's language/region and time zone (GET/POST /api/locale)
-        { id: "locale", title: "Language & region", icon: "language" },
-        // teslalinux: the app's built-in keyboard or this device's own (GET/POST /api/keyboard)
-        { id: "keyboard", title: "Keyboard", icon: "keyboard" },
-        // teslalinux: the app's phone screens or its car interface (GET/POST /api/appInterface)
-        { id: "interface", title: "Waze interface", icon: "directions_car" },
         // teslalinux: automatic Waze updates from Google Play (GET/POST /api/appUpdate*)
         { id: "updates", title: "App updates", icon: "system_update" },
         // teslalinux: the operating system's own updates (GET/POST /api/systemUpdate)
@@ -84,6 +88,18 @@
       this.index = [
         ["quick.daynight", "overview", "Day and night", "dark light night day mode theme quick", car],
         ["quick.restart", "overview", "Restart Waze", "restart waze frozen stuck reload quick"],
+        ["waze.interface", "waze", "Waze interface", "phone car mode screens big buttons android auto"],
+        ["waze.keyboard", "waze", "Keyboard for typing", "keyboard type osk on-screen car keyboard", phone],
+        ["waze.locale", "waze", "Language and region", "language units km miles region format locale"],
+        ["waze.timezone", "waze", "Time zone", "time zone clock arrival eta"],
+        ["waze.gps", "waze", "Car's position", "gps location position where am i"],
+        ["waze.style", "waze", "Panel style", "look theme rounded graphite style", car],
+        ["waze.daynight", "waze", "Day and night", "dark light night day mode theme", car],
+        ["waze.panelsize", "waze", "Panel size", "panel buttons size bigger smaller cards", car],
+        ["waze.mapcolours", "waze", "Map colours", "map colours colors graphite muted palette", car],
+        ["waze.mapsize", "waze", "Map text size", "map size street names zoom labels symbols", car],
+        ["waze.pacing", "waze", "Map frame rate", "map frame rate fps smooth 60 30", car],
+        ["waze.sharpness", "waze", "Map sharpness", "map sharpness render scale blurry", car],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
@@ -92,7 +108,6 @@
         ["sound.voicelang", "sound", "Voice search language", "voice speech hebrew english microphone language", () => car() && this._voiceOn()],
         ["sound.mictest", "sound", "Test the microphone", "microphone mic test voice", () => car() && this._voiceOn()],
       ];
-      void phone;
 
       this.activeSectionId = "overview";
       this._pollTimer = null;
@@ -181,436 +196,12 @@
         await this._renderNetworkSection(token);
         return;
       }
-      if (this.activeSectionId === "gps") {
-        await this._renderGpsSection(token);
-        return;
-      }
-      if (this.activeSectionId === "locale") {
-        await this._renderLocaleSection(token);
-        return;
-      }
-      if (this.activeSectionId === "keyboard") {
-        await this._renderKeyboardSection(token);
-        return;
-      }
-      if (this.activeSectionId === "interface") {
-        await this._renderInterfaceSection(token);
-        return;
-      }
       if (this.activeSectionId === "updates") {
         await this._renderAppUpdateSection(token);
         return;
       }
       if (this.activeSectionId === "device") {
         await this._renderDeviceSection(token);
-      }
-    }
-
-    // teslalinux: language/region and time zone of the device, handed to the app's runtime the way
-    // Android hands it persist.sys.locale / persist.sys.timezone; a change restarts the app once.
-    async _renderLocaleSection(token) {
-      this._appendLoadingState();
-      let state;
-      try {
-        state = await this.apiClient.fetchLocale();
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "locale") {
-        return;
-      }
-      this.content.innerHTML = "";
-
-      const localeLabel = (code) => {
-        const tag = String(code).replace("_", "-");
-        try {
-          const lang = new Intl.DisplayNames([tag, "en"], { type: "language" });
-          const name = lang.of(tag);
-          return name && name !== tag ? name + " (" + code + ")" : code;
-        } catch (_error) {
-          return code;
-        }
-      };
-      const offsetLabel = (zone) => {
-        try {
-          const parts = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(new Date());
-          const off = parts.find((p) => p.type === "timeZoneName");
-          return zone.replace(/_/g, " ") + (off ? " (" + off.value + ")" : "");
-        } catch (_error) {
-          return zone.replace(/_/g, " ");
-        }
-      };
-      const locales = (state.locales || []).map((code) => ({ value: code, label: localeLabel(code) }));
-      const zones = (state.timezones || []).map((zone) => ({ value: zone, label: offsetLabel(zone) }));
-
-      const apply = async (locale, timezone) => {
-        if (!locale || !timezone) {
-          return;
-        }
-        try {
-          await this.apiClient.setLocale(locale, timezone);
-          this._showLocaleNotice("Saved. Waze restarts with the new setting (about a minute).");
-        } catch (_error) {
-          this._renderErrorState("Service error");
-        }
-      };
-
-      this._appendTile({
-        icon: "language",
-        title: "Language and region",
-        subtitle: "Units, date and time formats, and the app's language where it has one",
-        trailing: this._createSelect(locales, state.locale, async (value) => {
-          state.locale = String(value);
-          await apply(state.locale, state.timezone);
-        }),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "schedule",
-        title: "Time zone",
-        subtitle: "Arrival times and the clock",
-        trailing: this._createSelect(zones, state.timezone, async (value) => {
-          state.timezone = String(value);
-          await apply(state.locale, state.timezone);
-        }),
-        dense: false,
-      });
-      this._localeNotice = utils.createElement("div", "settings-description", "");
-      this._localeNotice.hidden = true;
-      this.content.appendChild(this._localeNotice);
-      this._appendDescription(
-        "Android apps take these from the system settings. A change restarts Waze once; the display and this page stay connected.",
-      );
-    }
-
-    // teslalinux: type with this device's keyboard (the car's, a phone's) instead of the app's own
-    // on-screen keyboard. js/keyboard/device-keyboard.js does the typing; the app restarts once.
-    async _renderKeyboardSection(token) {
-      this._appendLoadingState();
-      let state;
-      let iface = null;
-      try {
-        [state, iface] = await Promise.all([
-          this.apiClient.fetchKeyboard(),
-          this.apiClient.fetchAppInterface().catch(() => null),
-        ]);
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "keyboard") {
-        return;
-      }
-      this.content.innerHTML = "";
-      // the car interface's fields are this page's own: the car's keyboard always types into them,
-      // so the choice only matters for the phone interface
-      if (iface && iface.interface === "car") {
-        this._appendTile({
-          icon: "keyboard",
-          title: "The car's keyboard",
-          subtitle: "In the car interface you type with the car's own keyboard, and dictate with its microphone. This choice is for the phone interface.",
-          dense: false,
-        });
-        return;
-      }
-      const notice = utils.createElement("div", "settings-description", "");
-      notice.hidden = true;
-      this._appendTile({
-        icon: "keyboard",
-        title: "Use this device's keyboard",
-        subtitle: "On by default: type with the car's (or phone's) own keyboard, and dictate with its microphone. Off: the app's built-in keyboard",
-        trailing: this._createSwitch(state.mode === "device", async (checked) => {
-          const mode = checked ? "device" : "builtin";
-          try {
-            await this.apiClient.setKeyboard(mode);
-            global.dispatchEvent(new CustomEvent("teslalinux-keyboard-mode", { detail: mode }));
-            notice.textContent = "Saved. Waze restarts with the new keyboard (about a minute).";
-            notice.hidden = false;
-          } catch (_error) {
-            this._renderErrorState("Service error");
-          }
-        }),
-        dense: false,
-      });
-      this.content.appendChild(notice);
-      this._appendDescription(
-        "When a text field in the app is tapped, this page opens your device's keyboard and sends what you type to the app. Some browsers (Safari on iPhone) open the keyboard only from a tap: tap the keyboard button that appears in the corner.",
-      );
-    }
-
-    // teslalinux: Waze's phone screens, or its car interface (the screens Waze shows on car
-    // displays, drawn by js/carapp from /sockets/carapp over Waze's map). The app restarts once.
-    async _renderInterfaceSection(token) {
-      this._appendLoadingState();
-      let state;
-      try {
-        state = await this.apiClient.fetchAppInterface();
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "interface") {
-        return;
-      }
-      this.content.innerHTML = "";
-      const notice = utils.createElement("div", "settings-description", "");
-      notice.hidden = true;
-      const options = [
-        { value: "phone", label: "Phone" },
-        { value: "car", label: "Car" },
-      ];
-      this._appendTile({
-        icon: "directions_car",
-        title: "Waze interface",
-        subtitle: "Phone: Waze as on a phone. Car: Waze's screens for car displays, with large buttons",
-        trailing: this._createSelect(options, state.interface, async (value) => {
-          try {
-            await this.apiClient.setAppInterface(value);
-            notice.textContent = "Saved. Waze restarts with the " + (value === "car" ? "car" : "phone") + " interface.";
-            notice.hidden = false;
-            // this page follows as soon as the device reports the new interface
-            for (let i = 0; i < 20; i += 1) {
-              await new Promise((r) => global.setTimeout(r, 500));
-              try {
-                if ((await this.apiClient.fetchAppInterface()).interface === value) break;
-              } catch (_e) {
-                // the API restarting with the app: try again
-              }
-            }
-            global.location.reload();
-          } catch (_error) {
-            this._renderErrorState("Service error");
-          }
-        }),
-        dense: false,
-      });
-      this.content.appendChild(notice);
-      this._appendDescription(
-        "The car interface is the one Waze shows on car screens: the map fills the display, with turn cards, a search screen and large buttons on top. Your saved places and settings are the same in both.",
-      );
-      // the car interface's settings (its look, the map, voice search in its search field) only
-      // while it is the chosen interface
-      // the car interface's look: kept by this browser (js/carapp/carapp-controller.js), applied
-      // at once; the day/night choice also switches Waze's map
-      const car = global.TLCarApp;
-      if (state.interface !== "car" || !car || !car.getLook) {
-        return;
-      }
-      const look = car.getLook();
-      this._appendTile({
-        icon: "palette",
-        title: "Car interface style",
-        subtitle: "Rounded: dark rounded panels. Graphite: frosted panels, light by day and dark by night",
-        trailing: this._createSelect(
-          [
-            { value: "rounded", label: "Rounded" },
-            { value: "graphite", label: "Graphite (experimental)" },
-          ],
-          look.style,
-          async (value) => car.setLook({ style: value }),
-        ),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "brightness_4",
-        title: "Day and night",
-        subtitle: "Automatic follows the sun at the car's position. Waze's map and the Graphite panels switch with it",
-        trailing: this._createSelect(
-          [
-            { value: "auto", label: "Automatic" },
-            { value: "day", label: "Day" },
-            { value: "night", label: "Night" },
-          ],
-          look.dayNight,
-          async (value) => car.setLook({ dayNight: value }),
-        ),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "aspect_ratio",
-        title: "Panel size",
-        subtitle: "The size of the panels and buttons drawn over the map (turn card, search, lists), at once. Waze's map keeps its own size (Map size)",
-        trailing: this._createSelect(
-          [
-            { value: "smallest", label: "Smallest" },
-            { value: "smaller", label: "Smaller" },
-            { value: "default", label: "Default" },
-            { value: "larger", label: "Larger" },
-          ],
-          look.panelSize || "default",
-          async (value) => car.setLook({ panelSize: value }),
-        ),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "format_size",
-        title: "Map size",
-        subtitle: "The size of Waze's street names, symbols and position arrow on the map, at once; its speedometer follows when Waze next starts. The panels on this screen keep their size",
-        trailing: this._createSelect(
-          [
-            { value: "smaller", label: "Smaller" },
-            { value: "default", label: "Default" },
-            { value: "larger", label: "Larger" },
-            { value: "largest", label: "Largest" },
-          ],
-          look.mapSize || "default",
-          async (value) => car.setLook({ mapSize: value }),
-        ),
-        dense: false,
-      });
-      this._appendTile({
-        icon: "hd",
-        title: "Map sharpness",
-        subtitle: "Full draws Waze's map in every pixel of the display. A lower one draws it in fewer pixels and scales it up: a little softer, and smoother on the move. Waze's panels stay sharp",
-        trailing: this._createSelect(
-          [
-            { value: "full", label: "Full" },
-            { value: "high", label: "90%" },
-            { value: "medium", label: "80%" },
-            { value: "low", label: "70%" },
-          ],
-          look.mapSharpness || "full",
-          async (value) => car.setLook({ mapSharpness: value }),
-        ),
-        dense: false,
-      });
-      // the map's frame rate is the device's (it changes what Waze runs, at its start)
-      const pacingNotice = utils.createElement("div", "settings-description", "");
-      pacingNotice.hidden = true;
-      const pacingWarning = global.document.createElement("div");
-      let pacing = state.mapPacing === "full" ? "full" : "app";
-      this._appendTile({
-        icon: "speed",
-        title: "Map frame rate",
-        subtitle:
-          "Waze's own: Waze draws its car map at most 30 times a second, as on a phone. Full: as often as the device manages, up to the display's 60: smoother on the move, the device works harder",
-        trailing: this._createSelect(
-          [
-            { value: "app", label: "Waze's own (30/s)" },
-            { value: "full", label: "Full (60/s)" },
-          ],
-          pacing,
-          async (value) => {
-            try {
-              await this.apiClient.setMapPacing(value);
-            } catch (_error) {
-              this._renderErrorState("Service error");
-              return;
-            }
-            if (value !== pacing) {
-              pacing = value;
-              pacingNotice.textContent = "Saved. Waze restarts " + (value === "full" ? "with its map at the full frame rate." : "with its own frame rate.");
-              pacingNotice.hidden = false;
-            }
-            this._showMapPacingWarning(pacingWarning, pacing, state.mapPacingSupport);
-          },
-        ),
-        dense: false,
-      });
-      this.content.appendChild(pacingNotice);
-      this.content.appendChild(pacingWarning);
-      this._showMapPacingWarning(pacingWarning, pacing, state.mapPacingSupport);
-      // the map colours are the device's (they change what Waze draws): this state's, fresher than
-      // the one the car interface read when the page loaded
-      if (car.setDeviceMapColours) car.setDeviceMapColours(state);
-      const mapNotice = utils.createElement("div", "settings-description", "");
-      mapNotice.hidden = true;
-      const mapWarning = global.document.createElement("div");
-      this._appendTile({
-        icon: "map",
-        title: "Map colours",
-        subtitle:
-          "Graphite: Waze's own map recoloured at start, grey land, white roads by day and dark roads by night, a blue route. Muted: this screen tones Waze's map down. Waze's own: as Waze draws it",
-        trailing: this._createSelect(
-          [
-            { value: "graphite", label: "Graphite" },
-            { value: "muted", label: "Muted (page)" },
-            { value: "app", label: "Waze's own" },
-          ],
-          car.getLook().mapColours,
-          async (value) => {
-            const before = car.getLook().mapColours;
-            try {
-              await car.setLook({ mapColours: value });
-            } catch (_error) {
-              this._renderErrorState("Service error");
-              return;
-            }
-            this._showMapColoursWarning(mapWarning, car.getLook());
-            if ((value === "graphite") !== (before === "graphite")) {
-              mapNotice.textContent = "Saved. Waze restarts " + (value === "graphite" ? "with its map in Graphite colours." : "with its own map colours.");
-              mapNotice.hidden = false;
-            }
-          },
-        ),
-        dense: false,
-      });
-      this.content.appendChild(mapNotice);
-      this.content.appendChild(mapWarning);
-      this._showMapColoursWarning(mapWarning, car.getLook());
-    }
-
-    /**
-     * Graphite map colours apply only to the Waze versions they were checked with (the device's
-     * verified list, docs/MAP-COLOURS.md); for any other version Waze keeps its own palette and the
-     * page mutes it instead. The warning says so while Graphite is chosen.
-     */
-    _showMapColoursWarning(container, look) {
-      container.innerHTML = "";
-      const skin = look.mapSkin;
-      if (look.mapColours !== "graphite" || !skin || skin.supported) return;
-      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
-      const installed = skin.versionCode ? "Waze " + named(skin) : "this Waze";
-      const checked = (skin.verifiedVersions || []).map(named).join(", ");
-      const why = {
-        "unverified-version": "Graphite map colours are not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".",
-        "unverified-files": "Graphite map colours are not available: " + installed + " has map files that differ from the checked ones.",
-        "not-installed": "Graphite map colours are not available: no installed Waze was found.",
-        "no-manifest": "Graphite map colours are not available on this device (no verified list).",
-      }[skin.state] || "Graphite map colours are not available for " + installed + ".";
-      const previous = this._target;
-      this._target = container;
-      this._appendTile({
-        icon: "warning",
-        title: "Map colours: not available for " + installed,
-        subtitle: why + (look.style === "graphite" ? " Waze's own colours are used, toned down by this screen (Muted)." : " Waze's own colours are used."),
-        dense: false,
-      });
-      this._target = previous;
-    }
-
-    /**
-     * The full map frame rate applies only to the Waze versions it was checked with
-     * (tools/apps/waze-map-pacing.py on the device); for any other version Waze keeps its own. The
-     * warning says so while Full is chosen.
-     */
-    _showMapPacingWarning(container, pacing, support) {
-      container.innerHTML = "";
-      if (pacing !== "full" || !support || support.supported) return;
-      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
-      const installed = support.versionCode ? "Waze " + named(support) : "this Waze";
-      const checked = (support.verifiedVersions || []).map(named).join(", ");
-      const why = {
-        "unverified-version": "The full map frame rate is not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".",
-        "not-installed": "The full map frame rate is not available: no installed Waze was found.",
-        "no-tool": "The full map frame rate is not available on this device.",
-      }[support.state] || "The full map frame rate is not available for " + installed + ".";
-      const previous = this._target;
-      this._target = container;
-      this._appendTile({
-        icon: "warning",
-        title: "Map frame rate: not available for " + installed,
-        subtitle: why + " Waze keeps its own frame rate.",
-        dense: false,
-      });
-      this._target = previous;
-    }
-
-    _showLocaleNotice(text) {
-      if (this._localeNotice) {
-        this._localeNotice.textContent = text;
-        this._localeNotice.hidden = false;
       }
     }
 
@@ -1910,45 +1501,6 @@
       };
     }
 
-    async _renderGpsSection(token) {
-      this._appendLoadingState();
-
-      const systemConfiguration = await this._fetchSystemConfigurationSafe();
-      if (!systemConfiguration) {
-        this._renderErrorState("Service error");
-        return;
-      }
-
-      if (token !== this._renderToken || this.activeSectionId !== "gps") {
-        return;
-      }
-
-      const isEnabled =
-        utils.toInt(systemConfiguration["persist.tesla-android.gps.is_active"], 1) === 1;
-
-      this.content.innerHTML = "";
-
-      this._appendTile({
-        icon: "gps_fixed",
-        title: "GPS",
-        subtitle: "The car's position for the app",
-        trailing: this._createSwitch(isEnabled, async (checked) => {
-          try {
-            await this.apiClient.setGpsState(checked ? 1 : 0);
-            await this._handleSystemConfigurationChanged();
-            this.gpsController.setEnabled(checked);
-            await this._renderActiveSection();
-          } catch (_error) {
-            this._renderErrorState("Service error");
-          }
-        }),
-      });
-
-      this._appendDescription(
-        "NOTE: GPS via Browser can cause crashes on Tesla Software 2024.14 or newer, the integration is disabled by default until this issue is solved by Tesla. Please be assured that your location data never leaves your car. The car's position goes only to your Teslalinux device, where it stands in for a GPS receiver for the app.",
-      );
-    }
-
     async _renderDeviceSection(token) {
       this._appendLoadingState();
 
@@ -2751,6 +2303,350 @@
       const ok = await UI.save(r, () => this.apiClient.restartApp(), "Waze is restarting");
       if (b) b.disabled = false;
       if (ok) this._watchApp();
+    }
+
+    // ------------------------------------------------------------------ Waze
+
+    /**
+     * How Waze looks and behaves: its interface (GET/POST /api/appInterface: the phone screens, or
+     * its car interface drawn by js/carapp over its map), the keyboard that types into it (the
+     * phone interface's choice; /api/keyboard), language and time zone (/api/locale), the car's
+     * position (upstream's gps setting), and in the car interface its look (kept by this browser,
+     * js/carapp) and its map (colours, text size, frame rate, sharpness). What restarts Waze waits
+     * in the restart bar.
+     */
+    async _wazeSection(token) {
+      const api = this.apiClient;
+      const [iface, kb, loc, conf] = await Promise.all([
+        api.fetchAppInterface(),
+        api.fetchKeyboard().catch(() => null),
+        api.fetchLocale().catch(() => null),
+        this._fetchSystemConfigurationSafe(),
+      ]);
+      this.cache.iface = iface;
+      if (kb) this.cache.keyboard = kb;
+      const car = global.TLCarApp;
+      // the map colours are the device's: this answer is fresher than the one the car interface read at load
+      if (car && car.setDeviceMapColours) car.setDeviceMapColours(iface);
+      const isCar = this._staged("interface", iface.interface) === "car";
+      const rerender = () => global.setTimeout(() => token === this._renderToken && this._rerender(), 140);
+      const out = [];
+
+      // --- interface
+      const ir = UI.row({
+        id: "waze.interface",
+        title: "Waze interface",
+        chips: [UI.CHIP.restart()],
+        stack: true,
+        more: [
+          "Car is the interface Waze shows on car screens: the map fills the display, with turn cards, search and large buttons on top. Phone is Waze as on a phone.",
+          "Your saved places and Waze settings are the same in both.",
+        ],
+        control: UI.tiles(
+          [
+            { value: "car", label: "Car", caption: "Big buttons, map first", svg: UI.SVG.car() },
+            { value: "phone", label: "Phone", caption: "As on a phone (default)", svg: UI.SVG.phone() },
+          ],
+          this._staged("interface", iface.interface),
+          (v) => {
+            this._stage(ir, "interface", "Waze interface", iface.interface, v, () => api.setAppInterface(v));
+            this._applyTheme();
+            rerender();
+            return true;
+          },
+        ),
+      });
+      this._markStaged(ir, "interface");
+      const interfaceRows = [ir];
+      // the keyboard is the phone interface's choice: the car interface's fields always use the car's
+      if (!isCar && kb) {
+        const kr = UI.row({
+          id: "waze.keyboard",
+          title: "Keyboard",
+          chips: [UI.CHIP.restart()],
+          more: "Car's keyboard: this page opens the car's (or phone's) own keyboard, with its dictation microphone, and sends what you type to Waze. Safari on iPhone opens a keyboard only from a tap: use the keyboard button that appears in the corner.",
+          control: UI.segmented(
+            [
+              { value: "device", label: "Car's", caption: "default, with dictation" },
+              { value: "builtin", label: "Waze's" },
+            ],
+            this._staged("keyboard", kb.mode),
+            (v) =>
+              this._stage(kr, "keyboard", "Keyboard", kb.mode, v, async () => {
+                await api.setKeyboard(v);
+                global.dispatchEvent(new CustomEvent("teslalinux-keyboard-mode", { detail: v }));
+              }),
+          ),
+        });
+        this._markStaged(kr, "keyboard");
+        interfaceRows.push(kr);
+      }
+      out.push(UI.group("Interface", interfaceRows));
+
+      // --- language, time zone (they go to the device together) and the car's position
+      const langRows = [];
+      if (loc) {
+        const curLocale = this._staged("locale", loc.locale);
+        const curZone = this._staged("timezone", loc.timezone);
+        const setLoc = () => api.setLocale(this._staged("locale", loc.locale), this._staged("timezone", loc.timezone));
+        const lr = UI.row({
+          id: "waze.locale",
+          title: "Language and region",
+          chips: [UI.CHIP.restart()],
+          control: UI.tapValue(
+            this._localeName(curLocale),
+            async () => {
+              const v = await UI.pickFrom({
+                title: "Language and region",
+                value: curLocale,
+                options: (loc.locales || []).map((x) => ({ value: x, label: this._localeName(x), small: x })),
+              });
+              if (v && v !== curLocale) {
+                this._stage(lr, "locale", "Language and region", loc.locale, v, setLoc);
+                rerender();
+              }
+            },
+            this.restart.has("locale"),
+          ),
+        });
+        const tr = UI.row({
+          id: "waze.timezone",
+          title: "Time zone",
+          chips: [UI.CHIP.restart()],
+          control: UI.tapValue(
+            this._zoneName(curZone).label,
+            async () => {
+              const v = await UI.pickFrom({
+                title: "Time zone",
+                value: curZone,
+                options: (loc.timezones || []).map((z) => Object.assign({ value: z }, this._zoneName(z))),
+              });
+              if (v && v !== curZone) {
+                this._stage(tr, "timezone", "Time zone", loc.timezone, v, setLoc);
+                rerender();
+              }
+            },
+            this.restart.has("timezone"),
+          ),
+        });
+        this._markStaged(lr, "locale");
+        this._markStaged(tr, "timezone");
+        langRows.push(lr, tr);
+      }
+      if (conf) {
+        const gpsOn = utils.toInt(conf["persist.tesla-android.gps.is_active"], 1) === 1;
+        const gr = UI.row({
+          id: "waze.gps",
+          title: "Car's position",
+          more: [
+            "The car's browser sends its position to this device, which stands in for a GPS receiver for Waze. It never leaves the car.",
+            "On Tesla software 2024.14 and newer, sharing the browser's position has crashed the car's browser for some drivers. If that happens, turn this off.",
+          ],
+          control: UI.toggle(
+            gpsOn,
+            (on) =>
+              UI.save(gr, async () => {
+                await api.setGpsState(on ? 1 : 0);
+                await this._handleSystemConfigurationChanged();
+                this.gpsController.setEnabled(on);
+              }, on ? "On: Waze gets the car's position" : "Off: Waze has no position"),
+            "Car's position",
+          ),
+        });
+        langRows.push(gr);
+      }
+      if (langRows.length) out.push(UI.group("Language and position", langRows));
+
+      // --- the car interface's look and map (only while it is the interface picked)
+      if (isCar && car && car.getLook) {
+        const look = car.getLook();
+        const sr = UI.row({
+          id: "waze.style",
+          title: "Panel style",
+          stack: true,
+          chips: [UI.CHIP.plain("Graphite is new")],
+          control: UI.tiles(
+            [
+              { value: "rounded", label: "Rounded", caption: "Dark panels (default)", svg: UI.SVG.rounded() },
+              { value: "graphite", label: "Graphite", caption: "Light by day, dark by night", svg: UI.SVG.graphite() },
+            ],
+            look.style,
+            (v) => UI.save(sr, () => car.setLook({ style: v }), "Applied"),
+          ),
+        });
+        const dr = UI.row({
+          id: "waze.daynight",
+          title: "Day and night",
+          stack: true,
+          more: "Automatic follows the sun at the car's position. Waze's map, the Graphite panels and this page switch with it.",
+          control: UI.segmented(this._dayNightOptions(), look.dayNight, (v) => UI.save(dr, () => car.setLook({ dayNight: v }), "Applied")),
+        });
+        const A = UI.A;
+        const pr = UI.row({
+          id: "waze.panelsize",
+          title: "Panel size",
+          stack: true,
+          control: UI.segmented(
+            [
+              { value: "smallest", glyph: A(13), caption: "Smallest" },
+              { value: "smaller", glyph: A(16), caption: "Smaller" },
+              { value: "default", glyph: A(19), caption: "Default" },
+              { value: "larger", glyph: A(23), caption: "Larger" },
+            ],
+            look.panelSize || "default",
+            (v) => UI.save(pr, () => car.setLook({ panelSize: v }), "Applied"),
+            { label: "Panel size" },
+          ),
+        });
+        out.push(UI.group("Car interface look", [sr, dr, pr]));
+
+        const skin = look.mapSkin;
+        const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
+        const checked = skin && Array.isArray(skin.verifiedVersions) ? skin.verifiedVersions.map(named).join(", ") : "";
+        const unverified = Boolean(skin && !skin.supported);
+        const savedColours = look.mapColours;
+        const mr = UI.row({
+          id: "waze.mapcolours",
+          title: "Map colours",
+          stack: true,
+          chips: [UI.CHIP.custom("chip--restart", "restart_alt", "Graphite restarts Waze")],
+          more: [
+            "Graphite: Waze's own map recoloured when it starts, grey land, white roads by day and dark roads by night, a blue route. Muted: this screen tones Waze's map down (with the Graphite panels). Waze's own: as Waze draws it.",
+            checked ? "Graphite is checked per Waze version: " + checked + "." : "Graphite is checked per Waze version.",
+          ],
+          control: UI.tiles(
+            [
+              { value: "graphite", label: "Graphite", svg: UI.SVG.colours("graphite"), caption: unverified ? "Not for this Waze" : "Recoloured by the device" },
+              { value: "muted", label: "Muted", svg: UI.SVG.colours("muted"), caption: "Toned down here, default" },
+              { value: "app", label: "Waze's own", svg: UI.SVG.colours("app"), caption: "As Waze draws it" },
+            ],
+            this._staged("mapcolours", savedColours),
+            (v) => {
+              // only a change to or from Graphite restarts Waze; Muted and Waze's own apply at once
+              if ((v === "graphite") !== (savedColours === "graphite")) {
+                return this._stage(mr, "mapcolours", "Map colours", savedColours, v, () => car.setLook({ mapColours: v }));
+              }
+              this.restart.delete("mapcolours");
+              this._markStaged(mr, "mapcolours");
+              this._renderRestartBar();
+              if (v === car.getLook().mapColours) return true;
+              return UI.save(mr, () => car.setLook({ mapColours: v }), "Applied");
+            },
+          ),
+        });
+        this._markStaged(mr, "mapcolours");
+        const zr = UI.row({
+          id: "waze.mapsize",
+          title: "Map text size",
+          stack: true,
+          detail: "Street names and symbols on the map",
+          control: UI.segmented(
+            [
+              { value: "smaller", glyph: A(14), caption: "Smaller" },
+              { value: "default", glyph: A(17), caption: "Default" },
+              { value: "larger", glyph: A(21), caption: "Larger" },
+              { value: "largest", glyph: A(25), caption: "Largest" },
+            ],
+            look.mapSize || "default",
+            (v) => UI.save(zr, () => car.setLook({ mapSize: v }), "Applied"),
+            { label: "Map text size" },
+          ),
+        });
+        const pacingSaved = iface.mapPacing === "full" ? "full" : "app";
+        const support = iface.mapPacingSupport;
+        // (a third choice, "Automatic", can join these two)
+        const pc = UI.row({
+          id: "waze.pacing",
+          title: "Map frame rate",
+          chips: [UI.CHIP.restart()],
+          stack: true,
+          detail: "Full is smoother, and the Pi works harder",
+          after: support && !support.supported ? UI.warnbox(this._pacingUnavailable(support)) : null,
+          control: UI.segmented(
+            [
+              { value: "app", label: "Waze's own", caption: "30 per second, default" },
+              { value: "full", label: "Full", caption: "up to 60 per second" },
+            ],
+            this._staged("pacing", pacingSaved),
+            (v) => this._stage(pc, "pacing", "Map frame rate", pacingSaved, v, () => api.setMapPacing(v)),
+            { label: "Map frame rate" },
+          ),
+        });
+        this._markStaged(pc, "pacing");
+        const sh = UI.row({
+          id: "waze.sharpness",
+          title: "Map sharpness",
+          stack: true,
+          detail: "Lower is a little softer and smoother on the move",
+          control: UI.segmented(
+            [
+              { value: "full", label: "Full", caption: "default" },
+              { value: "high", label: "90%" },
+              { value: "medium", label: "80%" },
+              { value: "low", label: "70%" },
+            ],
+            look.mapSharpness || "full",
+            (v) => UI.save(sh, () => car.setLook({ mapSharpness: v }), "Applied"),
+            { label: "Map sharpness" },
+          ),
+        });
+        const showSkinWarning = unverified && this._staged("mapcolours", savedColours) === "graphite";
+        out.push(UI.group("Map", [showSkinWarning ? UI.warnbox(this._skinUnavailable(look)) : null, mr, zr, pc, sh].filter(Boolean)));
+      }
+      return out;
+    }
+
+    /**
+     * Graphite map colours apply only to the Waze versions they were checked with (the device's
+     * verified list, docs/MAP-COLOURS.md); for any other version Waze keeps its own palette and the
+     * page mutes it instead.
+     */
+    _skinUnavailable(look) {
+      const skin = look.mapSkin || {};
+      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
+      const installed = skin.versionCode ? "Waze " + named(skin) : "this Waze";
+      const why =
+        {
+          "unverified-files": "Graphite colours are not available: " + installed + " has map files that differ from the checked ones.",
+          "not-installed": "Graphite colours are not available: no installed Waze was found.",
+          "no-manifest": "Graphite colours are not available on this device (no verified list).",
+        }[skin.state] || "Graphite colours are not available for " + installed + ".";
+      return why + (look.style === "graphite" ? " Waze's own colours are used, toned down by this screen." : " Waze's own colours are used.");
+    }
+
+    /** the full map frame rate applies only to the Waze versions it was checked with (tools/apps/waze-map-pacing.py) */
+    _pacingUnavailable(support) {
+      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
+      const installed = support.versionCode ? "Waze " + named(support) : "this Waze";
+      const checked = (support.verifiedVersions || []).map(named).join(", ");
+      const why =
+        {
+          "not-installed": "Full is not available: no installed Waze was found.",
+          "no-tool": "Full is not available on this device.",
+        }[support.state] || "Full is not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".";
+      return why + " Waze keeps its own rate.";
+    }
+
+    _localeName(code) {
+      const tag = String(code || "").replace("_", "-");
+      try {
+        const name = new Intl.DisplayNames(["en"], { type: "language" }).of(tag);
+        return name && name !== tag ? name : String(code);
+      } catch (_e) {
+        return String(code);
+      }
+    }
+
+    _zoneName(zone) {
+      let off = "";
+      try {
+        const part = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName");
+        off = part ? part.value : "";
+      } catch (_e) {
+        // no offset known
+      }
+      const z = String(zone || "");
+      return { label: z.split("/").pop().replace(/_/g, " "), small: (z.indexOf("/") > 0 ? z.split("/")[0] + " " : "") + off };
     }
 
     // ------------------------------------------------------------------ Sound
