@@ -53,7 +53,16 @@
         // teslalinux: hotspot and LTE (GET/POST /api/network); upstream's Rear Display is gone (the
         // app is a navigation app shown on the main screen)
         { id: "network", title: "Wi-Fi & LTE", icon: "wifi" },
-        { id: "audio", title: "Audio", icon: "volume_up" },
+        {
+          id: "sound",
+          title: "Sound",
+          icon: "volume_up",
+          render: this._soundSection,
+          railValue() {
+            const a = this.cache.audio;
+            return a ? { car: "Plays in the car", pi: "Plays on the Pi", both: "Car and Pi" }[a.output] || "" : "";
+          },
+        },
         { id: "gps", title: "GPS", icon: "gps_fixed" },
         // teslalinux: the device's language/region and time zone (GET/POST /api/locale)
         { id: "locale", title: "Language & region", icon: "language" },
@@ -73,9 +82,15 @@
       const car = () => this._ifaceNow() === "car";
       const phone = () => this._ifaceNow() !== "car";
       this.index = [
-        ["quick.sound", "overview", "Waze's sound", "audio output speaker pi car both sound quick"],
         ["quick.daynight", "overview", "Day and night", "dark light night day mode theme quick", car],
         ["quick.restart", "overview", "Restart Waze", "restart waze frozen stuck reload quick"],
+        ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
+        ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
+        ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
+        ["sound.browservolume", "sound", "Browser volume", "volume loud quiet"],
+        ["sound.voicebutton", "sound", "Voice search button", "voice microphone mic search speech dictation", car],
+        ["sound.voicelang", "sound", "Voice search language", "voice speech hebrew english microphone language", () => car() && this._voiceOn()],
+        ["sound.mictest", "sound", "Test the microphone", "microphone mic test voice", () => car() && this._voiceOn()],
       ];
       void phone;
 
@@ -164,10 +179,6 @@
       }
       if (this.activeSectionId === "network") {
         await this._renderNetworkSection(token);
-        return;
-      }
-      if (this.activeSectionId === "audio") {
-        await this._renderAudioSection(token);
         return;
       }
       if (this.activeSectionId === "gps") {
@@ -386,7 +397,6 @@
       if (state.interface !== "car" || !car || !car.getLook) {
         return;
       }
-      this._renderVoiceTiles();
       const look = car.getLook();
       this._appendTile({
         icon: "palette",
@@ -539,91 +549,6 @@
       this.content.appendChild(mapNotice);
       this.content.appendChild(mapWarning);
       this._showMapColoursWarning(mapWarning, car.getLook());
-    }
-
-    /**
-     * Voice search (js/speech/speech.js): this browser's microphone and speech recognition, for
-     * the car interface's search and for Waze's own microphone button in the phone interface. The
-     * language is this browser's; the test listens once and shows what it heard, or why not.
-     */
-    _renderVoiceTiles() {
-      const speech = global.TLSpeech;
-      if (!speech) return;
-      // opt-in, per browser: a Tesla's browser has no working speech recognition, and the car's
-      // own keyboard dictates through its microphone (Settings > Keyboard: this device's keyboard)
-      const teslaNote = "Does not work in a Tesla's browser: use the microphone on the car's keyboard instead.";
-      if (!speech.supported()) {
-        this._appendTile({
-          icon: "mic_off",
-          title: "Voice search button: not available in this browser",
-          subtitle: "This browser has no speech recognition. " + teslaNote,
-          dense: false,
-        });
-        return;
-      }
-      this._appendTile({
-        icon: "mic",
-        title: "Voice search button",
-        subtitle: "A microphone button in the car interface's search, using this browser's speech recognition. " + teslaNote,
-        trailing: this._createSwitch(speech.enabled(), async (checked) => {
-          speech.setEnabled(checked);
-          await this._renderActiveSection();
-        }),
-        dense: false,
-      });
-      if (!speech.enabled()) return;
-      this._appendTile({
-        icon: "translate",
-        title: "Voice language",
-        subtitle: "The language you speak to Waze's microphone and the car interface's search",
-        trailing: this._createSelect(speech.LANGUAGES, speech.language(), async (value) => speech.setLanguage(value)),
-        dense: false,
-      });
-      const result = utils.createElement("div", "settings-description", "");
-      result.hidden = true;
-      const button = this._createActionButton("Test");
-      let session = null;
-      button.addEventListener("click", () => {
-        if (session) {
-          session.stop();
-          return;
-        }
-        result.hidden = false;
-        result.textContent = "Listening… say a place";
-        button.textContent = "Stop";
-        const done = (text) => {
-          session = null;
-          button.textContent = "Test";
-          result.textContent = text;
-        };
-        session = speech.listen({
-          partial: true,
-          onPartial: (texts) => {
-            result.textContent = "Heard: " + (texts[0] || "");
-          },
-          onResult: (texts) => done("Heard: " + texts[0]),
-          onError: (error) =>
-            done(
-              {
-                "no-match": "Nothing recognised. Try again a little louder.",
-                "no-speech": "No speech heard. Is the microphone on?",
-                "not-allowed": "The microphone is blocked: allow it for this page in the browser.",
-                "service-not-allowed": "This browser does not offer speech recognition to pages.",
-                "audio-capture": "No microphone found.",
-                network: "Speech recognition could not reach its service (it needs the internet).",
-                "language-not-supported": "This browser cannot recognise the chosen language.",
-              }[error] || "Speech recognition failed (" + error + ").",
-            ),
-        });
-      });
-      this._appendTile({
-        icon: "mic",
-        title: "Test the microphone",
-        subtitle: "Listens once in the voice language and shows what it heard",
-        trailing: button,
-        dense: false,
-      });
-      this.content.appendChild(result);
     }
 
     /**
@@ -1985,198 +1910,6 @@
       };
     }
 
-    async _renderAudioSection(token) {
-      this._appendLoadingState();
-
-      const systemConfiguration = await this._fetchSystemConfigurationSafe();
-      if (!systemConfiguration) {
-        this._renderErrorState("Service error");
-        return;
-      }
-
-      // teslalinux: where Waze's sound plays (GET/POST /api/audioOutput, services/audio/audio.py)
-      let output = null;
-      try {
-        output = await this.apiClient.fetchAudioOutput();
-      } catch (_error) {
-        output = null;
-      }
-
-      if (token !== this._renderToken || this.activeSectionId !== "audio") {
-        return;
-      }
-
-      const isEnabled =
-        utils.toInt(systemConfiguration["persist.tesla-android.browser_audio.is_enabled"], 1) === 1;
-      const volume = utils.toInt(
-        systemConfiguration["persist.tesla-android.browser_audio.volume"],
-        100,
-      );
-
-      this.content.innerHTML = "";
-
-      if (output) {
-        this._renderAudioOutput(token, output);
-        if (output.output === "pi") {
-          this._appendDescription(
-            "Waze's sound plays only on the speaker connected to the Raspberry Pi; this browser gets none. Choose Car or Both to hear it here again.",
-          );
-          return;
-        }
-        this._appendDivider();
-      }
-
-      this._appendTile({
-        icon: "speaker",
-        title: "Browser audio",
-        subtitle: "Disable if you intend to use Bluetooth audio",
-        trailing: this._createSwitch(isEnabled, async (checked) => {
-          try {
-            await this.apiClient.setBrowserAudioState(checked ? 1 : 0);
-            await this.apiClient.setBrowserAudioVolume(100);
-            await this._handleSystemConfigurationChanged();
-            await this._renderActiveSection();
-          } catch (_error) {
-            this._renderErrorState("Service error");
-          }
-        }),
-      });
-      this._appendDivider();
-
-      const sliderWrap = utils.createElement("div", "settings-volume-wrap", null);
-      const sliderValue = utils.createElement("span", "settings-volume-value", String(volume) + " %");
-      const slider = utils.createElement("input", "settings-volume-slider", null);
-      slider.type = "range";
-      slider.min = "0";
-      slider.max = "150";
-      slider.step = "10";
-      slider.value = String(volume);
-      slider.addEventListener("input", () => {
-        sliderValue.textContent = String(slider.value) + " %";
-      });
-      slider.addEventListener("change", async () => {
-        try {
-          await this.apiClient.setBrowserAudioState(1);
-          await this.apiClient.setBrowserAudioVolume(utils.toInt(slider.value, volume));
-          await this._handleSystemConfigurationChanged();
-          await this._renderActiveSection();
-        } catch (_error) {
-          this._renderErrorState("Service error");
-        }
-      });
-      sliderWrap.appendChild(sliderValue);
-      sliderWrap.appendChild(slider);
-
-      this._appendTile({
-        icon: "volume_down",
-        title: "Volume",
-        trailing: sliderWrap,
-        dense: false,
-      });
-
-      this._appendDescription(
-        "If you plan to use browser audio continuously in conjunction with video playback, it's essential to note that it can be bandwidth-intensive. To optimize your experience, you may want to consider pairing your car with the Teslalinux device over Bluetooth, particularly if your Tesla is equipped with MCU2.",
-      );
-      this._appendDescription(
-        "In case you encounter a situation where the browser in your Tesla fails to produce sound, a simple reboot of the vehicle should resolve the issue. Please note that this is a known issue with the browser itself.",
-      );
-    }
-
-    // teslalinux: Waze's sound in the car (this browser), on a speaker connected to the Pi (a USB
-    // sound card or speaker, else the 3.5 mm jack), or both; the Pi speaker's volume. Applied within
-    // half a second, no restart. The Pi output shown follows plugging in and out (polled).
-    _renderAudioOutput(token, output) {
-      const options = [
-        { value: "car", label: "Car" },
-        { value: "pi", label: "Pi speaker" },
-        { value: "both", label: "Both" },
-      ];
-      const save = async (change) => {
-        try {
-          await this.apiClient.setAudioOutput(change);
-          await this._renderActiveSection();
-        } catch (_error) {
-          this._renderErrorState("Service error");
-        }
-      };
-      this._appendTile({
-        icon: "speaker_group",
-        title: "Where Waze's sound plays",
-        subtitle: "Car: in this browser. Pi speaker: a speaker connected to the Raspberry Pi (USB, or the 3.5 mm jack)",
-        trailing: this._createSelect(options, output.output, (value) => save({ output: String(value) })),
-        dense: false,
-      });
-      if (output.output === "car") {
-        return;
-      }
-      const kindLabel = { usb: "USB", jack: "3.5 mm jack", other: "Sound card" };
-      const speakerText = (o) => {
-        if (!o.running) {
-          return "Audio service not running";
-        }
-        if (!o.speaker) {
-          return "None connected";
-        }
-        const kind = kindLabel[o.speaker.kind] || "";
-        const name = o.speaker.kind === "jack" ? "" : o.speaker.description || "";
-        return [kind, name].filter(Boolean).join(": ") + (o.playing ? " (playing)" : "");
-      };
-      const speakerValue = this._createTrailingText(speakerText(output));
-      this._appendTile({
-        icon: output.speaker && output.speaker.kind === "usb" ? "usb" : "headphones",
-        title: "Pi speaker",
-        subtitle: "A USB sound card or speaker when one is plugged in, else the 3.5 mm jack",
-        trailing: speakerValue,
-        dense: false,
-      });
-
-      const sliderWrap = utils.createElement("div", "settings-volume-wrap", null);
-      const sliderValue = utils.createElement("span", "settings-volume-value", String(output.volume) + " %");
-      const slider = utils.createElement("input", "settings-volume-slider", null);
-      slider.type = "range";
-      slider.min = "0";
-      slider.max = "100";
-      slider.step = "5";
-      slider.value = String(output.volume);
-      slider.addEventListener("input", () => {
-        sliderValue.textContent = String(slider.value) + " %";
-      });
-      slider.addEventListener("change", async () => {
-        try {
-          await this.apiClient.setAudioOutput({ volume: utils.toInt(slider.value, output.volume) });
-        } catch (_error) {
-          this._renderErrorState("Service error");
-        }
-      });
-      sliderWrap.appendChild(sliderValue);
-      sliderWrap.appendChild(slider);
-      this._appendTile({
-        icon: "volume_up",
-        title: "Pi speaker volume",
-        trailing: sliderWrap,
-        dense: false,
-      });
-
-      const poll = async () => {
-        if (token !== this._renderToken || this.activeSectionId !== "audio") {
-          return;
-        }
-        if (!global.document.hidden) {
-          try {
-            const o = await this.apiClient.fetchAudioOutput();
-            if (token !== this._renderToken) {
-              return;
-            }
-            speakerValue.textContent = speakerText(o);
-          } catch (_error) {
-            // keep the last text; the next poll tries again
-          }
-        }
-        this._pollTimer = global.setTimeout(poll, 3000);
-      };
-      this._pollTimer = global.setTimeout(poll, 3000);
-    }
-
     async _renderGpsSection(token) {
       this._appendLoadingState();
 
@@ -3018,6 +2751,234 @@
       const ok = await UI.save(r, () => this.apiClient.restartApp(), "Waze is restarting");
       if (b) b.disabled = false;
       if (ok) this._watchApp();
+    }
+
+    // ------------------------------------------------------------------ Sound
+
+    /**
+     * Where Waze's sound plays (GET/POST /api/audioOutput, services/audio/audio.py: this browser, a
+     * speaker connected to the Pi, or both; applied within half a second, no restart), the car's
+     * browser audio (upstream's browser_audio settings), and voice search (js/speech/speech.js,
+     * this browser's, car interface only).
+     */
+    async _soundSection(token) {
+      const api = this.apiClient;
+      const [out, conf] = await Promise.all([api.fetchAudioOutput().catch(() => null), this._fetchSystemConfigurationSafe()]);
+      if (out) this.cache.audio = out;
+      const groups = [];
+
+      if (out) {
+        const or = UI.row({ id: "sound.output", title: "Where Waze's sound plays", stack: true });
+        UI.setControl(
+          or,
+          UI.segmented(this._soundOptions(), out.output, (v) =>
+            UI.save(or, () => api.setAudioOutput({ output: v }), "Saved. It switches within a second").then((ok) => {
+              if (ok) {
+                this.cache.audio = Object.assign({}, out, { output: v });
+                this._renderSidebar();
+                global.setTimeout(() => token === this._renderToken && this._rerender(), 600);
+              }
+              return ok;
+            }),
+            { label: "Where Waze's sound plays" },
+          ),
+        );
+        const waze = [or];
+        if (out.output !== "car") {
+          const sp = UI.row({
+            id: "sound.pispeaker",
+            title: "Pi speaker",
+            more: "A USB speaker or sound card when one is plugged in, otherwise the 3.5 mm jack. Plugging one in or out moves the sound within a second.",
+            control: UI.value(this._speakerText(out)),
+          });
+          const vr = UI.row({
+            id: "sound.pivolume",
+            title: "Pi speaker volume",
+            stack: true,
+            control: UI.slider({
+              min: 0,
+              max: 100,
+              step: 5,
+              value: out.volume,
+              unit: " %",
+              iconLow: "volume_down",
+              label: "Pi speaker volume",
+              onChange: (v) => UI.save(vr, () => api.setAudioOutput({ volume: v })),
+            }),
+          });
+          waze.push(sp, vr);
+          this._speakerPlaying(sp, out);
+          // the Pi output follows plugging in and out: its line is read again every 3 s
+          const poll = async () => {
+            if (token !== this._renderToken) return;
+            if (this._visible()) {
+              try {
+                const o = await api.fetchAudioOutput();
+                if (token !== this._renderToken) return;
+                const v = sp.querySelector(".row-value");
+                if (v) v.textContent = this._speakerText(o);
+                this._speakerPlaying(sp, o);
+              } catch (_e) {
+                // keep the last text; the next round tries again
+              }
+            }
+            this._pollTimer = global.setTimeout(poll, 3000);
+          };
+          this._pollTimer = global.setTimeout(poll, 3000);
+        }
+        groups.push(UI.group("Waze's sound", waze));
+      }
+
+      if (conf) {
+        const onPiOnly = out && out.output === "pi";
+        const enabled = utils.toInt(conf["persist.tesla-android.browser_audio.is_enabled"], 1) === 1;
+        const volume = utils.toInt(conf["persist.tesla-android.browser_audio.volume"], 100);
+        const br = UI.row({
+          id: "sound.browser",
+          title: "Sound in the car's browser",
+          dim: onPiOnly,
+          detail: onPiOnly ? "Off while Waze's sound plays only on the Pi" : null,
+          more: [
+            "Turn it off to use Bluetooth audio from the device instead. Browser audio with the picture needs a lot of Wi-Fi bandwidth.",
+            "No sound in the car? The car's browser sometimes loses its audio; restarting the car's touchscreen brings it back. That is a browser problem, not this device.",
+          ],
+          control: UI.toggle(enabled && !onPiOnly, (on) =>
+            UI.save(br, async () => {
+              await api.setBrowserAudioState(on ? 1 : 0);
+              await api.setBrowserAudioVolume(100);
+              await this._handleSystemConfigurationChanged();
+            }, on ? "On" : "Off").then((ok) => {
+              if (ok) global.setTimeout(() => token === this._renderToken && this._rerender(), 500);
+              return ok;
+            }),
+          "Sound in the car's browser"),
+        });
+        const bv = UI.row({
+          id: "sound.browservolume",
+          title: "Browser volume",
+          stack: true,
+          dim: onPiOnly || !enabled,
+          detail: "Above 100 % boosts quiet prompts",
+          control: UI.slider({
+            min: 0,
+            max: 150,
+            step: 10,
+            value: volume,
+            unit: " %",
+            iconLow: "volume_down",
+            label: "Browser volume",
+            marks: [{ at: 100, label: "100" }],
+            onChange: (v) =>
+              UI.save(bv, async () => {
+                await api.setBrowserAudioState(1);
+                await api.setBrowserAudioVolume(v);
+                await this._handleSystemConfigurationChanged();
+              }),
+          }),
+        });
+        groups.push(UI.group("Car's browser", [br, bv]));
+      }
+
+      if (this._ifaceNow() === "car") {
+        const voice = this._voiceRows(token);
+        if (voice.length) groups.push(UI.group("Voice", voice));
+      }
+      if (!groups.length) throw new Error("no answer");
+      return groups;
+    }
+
+    _voiceOn() {
+      const s = global.TLSpeech;
+      return Boolean(s && s.supported() && s.enabled());
+    }
+
+    _speakerText(o) {
+      if (!o.running) return "The sound service is not running";
+      const sp = o.speaker;
+      if (!sp) return "Nothing connected";
+      if (sp.kind === "jack") return "3.5 mm jack";
+      const kind = { usb: "USB", other: "sound card" }[sp.kind] || "";
+      return (sp.description || sp.name || "Speaker") + (kind ? " (" + kind + ")" : "");
+    }
+
+    _speakerPlaying(r, o) {
+      if (o.running && o.speaker) UI.status(r).info(o.playing ? "Playing now" : "Quiet right now");
+      else UI.status(r).clear();
+    }
+
+    /**
+     * Voice search (js/speech/speech.js): this browser's microphone and speech recognition, for the
+     * car interface's search. Off by default, per browser: a Tesla's browser has none, and the car's
+     * own keyboard dictates through its microphone. Language and test only while it is on.
+     */
+    _voiceRows(token) {
+      const speech = global.TLSpeech;
+      if (!speech) return [];
+      const teslaNote = "Does not work in a Tesla's browser: use the microphone on the car's keyboard";
+      if (!speech.supported()) {
+        return [UI.row({ id: "sound.voicebutton", title: "Voice search button", detail: teslaNote, control: UI.value("Not in this browser") })];
+      }
+      const vb = UI.row({
+        id: "sound.voicebutton",
+        title: "Voice search button",
+        detail: teslaNote,
+        more: "A microphone button in the car interface's search, using this browser's own speech recognition.",
+        control: UI.toggle(speech.enabled(), (on) => {
+          speech.setEnabled(on);
+          global.setTimeout(() => token === this._renderToken && this._rerender(), 150);
+          return true;
+        }, "Voice search button"),
+      });
+      if (!speech.enabled()) return [vb];
+      const vl = UI.row({
+        id: "sound.voicelang",
+        title: "Voice search language",
+        control: UI.segmented(speech.LANGUAGES.map((l) => ({ value: l.value, label: l.label })), speech.language(), (v) => {
+          speech.setLanguage(v);
+          UI.status(vl).ok("Saved in this browser");
+          return true;
+        }),
+      });
+      const mt = UI.row({ id: "sound.mictest", title: "Test the microphone" });
+      const test = UI.button("Test", null, null, "mic");
+      let session = null;
+      const idle = () => {
+        session = null;
+        test.replaceChildren(icon("mic"), h("span", null, "Test"));
+      };
+      const why = {
+        "no-match": "Nothing recognised. Try again a little louder.",
+        "no-speech": "No speech heard. Is the microphone on?",
+        "not-allowed": "The microphone is blocked: allow it for this page in the browser.",
+        "service-not-allowed": "This browser does not offer speech recognition to pages.",
+        "audio-capture": "No microphone found.",
+        network: "Speech recognition could not reach its service (it needs the internet).",
+        "language-not-supported": "This browser cannot recognise the chosen language.",
+      };
+      test.addEventListener("click", () => {
+        const st = UI.status(mt);
+        if (session) {
+          session.stop();
+          return;
+        }
+        test.replaceChildren(icon("stop"), h("span", null, "Stop"));
+        st.info("Listening… say a place");
+        session = speech.listen({
+          partial: true,
+          onPartial: (texts) => st.info("Heard: " + (texts[0] || "")),
+          onResult: (texts) => {
+            idle();
+            st.ok("Heard: " + texts[0], true);
+          },
+          onError: (error) => {
+            idle();
+            if (error === "aborted") st.clear();
+            else st.err(why[error] || "Speech recognition failed (" + error + ").");
+          },
+        });
+      });
+      UI.setControl(mt, test);
+      return [vb, vl, mt];
     }
 
     _soundOptions() {
