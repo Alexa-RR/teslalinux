@@ -109,6 +109,127 @@ public class GfxActivity extends Activity {
 	RtlView rtlChild;
 	LinearLayout rtlRow;
 	View rowA, rowB, padded;
+	/* text alignment rows: {view, the side its text must be drawn on} */
+	final java.util.ArrayList<Object[]> alignRows = new java.util.ArrayList<>();
+
+	/** a full-width row of black text on white, whose text must end up on SIDE ("left"/"right") */
+	android.widget.TextView alignRow(LinearLayout parent, String text, String side) {
+		android.widget.TextView t = new android.widget.TextView(this);
+		t.setText(text);
+		t.setTextColor(0xFF000000);
+		t.setBackgroundColor(0xFFFFFFFF);
+		t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 18);
+		parent.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 26));
+		alignRows.add(new Object[] {t, side});
+		return t;
+	}
+
+	/* the built-in on-screen keyboard as the IME inset (WindowInsets.Type.ime()), adjustResize, and
+	 * the WindowInsetsAnimation callbacks; then "GFXCHECK done" (the keyboard is hidden again) */
+	final StringBuilder imeCalls = new StringBuilder();
+	int imeProgress;
+	float imeLastFraction;
+
+	void imeChecks(final LinearLayout root) {
+		final android.view.inputmethod.InputMethodManager imm = (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+		final android.widget.EditText et = new android.widget.EditText(this);
+		root.addView(et, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 40));
+		getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+		final View decor = getWindow().getDecorView();
+		/* the animations reach the app's views when the decor does not fit: setDecorFitsSystemWindows(false)
+		 * before the first animation (AOSP: the fitting content view stops their dispatch for good) */
+		getWindow().setDecorFitsSystemWindows(false);
+		root.post(() -> {
+			check("before: no IME inset", decor.getRootWindowInsets() != null && decor.getRootWindowInsets().getInsets(android.view.WindowInsets.Type.ime()).bottom == 0
+			      && !decor.getRootWindowInsets().isVisible(android.view.WindowInsets.Type.ime()), "");
+			et.requestFocus();
+			root.setWindowInsetsAnimationCallback(new android.view.WindowInsetsAnimation.Callback(android.view.WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP) {
+				@Override
+				public void onPrepare(android.view.WindowInsetsAnimation animation) {
+					imeCalls.append("prepare:").append(animation.getTypeMask() == android.view.WindowInsets.Type.ime()).append(' ');
+				}
+
+				@Override
+				public android.view.WindowInsetsAnimation.Bounds onStart(android.view.WindowInsetsAnimation animation, android.view.WindowInsetsAnimation.Bounds bounds) {
+					imeCalls.append("start:").append(bounds.getUpperBound().bottom > 0).append(' ');
+					return bounds;
+				}
+
+				@Override
+				public android.view.WindowInsets onProgress(android.view.WindowInsets insets, java.util.List<android.view.WindowInsetsAnimation> running) {
+					imeProgress++;
+					imeLastFraction = running.get(0).getFraction();
+					return insets;
+				}
+
+				@Override
+				public void onEnd(android.view.WindowInsetsAnimation animation) {
+					imeCalls.append("end ");
+				}
+			});
+			root.postDelayed(() -> {
+				imm.showSoftInput(et, 0);
+				android.view.WindowInsets in = decor.getRootWindowInsets();
+				final int imeBottom = in.getInsets(android.view.WindowInsets.Type.ime()).bottom;
+				check("the on-screen keyboard is the IME inset, visible", imeBottom > 100 && in.isVisible(android.view.WindowInsets.Type.ime()), "" + imeBottom);
+				check("decorFitsSystemWindows(false): no resize", decor.getPaddingBottom() == 0, "" + decor.getPaddingBottom());
+				root.postDelayed(() -> {
+					check("WindowInsetsAnimation: prepare, start (ime, bounds), frames to fraction 1, end", imeCalls.toString().startsWith("prepare:true start:true ")
+					      && imeCalls.toString().contains("end") && imeProgress > 2 && imeLastFraction == 1f, imeCalls + " frames " + imeProgress + " last " + imeLastFraction);
+					imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
+					check("hidden: no IME inset", decor.getRootWindowInsets().getInsets(android.view.WindowInsets.Type.ime()).bottom == 0, "");
+					root.setWindowInsetsAnimationCallback(null);
+					/* adjustResize with the decor fitting: the content shrinks above the keyboard */
+					getWindow().setDecorFitsSystemWindows(true);
+					root.postDelayed(() -> {
+						imm.showSoftInput(et, 0);
+						android.view.WindowInsets r = decor.getRootWindowInsets();
+						int b = r.getInsets(android.view.WindowInsets.Type.ime()).bottom;
+						check("adjustResize: the system window insets include it", r.getSystemWindowInsetBottom() == b && b > 0, r.getSystemWindowInsetBottom() + " vs " + b);
+						check("adjustResize: the decor fits the content above the keyboard", decor.getPaddingBottom() == b, decor.getPaddingBottom() + " vs " + b);
+						imm.hideSoftInputFromWindow(et.getWindowToken(), 0);
+						check("hidden: the padding goes", decor.getPaddingBottom() == 0, "" + decor.getPaddingBottom());
+						root.postDelayed(() -> dialogFocusChecks(root, et), 500);
+					}, 200);
+				}, 700);
+			}, 200);
+		});
+	}
+
+	/* each window keeps its own focused view (AOSP: focus is per window; the focused window is the
+	 * topmost that takes focus) */
+	void dialogFocusChecks(final LinearLayout root, final android.widget.EditText et) {
+		et.requestFocus();
+		final android.app.Dialog d = new android.app.Dialog(this);
+		final android.widget.EditText det = new android.widget.EditText(this);
+		d.setContentView(det);
+		d.show();
+		root.postDelayed(() -> {
+			boolean took = det.requestFocus();
+			check("a dialog's view takes focus in its window; the activity's keeps its own", det.isFocused() && et.isFocused() && d.getWindow().getDecorView().findFocus() == det
+			      && getWindow().getDecorView().findFocus() == et, det.isFocused() + " " + et.isFocused() + " took " + took + " attached " + det.isAttachedToWindow()
+			      + " focusable " + det.isFocusable() + "/" + det.isFocusableInTouchMode() + " touch " + det.isInTouchMode() + " et " + et.isFocusable() + "/" + et.isFocusableInTouchMode()
+			      + " shown " + det.isShown());
+			check("the dialog's window has the window focus, the activity's not", det.hasWindowFocus() && !et.hasWindowFocus(), det.hasWindowFocus() + " " + et.hasWindowFocus());
+			d.dismiss();
+			root.postDelayed(() -> {
+				check("after the dialog: the activity's window has the focus again, with its focused view", et.hasWindowFocus() && et.isFocused(), et.hasWindowFocus() + " " + et.isFocused());
+				root.removeView(et);
+				Log.w(TAG, "GFXCHECK done");
+			}, 300);
+		}, 300);
+	}
+
+	/** GFXINK x0 y0 x1 y1 side name: the dark (text) pixels of the rectangle are on that half */
+	void logInk() {
+		for (Object[] row : alignRows) {
+			android.widget.TextView t = (android.widget.TextView)row[0];
+			int[] loc = new int[2];
+			t.getLocationInWindow(loc);
+			Log.w(TAG, String.format("GFXINK %d %d %d %d %s text alignment: \"%s\" gravity 0x%x textAlignment %d textDirection %d", loc[0], loc[1] + 2,
+						 loc[0] + t.getWidth() - 1, loc[1] + t.getHeight() - 3, row[1], t.getText(), t.getGravity(), t.getTextAlignment(), t.getTextDirection()));
+		}
+	}
 
 	void stateChecks() {
 		/* selection: the flag, the drawable state, the children of a group */
@@ -319,6 +440,16 @@ public class GfxActivity extends Activity {
 		rtlChild = new RtlView(this);
 		rtlRow.addView(rtlChild, new LinearLayout.LayoutParams(20, 40));
 		root.addView(rtlRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 40));
+		/* AOSP's text alignment in an LTR window: gravity START is the paragraph's start (the text
+		 * direction heuristic, FIRST_STRONG by default: a Hebrew paragraph is RTL) */
+		alignRow(root, "שלום עולם", "right");
+		alignRow(root, "Hello world", "left");
+		alignRow(root, "שלום עולם", "left").setTextDirection(View.TEXT_DIRECTION_LTR);
+		alignRow(root, "שלום עולם", "left").setGravity(android.view.Gravity.LEFT);
+		alignRow(root, "שלום עולם", "left").setTextAlignment(View.TEXT_ALIGNMENT_VIEW_START);
+		alignRow(root, "שלום עולם", "left").setGravity(android.view.Gravity.END);
+		alignRow(root, "Hello world", "right").setGravity(android.view.Gravity.END);
+		alignRow(root, "123 שלום", "right");
 		setContentView(root);
 		try {
 			stateChecks();
@@ -344,7 +475,10 @@ public class GfxActivity extends Activity {
 			      "a " + rowA.getLeft() + "-" + rowA.getRight() + " b " + rowB.getLeft() + " row " + rtlRow.getWidth());
 			check("onRtlPropertiesChanged told the child RTL", rtlChild.rtlCalls > 0 && rtlChild.lastDirection == View.LAYOUT_DIRECTION_RTL, rtlChild.rtlCalls + " " + rtlChild.lastDirection);
 			check("the window's root resolves LTR from an English configuration", root.getLayoutDirection() == View.LAYOUT_DIRECTION_LTR && root.isLayoutDirectionResolved(), "" + root.getLayoutDirection());
-			Log.w(TAG, "GFXCHECK done");
+			android.widget.TextView he = (android.widget.TextView)alignRows.get(0)[0];
+			check("a Hebrew TextView's text direction heuristic finds RTL", he.getTextDirectionHeuristic().isRtl(he.getText(), 0, he.getText().length()), null);
+			logInk();
+			imeChecks(root);
 		}, 1000);
 	}
 }

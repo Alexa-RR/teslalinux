@@ -256,6 +256,30 @@ public class GlTest extends Activity implements SurfaceHolder.Callback {
 		EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_WIDTH, wh, 0);
 		EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_HEIGHT, wh, 1);
 		check("of the default buffer size (64x32)", wh[0] == 64 && wh[1] == 32, wh[0] + "x" + wh[1]);
+		/* every attribute EGL defines for a window surface (EGL 1.5 3.5.6) */
+		int[] q = new int[1], cid = new int[1];
+		EGL14.eglGetConfigAttrib(dpy, cfg, EGL14.EGL_CONFIG_ID, cid, 0);
+		check("eglQuerySurface EGL_CONFIG_ID: the surface's config", EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_CONFIG_ID, q, 0) && q[0] == cid[0], q[0] + " vs " + cid[0]);
+		check("EGL_RENDER_BUFFER: EGL_BACK_BUFFER", EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_RENDER_BUFFER, q, 0) && q[0] == EGL14.EGL_BACK_BUFFER, Integer.toHexString(q[0]));
+		check("EGL_SWAP_BEHAVIOR: EGL_BUFFER_DESTROYED", EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_SWAP_BEHAVIOR, q, 0) && q[0] == EGL14.EGL_BUFFER_DESTROYED, Integer.toHexString(q[0]));
+		check("EGL_HORIZONTAL_RESOLUTION: EGL_UNKNOWN", EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_HORIZONTAL_RESOLUTION, q, 0) && q[0] == -1 /* EGL_UNKNOWN */, "" + q[0]);
+		check("EGL_GL_COLORSPACE: linear", EGL14.eglQuerySurface(dpy, ws, 0x309D, q, 0) && q[0] == 0x308A, Integer.toHexString(q[0]));
+		check("EGL_MULTISAMPLE_RESOLVE: the default", EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_MULTISAMPLE_RESOLVE, q, 0) && q[0] == EGL14.EGL_MULTISAMPLE_RESOLVE_DEFAULT, Integer.toHexString(q[0]));
+		q[0] = 1234;
+		check("EGL_TEXTURE_FORMAT of a window surface: not modified", EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_TEXTURE_FORMAT, q, 0) && q[0] == 1234, "" + q[0]);
+		check("EGL_BUFFER_AGE_EXT before a frame: 0", EGL14.eglQuerySurface(dpy, ws, 0x313D, q, 0) && q[0] == 0, "" + q[0]);
+		boolean badAttr = !EGL14.eglQuerySurface(dpy, ws, 0x7fff, q, 0);
+		int err = EGL14.eglGetError();
+		check("an unknown attribute: EGL_BAD_ATTRIBUTE", badAttr && err == EGL14.EGL_BAD_ATTRIBUTE, Integer.toHexString(err));
+		int[] stype = new int[1];
+		EGL14.eglGetConfigAttrib(dpy, cfg, EGL14.EGL_SURFACE_TYPE, stype, 0);
+		boolean preservable = (stype[0] & EGL14.EGL_SWAP_BEHAVIOR_PRESERVED_BIT) != 0;
+		boolean set = EGL14.eglSurfaceAttrib(dpy, ws, EGL14.EGL_SWAP_BEHAVIOR, EGL14.EGL_BUFFER_PRESERVED);
+		err = EGL14.eglGetError();
+		EGL14.eglQuerySurface(dpy, ws, EGL14.EGL_SWAP_BEHAVIOR, q, 0);
+		check("eglSurfaceAttrib(EGL_BUFFER_PRESERVED): as the config allows", preservable ? (set && q[0] == EGL14.EGL_BUFFER_PRESERVED) : (!set && err == EGL14.EGL_BAD_MATCH),
+		      preservable + " " + set + " " + Integer.toHexString(err) + " " + Integer.toHexString(q[0]));
+		EGL14.eglSurfaceAttrib(dpy, ws, EGL14.EGL_SWAP_BEHAVIOR, EGL14.EGL_BUFFER_DESTROYED);
 		check("a second producer cannot connect while one is", noSurface(EGL14.eglCreateWindowSurface(dpy, cfg, new Surface(st), new int[] {EGL14.EGL_NONE}, 0)), "");
 
 		check("the producer's frame swaps", producer.frame(1, 0, 0, 123456789L), "");

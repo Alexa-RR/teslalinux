@@ -14,6 +14,22 @@ def main():
     cases = OrderedDict()
     with open(probes, encoding="utf-8", errors="replace") as f:
         for line in f:
+            if line.startswith("GFXINK "):
+                # GFXINK x0 y0 x1 y1 left|right name: the dark pixels of the rectangle (text) lie
+                # wholly in that half of it
+                p = line.strip().split(" ", 6)
+                x0, y0, x1, y1, side, name = int(p[1]), int(p[2]), int(p[3]), int(p[4]), p[5], p[6]
+                xs = [x for x in range(max(x0, 0), min(x1, img.width - 1) + 1)
+                      for y in range(max(y0, 0), min(y1, img.height - 1) + 1, 2)
+                      if sum(img.getpixel((x, y))) < 3 * 110]
+                mid = (x0 + x1) / 2
+                if not xs:
+                    cases[name] = "no text pixels in %d,%d-%d,%d" % (x0, y0, x1, y1)
+                elif (side == "right" and min(xs) > mid) or (side == "left" and max(xs) < mid):
+                    cases[name] = True
+                else:
+                    cases[name] = "text at x %d-%d, want the %s half of %d-%d" % (min(xs), max(xs), side, x0, x1)
+                continue
             parts = line.strip().split(" ", 5)
             if len(parts) < 6 or parts[0] != "GFXPROBE":
                 continue

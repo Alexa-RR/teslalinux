@@ -64,7 +64,7 @@ EOF
 	passed=$((passed + ${np:-0}))
 	total=$((total + nt))
 	sudo grep -a "GFXCASE\|FATAL\|Exception" "$log" | head -10 | sed "s/^/INFO [$renderer] /"
-	sudo grep -ao "GFXPROBE .*" "$log" > "$work/probes-$renderer.txt"
+	sudo grep -ao "GFXPROBE .*\\|GFXINK .*" "$log" > "$work/probes-$renderer.txt"
 	out=$(python3 "$HERE/check-shot.py" "$shot" "$work/probes-$renderer.txt" "$renderer")
 	echo "$out" | grep -v "^COUNT"
 	read -r _ p t <<< "$(echo "$out" | grep "^COUNT")"

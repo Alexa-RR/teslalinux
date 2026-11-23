@@ -435,6 +435,33 @@ public class GlesTest extends Activity {
 		GLES32.glDebugMessageInsert(GLES32.GL_DEBUG_SOURCE_APPLICATION, GLES32.GL_DEBUG_TYPE_MARKER, id, GLES32.GL_DEBUG_SEVERITY_NOTIFICATION, -1, message);
 	}
 
+	/* DebugProcKHRs set on the current context that nothing else refers to, each of a class of its
+	 * own: ART's instance count (VMDebug.countInstancesOfClass, after a full collection) tells
+	 * whether the runtime still holds one */
+	static Class<?> setReplacedCallback() {
+		GLES31Ext.DebugProcKHR proc = new GLES31Ext.DebugProcKHR() {
+			public void onMessage(int source, int type, int id, int severity, String message) {
+			}
+		};
+		GLES31Ext.glDebugMessageCallbackKHR(proc);
+		return proc.getClass();
+	}
+
+	static Class<?> setDroppedCallback() {
+		GLES31Ext.DebugProcKHR proc = new GLES31Ext.DebugProcKHR() {
+			public void onMessage(int source, int type, int id, int severity, String message) {
+			}
+		};
+		GLES31Ext.glDebugMessageCallbackKHR(proc);
+		return proc.getClass();
+	}
+
+	static long liveInstances(Class<?> c) {
+		System.gc();
+		System.runFinalization();
+		return dalvik.system.VMDebug.countInstancesOfClass(c, false);
+	}
+
 	static void debugTests() {
 		GLES20.glEnable(GLES32.GL_DEBUG_OUTPUT);
 		GLES20.glEnable(GLES32.GL_DEBUG_OUTPUT_SYNCHRONOUS);
@@ -736,6 +763,23 @@ public class GlesTest extends Activity {
 			check("the ES 3.2 context still renders after the sweep", near(px, 0, 255, 255, 255), Arrays.toString(px));
 		}
 		EGL14.eglMakeCurrent(dpy, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
+
+		/* a KHR_debug callback still set when its context is destroyed is let go with the context */
+		EGLSurface sd = makeCurrent(0x40, new int[] {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE});
+		if (sd != null) {
+			EGLContext dctx = EGL14.eglGetCurrentContext();
+			/* control: a callback replaced on a live context is let go too */
+			Class<?> replaced = setReplacedCallback();
+			long heldReplaced = liveInstances(replaced);
+			GLES31Ext.glDebugMessageCallbackKHR(null);
+			check("a replaced KHR_debug callback is let go", heldReplaced == 1 && liveInstances(replaced) == 0, heldReplaced + " " + liveInstances(replaced));
+			Class<?> dropped = setDroppedCallback();
+			long held = liveInstances(dropped);
+			EGL14.eglMakeCurrent(dpy, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
+			EGL14.eglDestroySurface(dpy, sd);
+			EGL14.eglDestroyContext(dpy, dctx);
+			check("a KHR_debug callback is let go when its context is destroyed", held == 1 && liveInstances(dropped) == 0, held + " " + liveInstances(dropped));
+		}
 
 		/* OpenGL ES 1.1 (EGL_OPENGL_ES_BIT) */
 		EGLSurface s1 = makeCurrent(EGL14.EGL_OPENGL_ES_BIT, new int[] {EGL14.EGL_CONTEXT_CLIENT_VERSION, 1, EGL14.EGL_NONE});

@@ -631,10 +631,42 @@ public class GfxTest {
 		check("GLUtils.getEGLErrorString", "EGL_BAD_SURFACE".equals(android.opengl.GLUtils.getEGLErrorString(0x300D)), android.opengl.GLUtils.getEGLErrorString(0x300D));
 	}
 
+	/* a bitmap read while a canvas on it has a clip open, and a copy drawn on */
+	static void bitmapReads() {
+		android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(10, 10, android.graphics.Bitmap.Config.ARGB_8888);
+		android.graphics.Canvas c = new android.graphics.Canvas(bmp);
+		c.drawColor(0xFFFF0000);
+		c.save();
+		c.translate(1, 1);
+		c.clipRect(0, 0, 4, 4);
+		int mid = bmp.getPixel(0, 0); // read with the clip open
+		c.drawColor(0xFF0000FF);
+		c.restore();
+		c.drawRect(8, 8, 10, 10, paint(0xFF00FF00));
+		check("a read with a clip open sees the drawing so far", mid == 0xFFFF0000, Integer.toHexString(mid));
+		check("... the drawing made before the clip stays", bmp.getPixel(9, 0) == 0xFFFF0000 && bmp.getPixel(0, 9) == 0xFFFF0000, Integer.toHexString(bmp.getPixel(9, 0)));
+		check("... the clip and transform still apply after the read", bmp.getPixel(2, 2) == 0xFF0000FF && bmp.getPixel(0, 0) == 0xFFFF0000 && bmp.getPixel(6, 6) == 0xFFFF0000,
+		      Integer.toHexString(bmp.getPixel(2, 2)) + " " + Integer.toHexString(bmp.getPixel(0, 0)) + " " + Integer.toHexString(bmp.getPixel(6, 6)));
+		check("... and the restore ends them", bmp.getPixel(9, 9) == 0xFF00FF00, Integer.toHexString(bmp.getPixel(9, 9)));
+		android.graphics.Bitmap src = android.graphics.Bitmap.createBitmap(10, 10, android.graphics.Bitmap.Config.ARGB_8888);
+		src.eraseColor(0xFFFF0000);
+		android.graphics.Bitmap copy = src.copy(android.graphics.Bitmap.Config.ARGB_8888, true);
+		new android.graphics.Canvas(copy).drawRect(0, 0, 5, 5, paint(0xFF0000FF));
+		check("drawing on a copy keeps the copied pixels", copy.getPixel(9, 9) == 0xFFFF0000 && copy.getPixel(1, 1) == 0xFF0000FF,
+		      Integer.toHexString(copy.getPixel(9, 9)) + " " + Integer.toHexString(copy.getPixel(1, 1)));
+		check("... and leaves the source alone", src.getPixel(1, 1) == 0xFFFF0000, Integer.toHexString(src.getPixel(1, 1)));
+		android.graphics.Bitmap drawn = android.graphics.Bitmap.createBitmap(10, 10, android.graphics.Bitmap.Config.ARGB_8888);
+		new android.graphics.Canvas(drawn).drawColor(0xFF00FF00);
+		android.graphics.Bitmap copy2 = drawn.copy(android.graphics.Bitmap.Config.ARGB_8888, true);
+		new android.graphics.Canvas(copy2).drawRect(0, 0, 5, 5, paint(0xFF0000FF));
+		check("a copy of a drawn bitmap keeps its drawing too", copy2.getPixel(9, 9) == 0xFF00FF00, Integer.toHexString(copy2.getPixel(9, 9)));
+	}
+
 	public static void main(String[] args) {
 		System.loadLibrary("translation_layer_main"); /* the executable loads api-impl's natives in an app */
 		for (Runnable r : new Runnable[] { GfxTest::fillPath, GfxTest::pathBounds, GfxTest::matrixCopy, GfxTest::strokeWidth, GfxTest::clipBounds, GfxTest::ninePatch,
-		                                   GfxTest::pixels, GfxTest::legacyClipOps, GfxTest::matrixOps, GfxTest::approximate, GfxTest::animatorValues, GfxTest::glUtils, GfxTest::runCases }) {
+		                                   GfxTest::pixels, GfxTest::legacyClipOps, GfxTest::matrixOps, GfxTest::approximate, GfxTest::animatorValues, GfxTest::glUtils,
+		                                   GfxTest::bitmapReads, GfxTest::runCases }) {
 			try {
 				r.run();
 			} catch (Throwable t) {
