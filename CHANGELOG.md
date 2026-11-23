@@ -37,6 +37,18 @@ until that section becomes the next version's.
   the map says when it did.
 - Your PalGate phone number and link stay on the device, readable by its service only.
 
+### Waze keeps your position in tunnels with beacons
+
+*Both interfaces. Uses the Pi's own Bluetooth (or a USB Bluetooth adapter).*
+
+- Tunnels such as Boston's I-93, New York's Lincoln, Holland, Queens-Midtown and
+  Brooklyn-Battery or Chicago's Lower Wacker Drive have Waze Beacons: small Bluetooth transmitters
+  that tell Waze where the car is when GPS cannot reach it. Waze now hears them, as on a phone,
+  so the car's arrow keeps moving through the tunnel.
+- Bluetooth is turned on for this; it does not make the device start any later. Waze only
+  listens near tunnels that have beacons, and Waze may only listen: it cannot pair with or connect
+  to anything.
+
 ### New settings and sound buttons on the map
 
 *Both interfaces, both looks, day and night.*
@@ -176,9 +188,20 @@ read; they now keep their own shape and are a little taller than the text.
   published vectors), a stdlib QR encoder, per-gate auto-open from the GPS feed, an events long
   poll; tests against a local mock of the API (`services/gates/test/`); `docs/GATES.md`. Needs
   `python3-cryptography` (`py3-cryptography` on Alpine), now in the install package lists.
+- Bluetooth for the apps (`docs/BEACONS.md`): the Pi 4 keeps its controller (no `disable-bt`),
+  `bluez` is installed and `bluetooth.service` enabled, a saved rfkill soft block is lifted, and
+  `/etc/dbus-1/system.d/teslalinux-bluetooth.conf` allows the `tesla` user only BlueZ's discovery
+  calls. Measured on a Pi 4: hotspot and car page no later than without Bluetooth.
+- `tools/debian/atl-tests/bluetooth/`: BluetoothTest against a mock bluetoothd on a private bus
+  (`run.sh`, 80 checks), `run.sh --live` on a real adapter, and `eddystone-adv.sh`, which makes a
+  BlueZ host advertise Waze-format Eddystone UID and TLM frames.
 
 In ATL (the fork):
 
+- Bluetooth LE scanning as on Android, over BlueZ's D-Bus API (fork track bt): the adapter and
+  its state broadcasts, `BluetoothLeScanner` with filters, callback types, batching,
+  opportunistic scans and AOSP's error, permission and location rules, the legacy `startLeScan`,
+  remote devices from BlueZ; no Bluetooth at all without BlueZ or with `ATL_BLUETOOTH=off`.
 - OpenGL apps get the whole Android GL API: every `android.opengl.GLES10`-`GLES32` call and the
   GL10/GL11 interface of GLSurfaceView renderers (AOSP's own bindings), with KHR_debug's message
   callback and log. Apps can draw into a `SurfaceTexture` with a `Canvas` (`Surface.lockCanvas`),

@@ -29,7 +29,8 @@ hdmi_mode=16
 # Peripherals we don't use: skip their probing.
 camera_auto_detect=0
 display_auto_detect=0
-dtoverlay=disable-bt
+# Bluetooth stays on: Waze's tunnel beacons (docs/BEACONS.md). The controller's firmware loads in
+# the kernel, off the boot's critical path (no measurable cost to the hotspot or the car page).
 # The 3.5 mm jack: a speaker for the app's sound (Settings > Audio, services/audio/audio.py).
 # Its card is probed by the already loaded snd_bcm2835 module: nothing measurable at boot.
 dtparam=audio=on

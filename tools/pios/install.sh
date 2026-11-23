@@ -75,10 +75,11 @@ APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.servic
 # runtime packages next to the dist's MANIFEST list (tools/debian/carstack.sh, host/phase1-pios/provision.sh)
 # (bind9-dnsutils: delv/dig, teslalinux-tls reads the certificate's DNS version pointer with them;
 # uhubctl: teslalinux-uplink's last LTE stick recovery step, a USB power cycle;
+# bluez: bluetoothd, the apps' Bluetooth LE scanning for Waze's tunnel beacons;
 # python3-cryptography: AES for PalGate's request tokens, services/gates/palgate.py)
 RUNTIME_PKGS=(nginx python3 python3-websockets python3-cryptography openssl curl ca-certificates bind9-dnsutils rsync ffmpeg dbus
   pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd
-  hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data uhubctl iw rfkill iproute2
+  hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data uhubctl iw rfkill iproute2 bluez
   libgl1-mesa-dri libegl-mesa0 libgbm1 libgles2 v4l-utils webp-pixbuf-loader
   fonts-roboto fonts-noto-core i2c-tools util-linux-extra unzip sudo zstd xz-utils)
 
@@ -512,6 +513,9 @@ step_files() {
     put_file "$P/host/phase1-pios/etc/systemd/$f" "/etc/systemd/system/$f" 0644
   done
   put_file "$P/host/phase1-pios/etc/NetworkManager/90-teslalinux-tls" /etc/NetworkManager/dispatcher.d/90-teslalinux-tls 0755
+  # the apps may scan for Bluetooth LE advertisements through bluetoothd, nothing else (the file says why)
+  put_file "$P/host/phase1-pios/etc/dbus-1/teslalinux-bluetooth.conf" /etc/dbus-1/system.d/teslalinux-bluetooth.conf 0644
+  systemctl reload dbus.service >/dev/null 2>&1 || true
   for f in "$P"/host/phase1-pios/etc/usb_modeswitch.d/*; do
     put_file "$f" "/etc/usb_modeswitch.d/$(basename "$f")" 0644
   done
@@ -966,10 +970,11 @@ step_prewarm() {
 
 step_trim() {
   # off the boot path; disabled, not stopped (this session may depend on some of them until the reboot)
+  # (bluetooth.service and hciuart.service stay: Waze's tunnel beacons need bluetoothd, step_enable)
   local u units=()
   for u in NetworkManager-wait-online.service systemd-networkd-wait-online.service apt-daily.timer apt-daily-upgrade.timer \
            man-db.timer e2scrub_all.timer rpi-eeprom-update.service raspi-config.service avahi-daemon.service avahi-daemon.socket \
-           bluetooth.service hciuart.service triggerhappy.service triggerhappy.socket cups.service cups.socket serial-getty@ttyS0.service; do
+           triggerhappy.service triggerhappy.socket cups.service cups.socket serial-getty@ttyS0.service; do
     [[ "$(unit_state "$u")" == enabled ]] && units+=("$u")
   done
   [[ ${#units[@]} -eq 0 ]] || unit_set disable "${units[@]}"
@@ -1055,7 +1060,8 @@ camera_auto_detect=0
 display_auto_detect=0
 # the 3.5 mm jack (a speaker for the app's sound, Settings > Audio); its card adds nothing measurable at boot
 dtparam=audio=on
-dtoverlay=disable-bt
+# Bluetooth stays on (no disable-bt): Waze's tunnel beacons (docs/BEACONS.md). Its firmware loads in
+# the kernel off the critical path; hotspot and car page came up no later than without it (Pi 4, Nov 23)
 dtparam=i2c_arm=on
 enable_uart=0"
   if [[ $rtc == yes ]]; then block+=$'\n# DS3231 RTC on I2C-1 (found at 0x68): TLS works before the uplink sets the clock\ndtoverlay=i2c-rtc,ds3231'; fi
@@ -1092,7 +1098,12 @@ step_enable() {
     ModemManager.service nginx.service systemd-timesyncd.service "${UNITS[@]}"
     teslalinux-appupdate.timer teslalinux-appupdate-boot.service teslalinux-appupdate-health.service)
   [[ $TRIM == 1 ]] && en+=(teslalinux-cpufreq.service)
+  # bluetoothd for the apps' LE scanning (Waze's tunnel beacons); earlier installs disabled it
+  case "$(unit_state bluetooth.service)" in ''|not-found) ;; *) en+=(bluetooth.service) ;; esac
   unit_set enable "${en[@]}"
+  # a soft block (Pi OS images keep one saved for the onboard controller) keeps the adapter off;
+  # systemd-rfkill saves the unblocked state at shutdown
+  rfkill unblock bluetooth >/dev/null 2>&1 || true
   # NetworkManager.service's [Install] has Also=NetworkManager-wait-online.service, so enabling it
   # undoes the trim: network-online.target then waits for NetworkManager (about 14 s on a Pi 4) and
   # dnsmasq (Requires=network-online.target in Debian's unit) and nginx come up only after it

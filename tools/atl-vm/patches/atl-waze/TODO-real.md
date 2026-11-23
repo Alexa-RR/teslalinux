@@ -38,6 +38,17 @@ Real work for later, not dropped. Each is a gap no Waze code path reaches today.
 - The AccessibilityNodeInfo connection (no accessibility service runs here), a per-window
   accessibility node query.
 
+## Bluetooth beyond LE scanning (fork track bt, Nov 23)
+LE scanning is real (BlueZ over D-Bus: `TlBluez`, `BluetoothLeScanner`). Not implemented, each
+answering as AOSP does when the stack refuses: classic (BR/EDR) discovery (`startDiscovery` false,
+no `ACTION_FOUND`), pairing (`createBond`, `fetchUuidsWithSdp` false), profiles (`getProfileProxy`
+false), GATT client/server (`connectGatt` missing, no GATT devices), LE advertising (no
+`getBluetoothLeAdvertiser`), RFCOMM/L2CAP sockets. BlueZ has all of them (Device1.Pair/Connect,
+GattManager1, LEAdvertisingManager1, Profile1); the D-Bus policy for the `tesla` user
+(host/phase1-pios/etc/dbus-1/teslalinux-bluetooth.conf) allows only the scan calls, so widen it
+together with an implementation. Also: the scan modes cannot change BlueZ's scan interval/window
+(kernel defaults; needs CAP_NET_ADMIN), and BlueZ hides the PDU type (results report connectable).
+
 ## Placeholders seen in the upstream ATL merge (added 2026-11-11, fix in the fork)
 - Keystore backend: the fork's KeyStoreStorage is kept. Upstream's libsecret natives
   (`android_security_keystore_AndroidKeyStore.c`) are compiled but unused; using them is a decision

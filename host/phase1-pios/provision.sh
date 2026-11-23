@@ -31,7 +31,7 @@ apt-get install -y -q --no-install-recommends \
   modemmanager network-manager usb-modeswitch usb-modeswitch-data uhubctl \
   mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 libgbm1 \
   seatd \
-  v4l-utils i2c-tools rtc-tools webp-pixbuf-loader \
+  v4l-utils i2c-tools rtc-tools webp-pixbuf-loader bluez \
   git curl ca-certificates
 # Packages pulled in only for development that we don't want: none of the desktop stack.
 apt-get autoremove -y -q
@@ -215,7 +215,7 @@ systemctl disable --now \
   NetworkManager-wait-online.service systemd-networkd-wait-online.service \
   apt-daily.timer apt-daily-upgrade.timer man-db.timer fstrim.timer e2scrub_all.timer \
   dphys-swapfile.service rpi-eeprom-update.service raspi-config.service \
-  ModemManager.service avahi-daemon.service avahi-daemon.socket bluetooth.service hciuart.service \
+  ModemManager.service avahi-daemon.service avahi-daemon.socket \
   triggerhappy.service triggerhappy.socket cups.service cups.socket \
   wpa_supplicant.service 2>/dev/null || true
 # (disabled, not masked: NetworkManager still starts wpa_supplicant through D-Bus activation when the
@@ -224,6 +224,10 @@ systemctl disable --now \
 systemctl enable systemd-timesyncd.service 2>/dev/null || true
 # ModemManager still starts, but only pulled in late by our ordering drop-in:
 systemctl enable ModemManager.service
+# bluetoothd stays: the apps scan for Waze's tunnel beacons (docs/BEACONS.md); tesla may only scan
+install -m 0644 "$HERE/etc/dbus-1/teslalinux-bluetooth.conf" /etc/dbus-1/system.d/teslalinux-bluetooth.conf
+systemctl enable bluetooth.service 2>/dev/null || true
+rfkill unblock bluetooth 2>/dev/null || true
 # Serial getty + the SSH keygen oneshot are slow; keep ssh itself.
 systemctl disable serial-getty@ttyS0.service getty@tty1.service 2>/dev/null || true
 systemctl mask systemd-random-seed.service
