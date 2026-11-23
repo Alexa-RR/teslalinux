@@ -99,6 +99,8 @@
       },
       onFrameReceived: () => {
         lastDisplayFrameTimestamp = Date.now();
+        // teslalinux: the app's start overlay goes at the first frame after the app's first picture
+        if (global.TLAppState) global.TLAppState.onDisplayFrame();
         if (resizeLoadingTimerId !== null) {
           global.clearTimeout(resizeLoadingTimerId);
           resizeLoadingTimerId = null;

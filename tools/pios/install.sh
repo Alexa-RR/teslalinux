@@ -499,6 +499,8 @@ step_files() {
   install -m 0644 "$P/services/gates/gates.py" "$P/services/gates/palgate.py" "$P/services/gates/tlqr.py" "$LIB/"
   install -d -m 0700 -o tesla -g tesla "$STATE_DIR/gates"
   install -m 0644 "$P/tools/atl-vm/mk-android-tzdata.py" "$LIB/mk-android-tzdata.py"
+  # the app's log on its way to the journal, and its start for the car page (GET /api/appState)
+  install -m 0644 "$P/host/teslalinux-app-log-watch.py" "$LIB/app-log-watch.py"
   # the car map's Graphite colours: ATL's file overlay manifest with its verified app versions, and
   # the tool that checks a new version (docs/MAP-COLOURS.md)
   install -d -m 0755 "$LIB/appstyle"

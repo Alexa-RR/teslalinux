@@ -218,6 +218,20 @@ Changes from upstream:
   template, in the app's language. Closing the sheet is back to the settings screen; leaving the
   Waze section or the page (`SettingsController.onHidden`, also from `shell-controller.js`) pops
   the app's screens with `back`, one per answered template, until the map is its screen again.
+  The page tells the car-app host when it opens and closes them and on `pagehide`
+  (`{"type":"appSettings"}`), so the host pops them itself when the page goes without doing so (its
+  socket closed or silent). While the app navigates it offers no settings action (Waze 5.27.5's
+  driving map has search, routes and sound only), and while a question or list is on its map
+  neither: the group says which and opens them by itself once the map offers the action again;
+  during a drive it also offers "End the drive" (`stopNavigation`).
+* The app's start over the display (`js/display/app-state-overlay.js`, new, one `<script defer>`
+  line; its styles at the end of `css/app.css`): while the app is not drawing, a panel in the
+  settings page's look (day or night as that page) says whether the device is preparing its code
+  (ART compiling it after an app or runtime update or a mode change, with the real progress: the
+  compile's CPU time against the last one on this device, `GET /api/appState` `start.compile`),
+  starting it, or restarting it after it stopped, with the start's steps. It follows
+  `/api/appState?wait=SEQ` (a long poll) and goes at the first display frame after the app's first
+  picture (`js/core/app.js` `onFrameReceived`); it never shows when the device cannot be asked.
   Where the app's current screen has no settings action (a question over the map), the group says
   so instead. `test.html?view=settings` draws the `settings*` samples this way.
   "Typing while driving" (Settings > Waze, While driving, while the car interface runs): Off (the

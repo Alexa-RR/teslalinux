@@ -413,6 +413,300 @@ def app_state():
     return {"state": state, "requested": int(requested)}
 
 
+# ---------------------------------------------------------------------------- the app's start (car page overlay)
+# What the car page shows over the display while the app is not drawing yet (js/display/app-state-overlay.js):
+# GET /api/appState adds "start" (below), and ?wait=SEQ holds the reply until it changes (long poll).
+# The pieces:
+#   - the launcher's state file (host/phase1-pios/teslalinux-atl, host/teslalinux-app-log-watch.py): the
+#     app's process, when it started, its first picture and its map;
+#   - ART compiling the app: a dex2oat process for one of the app's files (its APKs, the launcher's
+#     override jars), found in /proc. dex2oat writes its output only at its very end (measured on a Pi 4:
+#     the 262 MB oat of Waze 5.27.5 in the last 15 of 105 s), so its progress is its CPU time against the
+#     CPU time the last complete compile of the same file took on this device (it compiles the same code
+#     with the same threads: the time grows evenly, about 3.3 cores' worth a second on a Pi 4), kept in
+#     COMPILE_TIMES. Without a record (the first compile on this device) there is no estimate.
+#   - the service (systemctl, only around a start or a stop): restarting after the app stopped, stopped.
+APP_STATE_FILE = os.environ.get("TESLALINUX_APP_STATE", "/run/tesla/teslalinux-app-state.json")
+APP_OVERRIDE_DIR = os.environ.get("TESLALINUX_APP_OVERRIDE_DIR", os.path.expanduser("~/.cache/teslalinux/app-overrides"))
+COMPILE_TIMES = os.environ.get("TESLALINUX_COMPILE_TIMES", os.path.expanduser("~/.cache/teslalinux/compile-times.json"))
+APP_UNIT = os.environ.get("TESLALINUX_APP_UNIT", "teslalinux-atl.service")
+APP_STATE_WAIT = 25  # longest a ?wait request is held, seconds
+_CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+
+
+def _boot_time():
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return int(line.split()[1])
+    except OSError:
+        pass
+    return int(time.time() - time.monotonic())
+
+
+def _proc_stat(pid):
+    """(cpu seconds, start time as unix time) of a process, or None when it is gone"""
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            raw = f.read()
+    except OSError:
+        return None
+    rest = raw[raw.rfind(")") + 2:].split()  # the fields after "pid (comm)"; state is rest[0] (field 3)
+    try:
+        cpu = (int(rest[11]) + int(rest[12])) / _CLK_TCK  # utime, stime: fields 14, 15
+        start = _BOOT_TIME + int(rest[19]) / _CLK_TCK     # starttime: field 22
+    except (IndexError, ValueError):
+        return None
+    return cpu, start
+
+
+_BOOT_TIME = _boot_time()
+
+
+class AppStartWatch:
+    """The app's start as the car page shows it. A thread scans /proc for the app's dex2oat every second
+    while a page asks or a compile runs (every 3 s otherwise, so a compile at install time is measured
+    too) and records each complete compile's time; app_start() assembles the state."""
+
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.seq = 1
+        self.state = None
+        self.last_ask = 0.0
+        self.compiles = {}  # pid -> {"dex", "oat", "start", "cpu", "seen", "firstOat"}
+        self._times = None  # COMPILE_TIMES, read at the first use
+        self.pid_info = {}  # the app's process -> {"restarts", "crashed", "compiled"} from the service at its start
+        self.last_running_restarts = None
+
+    # ---- compiles
+    @property
+    def times(self):
+        if self._times is None:
+            self._times = _read_json(COMPILE_TIMES) or {}
+        return self._times
+
+    def _ours(self, dex):
+        return dex.startswith(APP_DIR.rstrip("/") + "/") or dex.startswith(APP_OVERRIDE_DIR.rstrip("/") + "/")
+
+    def scan(self):
+        now = time.time()
+        seen = set()
+        try:
+            pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+        except OSError:
+            pids = []
+        for pid in pids:
+            info = self.compiles.get(pid)
+            if info is None:
+                try:
+                    with open("/proc/%d/comm" % pid) as f:
+                        if not f.read().startswith("dex2oat"):
+                            continue
+                    with open("/proc/%d/cmdline" % pid, "rb") as f:
+                        args = f.read().decode("utf-8", "replace").split("\0")
+                except OSError:
+                    continue
+                opt = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in args if a.startswith("--") and "=" in a}
+                dex, oat = opt.get("--dex-file", ""), opt.get("--oat-file", "")
+                if not dex or not self._ours(dex):
+                    continue
+                st = _proc_stat(pid)
+                if st is None:
+                    continue
+                info = {"dex": dex, "oat": oat, "start": st[1], "cpu": st[0], "seen": now, "firstOat": self._size(oat)}
+                self.compiles[pid] = info
+            else:
+                st = _proc_stat(pid)
+                if st is None:
+                    continue
+                info["cpu"], info["seen"] = st[0], now
+            seen.add(pid)
+        for pid in [p for p in self.compiles if p not in seen]:
+            self._finished(self.compiles.pop(pid))
+        return bool(self.compiles)
+
+    @staticmethod
+    def _size(path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
+    def _finished(self, info):
+        """a compile ended: kept as the estimate for the next one when it completed (its oat written
+        whole after it started, larger than the stub dex2oat writes first); a compile stopped part way
+        (the app restarted) is not a measure"""
+        try:
+            st = os.stat(info["oat"])
+        except OSError:
+            return
+        if st.st_mtime < info["start"] or st.st_size <= max(info["firstOat"], 0) or info["cpu"] < 1:
+            return
+        self.times[info["dex"]] = {"cpu": round(info["cpu"], 1), "wall": round(max(st.st_mtime, info["seen"]) - info["start"], 1),
+                                   "oatSize": st.st_size, "at": int(time.time())}
+        try:
+            os.makedirs(os.path.dirname(COMPILE_TIMES), exist_ok=True)
+            tmp = COMPILE_TIMES + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.times, f, indent=1)
+            os.replace(tmp, COMPILE_TIMES)
+        except OSError as e:
+            print("teslalinux-api: %s: %s" % (COMPILE_TIMES, e), flush=True)
+
+    def compile_state(self, now):
+        """the app's compile now, the largest file first: progress from CPU time against the last one"""
+        if not self.compiles:
+            return None
+        info = max(self.compiles.values(), key=lambda i: (self.times.get(i["dex"]) or {}).get("cpu", 0) or i["cpu"])
+        est = self.times.get(info["dex"])
+        elapsed = max(0.0, now - info["start"])
+        out = {"file": os.path.basename(info["dex"]), "files": len(self.compiles), "elapsed": round(elapsed),
+               "cpu": round(info["cpu"]), "estimate": None, "fraction": None, "remaining": None, "overdue": False}
+        if est and est.get("cpu"):
+            out["estimate"] = {"cpu": est["cpu"], "wall": est.get("wall")}
+            frac = info["cpu"] / est["cpu"]
+            out["fraction"] = round(min(frac, 0.99), 3)
+            if frac >= 1:
+                out["overdue"] = True
+            else:
+                # the rate it is going at now (cores' worth a second), the last one's when just started
+                rate = info["cpu"] / elapsed if elapsed >= 5 else (est["cpu"] / est["wall"] if est.get("wall") else 1)
+                out["remaining"] = round((est["cpu"] - info["cpu"]) / max(rate, 0.3))
+        return out
+
+    # ---- the service, around a start or a stop
+    @staticmethod
+    def service():
+        try:
+            out = subprocess.run(["systemctl", "show", APP_UNIT, "-p", "ActiveState", "-p", "SubState", "-p", "MainPID",
+                                  "-p", "NRestarts"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        v = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+        try:
+            return {"active": v.get("ActiveState", ""), "sub": v.get("SubState", ""), "pid": int(v.get("MainPID") or 0),
+                    "restarts": int(v.get("NRestarts") or 0)}
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _alive(pid):
+        return bool(pid) and os.path.exists("/proc/%d" % pid)
+
+    def app_start(self):
+        now = time.time()
+        st = _read_json(APP_STATE_FILE) or {}
+        pid = st.get("pid") if isinstance(st.get("pid"), int) else 0
+        compile_now = self.compile_state(now)
+        out = {"phase": "running", "interface": st.get("interface"), "started": st.get("started"),
+               "steps": {"process": False, "compile": "none", "firstFrame": None, "mapReady": None},
+               "compile": compile_now, "crashed": False}
+        svc = None
+        if not self._alive(pid) or st.get("exited"):
+            # between two starts, or stopped: the service says which (the launcher writes its record
+            # within a second or two of its start)
+            svc = self.service()
+            if svc and svc["active"] in ("active", "activating", "reloading") and svc["pid"]:
+                pid = svc["pid"]
+                st = {"pid": pid}
+                out["started"] = None
+            elif svc and (svc["sub"] in ("auto-restart",) or svc["active"] == "activating"):
+                out["phase"] = "restarting"
+                out["crashed"] = True
+                return out
+            else:
+                # no app installed: the page's own upload screen says so, not a stopped app
+                installed = os.path.exists(os.path.join(APP_DIR, "base.apk"))
+                out["phase"] = ("stopped" if installed else "noApp") if svc else "unknown"
+                return out
+        info = self.pid_info.get(pid)
+        if info is None:
+            svc = svc or self.service()
+            restarts = svc["restarts"] if svc else 0
+            crashed = self.last_running_restarts is not None and restarts > self.last_running_restarts
+            info = self.pid_info[pid] = {"restarts": restarts, "crashed": crashed, "compiled": False}
+            for old in [p for p in self.pid_info if p != pid]:
+                del self.pid_info[old]
+        if compile_now:
+            info["compiled"] = True
+        out["steps"]["process"] = True
+        out["steps"]["compile"] = "running" if compile_now else ("done" if info["compiled"] else "none")
+        out["steps"]["firstFrame"] = st.get("firstFrame")
+        out["steps"]["mapReady"] = st.get("mapReady")
+        out["crashed"] = info["crashed"]
+        if st.get("firstFrame"):
+            out["phase"] = "running"
+            self.last_running_restarts = info["restarts"]
+            info["crashed"] = False
+            out["crashed"] = False
+        elif compile_now:
+            out["phase"] = "compiling"
+        else:
+            out["phase"] = "starting"
+        if out["started"] and out["phase"] != "running":
+            # while it starts only: a running app's state stays the same, so a long poll waits
+            out["elapsed"] = round(now - out["started"])
+        return out
+
+    # ---- the thread and the long poll
+    def tick(self):
+        compiling = self.scan()
+        busy = compiling or time.time() - self.last_ask < 30
+        if busy:
+            state = self.app_start()
+            with self.cond:
+                if state != self.state:
+                    self.state = state
+                    self.seq += 1
+                    self.cond.notify_all()
+        return 1.0 if busy else 3.0
+
+    def run(self):
+        while True:
+            try:
+                delay = self.tick()
+            except Exception as e:  # never let the watcher die: the page would wait forever
+                print("teslalinux-api: app start watch: %s" % e, flush=True)
+                delay = 3.0
+            time.sleep(delay)
+
+    def get(self, wait_seq=None):
+        """the state and its sequence number; with WAIT_SEQ the current one, after it changes from that"""
+        with self.cond:
+            self.last_ask = time.time()
+            if self.state is None:
+                self.state = self.app_start()
+                self.seq += 1
+            if wait_seq is not None and wait_seq == self.seq:
+                self.cond.wait_for(lambda: self.seq != wait_seq, timeout=APP_STATE_WAIT)
+            return dict(self.state, seq=self.seq)
+
+
+_app_start_watch = AppStartWatch()
+threading.Thread(target=_app_start_watch.run, daemon=True, name="app-start-watch").start()
+
+
+def app_state_full(wait_seq=None):
+    """GET /api/appState: the service state as before ("state", "requested") and "start": the app's start
+    for the car page's overlay (phase running | compiling | starting | restarting | stopped | unknown,
+    the interface, the steps: process up, compile none | running | done, firstFrame, mapReady as unix
+    times, the compile's progress, whether the app had stopped by itself, seq). ?wait=SEQ: the reply
+    waits until "start" differs from the one numbered SEQ (at most 25 s); "state" is then derived from
+    the start's phase instead of asking the service."""
+    start = _app_start_watch.get(wait_seq)
+    if wait_seq is None:
+        out = app_state()
+    else:
+        with _restart_lock:
+            pending, requested = _restart_state["pending"], _restart_state["requested"]
+        derived = {"running": "active", "compiling": "active", "starting": "active", "restarting": "activating",
+                   "stopped": "inactive"}.get(start["phase"], "unknown")
+        out = {"state": "restarting" if pending else derived, "requested": int(requested)}
+    out["start"] = start
+    return out
+
+
 # ---------------------------------------------------------------------------- app updates
 
 APPUPDATE_DEFAULTS = {"source": "apkpure", "autoUpdate": True, "allowMetered": False, "playEnabled": False, "dispenserUrl": "",
@@ -1710,7 +2004,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "deviceInfo":
             return self._json(device_info(p))
         if route == "appState":
-            return self._json(app_state())
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            w = (q.get("wait") or [None])[0]
+            return self._json(app_state_full(int(w) if w and w.isdigit() else None))
         if route == "locale":
             return self._json(locale_state())
         if route == "gpuSpeed":

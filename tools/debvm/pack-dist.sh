@@ -115,6 +115,7 @@ PAYLOAD=(
   host/phase1-pios host/rpi4 host/tls/teslalinux-tls host/local/check.py
   host/teslalinux-render host/teslalinux-restart-app host/teslalinux-set-locale host/teslalinux-set-keyboard host/teslalinux-set-app-interface
   host/teslalinux-network host/teslalinux-system-update host/teslalinux-uplink host/teslalinux-dexopt host/teslalinux-android-cacerts host/teslalinux-set-gpu-speed host/teslalinux-boottime
+  host/teslalinux-app-log-watch.py
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
   services/gates/gates.py services/gates/palgate.py services/gates/tlqr.py docs/GATES.md
   services/display/test/ws-client.py

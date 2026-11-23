@@ -17,7 +17,8 @@ reads the stream. --no-drive leaves the GPS to something else: a straight line l
 Waze then stops following the car, so for comparable runs drive a real route with gps-route.py
 (a cached --route file, the same stretch every run) and pass --no-drive.
 --procs: the CPU share (% of one core) of the processes with these names (/proc/PID/comm, a prefix
-is enough: android-transla, tacomp) over the measured seconds, as "cpu": {name: %}. --gpu (as root,
+is enough: android-transla, tacomp) over the measured seconds, as "cpu": {name: %}, and their main
+threads' (thread id = process id: the app's UI thread) as "cpu_main". --gpu (as root,
 to read other users' DRM fdinfo): each of those processes' share of V3D's engines (bin, render)
 over the measured seconds, as "gpu": {name: {engine: %}} (a job counts from its start to its end,
 so jobs that overlap add up to more than 100%). --per-second: the frames of every measured second.
@@ -97,11 +98,12 @@ def pids_named(prefixes):
     return out
 
 
-def proc_cpu_ticks(pids):
+def proc_cpu_ticks(pids, main_thread=False):
+    """CPU ticks of the processes, or with MAIN_THREAD of their main threads only (thread id = process id)"""
     total = 0
     for pid in pids:
         try:
-            with open("/proc/%d/stat" % pid) as f:
+            with open(("/proc/%d/task/%d/stat" % (pid, pid)) if main_thread else ("/proc/%d/stat" % pid)) as f:
                 fields = f.read().rsplit(")", 1)[1].split()
             total += int(fields[11]) + int(fields[12])  # utime, stime
         except (OSError, IndexError, ValueError):
@@ -206,11 +208,13 @@ async def main():
     pids = pids_named(procs)
     hz = os.sysconf("SC_CLK_TCK")
     cpu0 = {p: proc_cpu_ticks(v) for p, v in pids.items()}
+    main0 = {p: proc_cpu_ticks(v, True) for p, v in pids.items()}
     gpu0 = {p: drm_engine_ns(v) for p, v in pids.items()} if a.gpu else {}
     w0 = time.monotonic()
     await asyncio.sleep(a.seconds)
     w1 = time.monotonic()
     cpu = {p: round(100.0 * (proc_cpu_ticks(v) - cpu0[p]) / hz / (w1 - w0), 1) for p, v in pids.items()}
+    cpu_main = {p: round(100.0 * (proc_cpu_ticks(v, True) - main0[p]) / hz / (w1 - w0), 1) for p, v in pids.items()}
     gpu = {}
     for p, v in pids.items() if a.gpu else ():
         now = drm_engine_ns(v)
@@ -251,6 +255,7 @@ async def main():
     }
     if procs:
         out["cpu"] = cpu
+        out["cpu_main"] = cpu_main
     if a.gpu:
         out["gpu"] = gpu
     if a.per_second:

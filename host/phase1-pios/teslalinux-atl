@@ -15,6 +15,7 @@ DENSITY="${ATL_DENSITY_DPI:-213}"                           # ro.sf.lcd_density 
 SDK_INT="${ATL_SDK_INT:-32}"
 
 W="${SIZE%%x*}"; rest="${SIZE#*x}"; H="${rest%%@*}"
+LAUNCH_T0="$(date +%s.%N)"
 
 APKS=("$APP_DIR/base.apk")
 for f in "$APP_DIR"/split_config.*.apk; do [[ -f "$f" ]] && APKS+=("$f"); done
@@ -90,6 +91,17 @@ if [[ "${1:-}" == --compile ]]; then
     android.atl.TlPrewarm "${APKS[@]}"
 fi
 
+# ---- the start's milestones, for the car page's start overlay (GET /api/appState, services/api/api.py):
+# this start's record now (the app's process is this one: the launcher execs it), and the app's first
+# picture and map from its log, which goes through teslalinux-app-log-watch.py to the journal (below).
+APP_STATE="${TESLALINUX_APP_STATE:-${XDG_RUNTIME_DIR:-/run/tesla}/teslalinux-app-state.json}"
+LOG_WATCH="${TESLALINUX_APP_LOG_WATCH:-/usr/local/lib/teslalinux/app-log-watch.py}"
+APP_IFACE=phone; [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]] && APP_IFACE=car
+if mkdir -p "$(dirname "$APP_STATE")" 2>/dev/null; then
+  printf '{"pid": %d, "started": %s, "interface": "%s", "firstFrame": null, "mapReady": null, "exited": null}\n' \
+    $$ "$LAUNCH_T0" "$APP_IFACE" > "$APP_STATE.$$.tmp" 2>/dev/null && mv -f "$APP_STATE.$$.tmp" "$APP_STATE" || rm -f "$APP_STATE.$$.tmp"
+fi
+
 # the compositor socket (tacomp.service) must be up; the unit orders us after it, this is the guard
 for _ in $(seq 1 100); do [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] && break; sleep 0.1; done
 [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] || { echo "teslalinux-atl: no compositor socket $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" >&2; exit 1; }
@@ -106,6 +118,14 @@ for _ in $(seq 1 50); do [[ -S "$bus" ]] && break; sleep 0.1; done
 export GDK_BACKEND=wayland
 export GSK_RENDERER="${GSK_RENDERER:-ngl}"
 unset LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER MESA_GL_VERSION_OVERRIDE MESA_GLES_VERSION_OVERRIDE
+# the app's own Mesa (tools/debvm/build-dist.sh step mesa: Mesa with the V3D patches Waze's map needs,
+# tools/debvm/patches/mesa-*.patch) in front of the system's, for this process only: glvnd's libEGL
+# loads libEGL_mesa.so.0 by name, so the app's EGL, GL and GTK's renderer use it; tacomp and the rest
+# keep the system's. TESLALINUX_APP_MESA=system (atl.env) keeps the system's for the app too.
+APP_MESA="$ATL_PREFIX/mesa/lib"
+if [[ "${TESLALINUX_APP_MESA:-app}" != system && -f "$APP_MESA/libEGL_mesa.so.0" ]]; then
+  export LD_LIBRARY_PATH="$APP_MESA${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 # ---- ATL knobs proven in the VM ----
 export ATL_UGLY_ENABLE_LOCATION=1 ATL_FORCE_FULLSCREEN=1 ATL_DISABLE_WINDOW_DECORATIONS=1
@@ -238,4 +258,10 @@ if [[ -x "$DEXOPT" && "${TESLALINUX_DEXOPT:-0}" == 1 ]]; then
   ATL_PREFIX="$ATL_PREFIX" "$DEXOPT" "${APKS[@]}" || true
 fi
 
-exec android-translation-layer "${APKS[@]}" -w "$W" -h "$H" --sdk-int "$SDK_INT" ${JVM_OPTS[@]+"${JVM_OPTS[@]}"} ${LAUNCH_ARGS[@]+"${LAUNCH_ARGS[@]}"} "$@"
+ATL_ARGS=("${APKS[@]}" -w "$W" -h "$H" --sdk-int "$SDK_INT" ${JVM_OPTS[@]+"${JVM_OPTS[@]}"} ${LAUNCH_ARGS[@]+"${LAUNCH_ARGS[@]}"} "$@")
+# the app's output through the log watcher on its way to the journal (every line unchanged; both
+# streams went to the journal before too)
+if [[ -r "$LOG_WATCH" ]] && command -v python3 >/dev/null; then
+  exec android-translation-layer "${ATL_ARGS[@]}" > >(exec python3 -I "$LOG_WATCH" "$APP_STATE" $$ "$LAUNCH_T0" "$APP_IFACE") 2>&1
+fi
+exec android-translation-layer "${ATL_ARGS[@]}"

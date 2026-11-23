@@ -715,3 +715,115 @@
 .teslalinux-kbd-button .material-symbols-rounded {
   font-size: 30px;
 }
+
+/* teslalinux: the app's start over the display (js/display/app-state-overlay.js): the settings page's
+   look (css/settings.css tokens, Inter Car), by day or by night as that page (data-theme, set by the
+   script). Above the display and its loading spinner, under the page's own buttons (settings stays
+   reachable). Sized for the Model 3's 773x601 CSS px and up. */
+#app-state-overlay {
+  --page: #e6e7ea;
+  --surface: #fafafb;
+  --track: rgba(20, 20, 30, 0.07);
+  --ink: #1d1d1f;
+  --ink-2: #5c5e63;
+  --ink-3: #8e9095;
+  --blue: #3b6cf0;
+  --blue-soft: rgba(59, 108, 240, 0.12);
+  --green: #1f9d55;
+  --lift: 0 0 0 1px rgba(16, 18, 24, 0.08), 0 12px 32px rgba(16, 18, 24, 0.18);
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  background: var(--page);
+  color: var(--ink);
+  font-family: "Inter Car", "Noto Sans Hebrew", "Arial Hebrew", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  animation: aso-in 200ms ease-out both;
+}
+#app-state-overlay[data-theme="night"] {
+  --page: #1e1e20;
+  --surface: #28282a;
+  --track: rgba(255, 255, 255, 0.08);
+  --ink: #f3f3f4;
+  --ink-2: #b0b2b7;
+  --ink-3: #85878c;
+  --blue: #5a86f5;
+  --blue-soft: rgba(90, 134, 245, 0.18);
+  --green: #3fbf74;
+  --lift: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+#app-state-overlay[hidden] { display: none; }
+@keyframes aso-in { from { opacity: 0; } to { opacity: 1; } }
+
+#app-state-overlay .aso-card {
+  width: min(560px, 100%);
+  box-sizing: border-box;
+  padding: 28px 32px;
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--lift);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+#app-state-overlay .aso-head { display: flex; align-items: center; gap: 18px; }
+#app-state-overlay .aso-icon {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 32px;
+}
+#app-state-overlay .aso-titles { min-width: 0; }
+#app-state-overlay .aso-title { font-size: 25px; font-weight: 700; line-height: 1.2; }
+#app-state-overlay .aso-sub { margin-top: 4px; font-size: 17px; color: var(--ink-2); line-height: 1.3; }
+
+#app-state-overlay .aso-progress[hidden] { display: none; }
+#app-state-overlay .aso-bar { height: 10px; border-radius: 5px; background: var(--track); overflow: hidden; }
+#app-state-overlay .aso-fill { height: 100%; width: 0; border-radius: 5px; background: var(--blue); transition: width 900ms linear; }
+/* no estimate yet (the first compile on this device): the bar moves, it does not claim a fraction */
+#app-state-overlay .aso-progress.indeterminate .aso-fill { width: 30%; animation: aso-sweep 1.6s ease-in-out infinite; }
+@keyframes aso-sweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+#app-state-overlay .aso-meta {
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 17px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+#app-state-overlay .aso-left { color: var(--ink); font-weight: 600; }
+#app-state-overlay .aso-elapsed { white-space: nowrap; }
+
+#app-state-overlay .aso-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+#app-state-overlay .aso-steps[hidden] { display: none; }
+#app-state-overlay .aso-step { display: flex; align-items: center; gap: 12px; font-size: 18px; color: var(--ink-3); }
+#app-state-overlay .aso-step.now { color: var(--ink); font-weight: 600; }
+#app-state-overlay .aso-step.done { color: var(--ink-2); }
+#app-state-overlay .aso-mark { flex: none; width: 24px; height: 24px; font-size: 22px; }
+#app-state-overlay .aso-step.done .aso-mark { color: var(--green); }
+#app-state-overlay .aso-spin {
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  margin: 2px;
+  border-radius: 50%;
+  border: 3px solid var(--track);
+  border-top-color: var(--blue);
+  animation: aso-spin 900ms linear infinite;
+}
+@keyframes aso-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  #app-state-overlay, #app-state-overlay .aso-spin, #app-state-overlay .aso-progress.indeterminate .aso-fill { animation: none; }
+}
+@media (max-width: 520px) {
+  #app-state-overlay .aso-card { padding: 22px 20px; gap: 18px; }
+  #app-state-overlay .aso-title { font-size: 21px; }
+}

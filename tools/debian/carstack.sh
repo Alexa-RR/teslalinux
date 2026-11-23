@@ -166,6 +166,7 @@ guest_install() {
   install -m 0755 "$REPO/host/phase1-pios/teslalinux-atl" /usr/local/bin/teslalinux-atl
   install -m 0755 "$REPO/host/teslalinux-restart-app" /usr/local/bin/teslalinux-restart-app
   install -m 0644 "$REPO/tools/atl-vm/mk-android-tzdata.py" $LIB/mk-android-tzdata.py
+  install -m 0644 "$REPO/host/teslalinux-app-log-watch.py" $LIB/app-log-watch.py
   install -m 0755 "$REPO/host/teslalinux-set-locale" /usr/local/bin/teslalinux-set-locale
   install -m 0755 "$REPO/host/teslalinux-set-keyboard" /usr/local/bin/teslalinux-set-keyboard
   install -m 0755 "$REPO/host/teslalinux-set-app-interface" /usr/local/bin/teslalinux-set-app-interface

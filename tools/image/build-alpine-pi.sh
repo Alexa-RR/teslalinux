@@ -139,6 +139,7 @@ install -m 0755 "$REPO/host/teslalinux-system-update" "$ROOT/usr/local/bin/tesla
 install -m 0755 "$REPO/host/teslalinux-uplink" "$ROOT/usr/local/bin/teslalinux-uplink"
 install -m 0755 "$REPO/host/teslalinux-dexopt" "$ROOT/usr/local/bin/teslalinux-dexopt"
 install -D -m 0644 "$REPO/tools/atl-vm/mk-android-tzdata.py" "$ROOT/usr/local/lib/teslalinux/mk-android-tzdata.py"
+install -D -m 0644 "$REPO/host/teslalinux-app-log-watch.py" "$ROOT/usr/local/lib/teslalinux/app-log-watch.py"
 echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update' > "$ROOT/etc/sudoers.d/teslalinux"
 chmod 0440 "$ROOT/etc/sudoers.d/teslalinux"
 render

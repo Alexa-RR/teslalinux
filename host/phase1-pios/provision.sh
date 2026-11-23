@@ -142,6 +142,7 @@ install -m 0755 "$REPO/host/teslalinux-system-update" /usr/local/bin/teslalinux-
 install -m 0755 "$REPO/host/teslalinux-uplink" /usr/local/bin/teslalinux-uplink
 install -m 0755 "$REPO/host/teslalinux-dexopt" /usr/local/bin/teslalinux-dexopt
 install -m 0644 "$REPO/tools/atl-vm/mk-android-tzdata.py" /usr/local/lib/teslalinux/mk-android-tzdata.py
+install -m 0644 "$REPO/host/teslalinux-app-log-watch.py" /usr/local/lib/teslalinux/app-log-watch.py
 # the car map's Graphite colours: ATL's file overlay manifest and its checking tool (docs/MAP-COLOURS.md)
 install -d /usr/local/lib/teslalinux/appstyle
 install -m 0644 "$REPO/host/appstyle/waze-map-graphite.json" /usr/local/lib/teslalinux/appstyle/
