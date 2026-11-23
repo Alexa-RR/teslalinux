@@ -1919,6 +1919,14 @@
         return;
       }
 
+      // teslalinux: where Waze's sound plays (GET/POST /api/audioOutput, services/audio/audio.py)
+      let output = null;
+      try {
+        output = await this.apiClient.fetchAudioOutput();
+      } catch (_error) {
+        output = null;
+      }
+
       if (token !== this._renderToken || this.activeSectionId !== "audio") {
         return;
       }
@@ -1931,6 +1939,17 @@
       );
 
       this.content.innerHTML = "";
+
+      if (output) {
+        this._renderAudioOutput(token, output);
+        if (output.output === "pi") {
+          this._appendDescription(
+            "Waze's sound plays only on the speaker connected to the Raspberry Pi; this browser gets none. Choose Car or Both to hear it here again.",
+          );
+          return;
+        }
+        this._appendDivider();
+      }
 
       this._appendTile({
         icon: "speaker",
@@ -1986,6 +2005,101 @@
       this._appendDescription(
         "In case you encounter a situation where the browser in your Tesla fails to produce sound, a simple reboot of the vehicle should resolve the issue. Please note that this is a known issue with the browser itself.",
       );
+    }
+
+    // teslalinux: Waze's sound in the car (this browser), on a speaker connected to the Pi (a USB
+    // sound card or speaker, else the 3.5 mm jack), or both; the Pi speaker's volume. Applied within
+    // half a second, no restart. The Pi output shown follows plugging in and out (polled).
+    _renderAudioOutput(token, output) {
+      const options = [
+        { value: "car", label: "Car" },
+        { value: "pi", label: "Pi speaker" },
+        { value: "both", label: "Both" },
+      ];
+      const save = async (change) => {
+        try {
+          await this.apiClient.setAudioOutput(change);
+          await this._renderActiveSection();
+        } catch (_error) {
+          this._renderErrorState("Service error");
+        }
+      };
+      this._appendTile({
+        icon: "speaker_group",
+        title: "Where Waze's sound plays",
+        subtitle: "Car: in this browser. Pi speaker: a speaker connected to the Raspberry Pi (USB, or the 3.5 mm jack)",
+        trailing: this._createSelect(options, output.output, (value) => save({ output: String(value) })),
+        dense: false,
+      });
+      if (output.output === "car") {
+        return;
+      }
+      const kindLabel = { usb: "USB", jack: "3.5 mm jack", other: "Sound card" };
+      const speakerText = (o) => {
+        if (!o.running) {
+          return "Audio service not running";
+        }
+        if (!o.speaker) {
+          return "None connected";
+        }
+        const kind = kindLabel[o.speaker.kind] || "";
+        const name = o.speaker.kind === "jack" ? "" : o.speaker.description || "";
+        return [kind, name].filter(Boolean).join(": ") + (o.playing ? " (playing)" : "");
+      };
+      const speakerValue = this._createTrailingText(speakerText(output));
+      this._appendTile({
+        icon: output.speaker && output.speaker.kind === "usb" ? "usb" : "headphones",
+        title: "Pi speaker",
+        subtitle: "A USB sound card or speaker when one is plugged in, else the 3.5 mm jack",
+        trailing: speakerValue,
+        dense: false,
+      });
+
+      const sliderWrap = utils.createElement("div", "settings-volume-wrap", null);
+      const sliderValue = utils.createElement("span", "settings-volume-value", String(output.volume) + " %");
+      const slider = utils.createElement("input", "settings-volume-slider", null);
+      slider.type = "range";
+      slider.min = "0";
+      slider.max = "100";
+      slider.step = "5";
+      slider.value = String(output.volume);
+      slider.addEventListener("input", () => {
+        sliderValue.textContent = String(slider.value) + " %";
+      });
+      slider.addEventListener("change", async () => {
+        try {
+          await this.apiClient.setAudioOutput({ volume: utils.toInt(slider.value, output.volume) });
+        } catch (_error) {
+          this._renderErrorState("Service error");
+        }
+      });
+      sliderWrap.appendChild(sliderValue);
+      sliderWrap.appendChild(slider);
+      this._appendTile({
+        icon: "volume_up",
+        title: "Pi speaker volume",
+        trailing: sliderWrap,
+        dense: false,
+      });
+
+      const poll = async () => {
+        if (token !== this._renderToken || this.activeSectionId !== "audio") {
+          return;
+        }
+        if (!global.document.hidden) {
+          try {
+            const o = await this.apiClient.fetchAudioOutput();
+            if (token !== this._renderToken) {
+              return;
+            }
+            speakerValue.textContent = speakerText(o);
+          } catch (_error) {
+            // keep the last text; the next poll tries again
+          }
+        }
+        this._pollTimer = global.setTimeout(poll, 3000);
+      };
+      this._pollTimer = global.setTimeout(poll, 3000);
     }
 
     async _renderGpsSection(token) {

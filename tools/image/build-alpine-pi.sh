@@ -154,30 +154,43 @@ install -d "$ROOT/etc/conf.d"
 cat > "$ROOT/etc/conf.d/tacomp" <<EOF
 TACOMP_RENDERER="gles2"
 EOF
-# the app's audio: a null sink "android" that is the default and the only sink (no ALSA/Bluetooth
-# monitors, so the Pi's own outputs never take over); ALSA "default" goes to PipeWire, which is how
-# ATL's AudioTrack (snd_pcm_open "default") reaches it; audio.py captures android.monitor
+# the app's audio: a null sink "android" that is the default sink (the Pi's own outputs are seen at a
+# lower priority and never take over; audio.py carries the sound to one of them when Settings > Audio
+# asks for it); ALSA "default" goes to PipeWire, which is how ATL's AudioTrack (snd_pcm_open
+# "default") reaches it; audio.py captures android.monitor for the car's stream
 install -d -o 1000 -g 1000 "$ROOT/var/lib/tesla/.config/pipewire/pipewire.conf.d" "$ROOT/var/lib/tesla/.config/wireplumber/wireplumber.conf.d"
 cat > "$ROOT/var/lib/tesla/.config/pipewire/pipewire.conf.d/teslalinux.conf" <<'EOF'
 # teslalinux: the sink the app plays into; audio.py captures android.monitor
 context.objects = [
   { factory = adapter
-    args = { factory.name = support.null-audio-sink node.name = "android" node.description = "Android"
+    args = { factory.name = support.null-audio-sink node.name = "android" node.description = "Car"
+             device.form-factor = "car"
              media.class = "Audio/Sink" audio.position = [ FL FR ] audio.rate = 48000
              object.linger = true priority.session = 3000 priority.driver = 3000 } }
 ]
 EOF
 cat > "$ROOT/var/lib/tesla/.config/wireplumber/wireplumber.conf.d/teslalinux.conf" <<'EOF'
-# teslalinux: no hardware monitors; the "android" null sink is the only and so the default sink
+# teslalinux: the Pi's own outputs (3.5 mm jack, USB) are seen below the "android" null sink, which
+# stays the default sink; HDMI never has anything attached; no Bluetooth
 wireplumber.profiles = {
   main = {
-    monitor.alsa = disabled
     monitor.alsa-midi = disabled
     monitor.bluez = disabled
     monitor.v4l2 = disabled
     monitor.libcamera = disabled
   }
 }
+monitor.alsa.properties = {
+  alsa.reserve = false
+}
+monitor.alsa.rules = [
+  { matches = [ { device.name = "~alsa_card.platform-.*hdmi.*" } ]
+    actions = { update-props = { device.disabled = true } } }
+  { matches = [ { node.name = "~alsa_output.*" } ]
+    actions = { update-props = { priority.session = 1000 priority.driver = 1000 session.suspend-timeout-seconds = 3 } } }
+  { matches = [ { node.name = "~alsa_input.*" } ]
+    actions = { update-props = { priority.session = 1000 priority.driver = 1000 } } }
+]
 EOF
 cat > "$ROOT/etc/asound.conf" <<'EOF'
 # teslalinux: every ALSA client (ATL's AudioTrack opens "default") plays through PipeWire

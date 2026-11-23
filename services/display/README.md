@@ -144,6 +144,35 @@ slower: it adds a colour copy and a depth blit for each of Waze's three viewport
 smaller 3D pass saves. Godot's shadow atlas settings in `override.cfg` do not reach Waze's atlas
 (set from its code).
 
+## The idle map (Nov 23 2026)
+
+With the car standing still and nothing touched, Waze keeps drawing its map. Measured on the Pi 4
+(832x608, Car mode, H.264, one car page, 10 s windows):
+
+| Map frame rate | Waze swaps/s | Waze CPU | Waze V3D render | tacomp CPU / V3D | stream to the car |
+|---|---|---|---|---|---|
+| Full | 60.0 | 73% | 110% | 11% / 11% | 60 frames/s, 182 kB/s (median frame 564 bytes) |
+| Waze's own (30) | 30.2 | 32% | 45% | 5% / 5% | 30 frames/s |
+
+- It is Waze, not ATL or tacomp: its car render loop (`com.waze.map.opengl.ac`) swaps only when
+  Godot's `nativeRender()` says it drew, and Godot says so every tick. tacomp already skips ticks
+  without damage, and ATL's frame callbacks follow tacomp's 60 Hz clock as SurfaceFlinger's vsync does.
+- The picture really changes: compared bit for bit (a debug hash of each composited frame), only
+  the frames of the first seconds after a start repeat; after that every frame differs from the one
+  before by a level or two in a few pixels (other wazers' icons, traffic overlays fading). A decoded
+  stream shows the same: 93% of frame pairs differ by at most 8 levels, the rest in under 0.011% of
+  the pixels.
+- Tried and dropped: Godot's low-processor mode (`application/run/low_processor_mode` in an
+  `override.cfg`, which this Godot reads) changes nothing, the scene reports a change every frame.
+  Skipping repeated frames in tacomp: a GPU comparison of each frame with the last one cost V3D
+  more than Waze's whole map (the linear CMA buffers are re-tiled to be sampled; tacomp went from
+  11% to 121% of the render queue and Waze fell to 28 frames/s); an exact CPU hash on the encoder
+  thread costs 2 to 3 ms a frame and, once Waze's animations run, finds nothing to skip.
+- What does halve the idle cost is the frame rate itself (the second row). A "Full while the map
+  moves" pacing (Waze's own 60 for a few seconds after each GPS move or gesture, 30 otherwise) is
+  the lever left; it needs Waze's frame limiter boosted from outside (`com.waze.map.opengl.m.a()`,
+  which Waze calls after a touch on a phone's map).
+
 ## Touch path
 
 A second WebSocket server on `TACOMP_TOUCH_PORT` (9999) accepts the upstream text protocol

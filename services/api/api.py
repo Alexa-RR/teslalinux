@@ -51,6 +51,16 @@ The keyboard (new routes only):
 * POST /api/keyboard   JSON {"mode": ...}: `teslalinux-set-keyboard` (one sudoers rule) writes
                        /etc/teslalinux/keyboard.env and restarts the app if the choice changed
 
+Where the app's sound plays (new routes only):
+* GET  /api/audioOutput   {"output": "car"|"pi"|"both", "volume": 0..100 (the Pi speaker's), "speaker":
+                          the Pi output the sound goes to ({name, description, kind: "usb"|"jack"|"other"},
+                          null in "car" or when there is none), "speakers": the Pi's outputs (preferred
+                          first), "playing": whether that output plays now, "running": whether
+                          teslalinux-audio (services/audio/audio.py) has reported}
+* POST /api/audioOutput   JSON {"output"?: ..., "volume"?: 0..100}: written to the settings file
+                          teslalinux-audio follows (/var/lib/teslalinux/state/audio.json, within half a
+                          second, no restart); answers the new state; 500 on anything else
+
 The app's interface (new routes only):
 * GET  /api/appInterface  {"interface": "phone" | "car"}: the app's phone screens, or its car interface
                           (the page then draws the app's car templates from /sockets/carapp);
@@ -142,6 +152,12 @@ CERT_STATE = os.environ.get("TESLALINUX_CERT_STATE", "/var/lib/teslalinux/tls-st
 APPUPDATE = os.environ.get("TESLALINUX_APPUPDATE", "/usr/local/bin/teslalinux-appupdate")
 APPUPDATE_STATE = os.environ.get("TESLALINUX_APPUPDATE_STATE", "/var/lib/teslalinux/appupdate/state.json")
 APPUPDATE_SETTINGS = os.environ.get("TESLALINUX_APPUPDATE_SETTINGS", "/var/lib/teslalinux/state/appupdate.json")
+# where the app's sound plays (services/audio/audio.py reads the settings and writes its status)
+AUDIO_SETTINGS = os.environ.get("TESLALINUX_AUDIO_SETTINGS", "/var/lib/teslalinux/state/audio.json")
+AUDIO_STATUS = os.environ.get("TESLALINUX_AUDIO_STATUS",
+                              os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/tesla"), "teslalinux-audio.json"))
+AUDIO_OUTPUTS = ("car", "pi", "both")
+AUDIO_DEFAULTS = {"output": "car", "volume": 80}
 
 ENV = tp.load_env()
 _lock = threading.Lock()
@@ -175,9 +191,10 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
                   ("isRearDisplayPrioritised", tp.VD_REAR_PRIO))
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
               "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan",
-              "gpuSpeed"}
+              "gpuSpeed", "audioOutput"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
-                                  "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed"}
+                                  "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed",
+                                  "audioOutput"}
 
 
 def props():
@@ -648,6 +665,65 @@ def set_gpu_speed(speed):
             subprocess.run(cmd + [speed], check=False, timeout=60, capture_output=True)
         except (OSError, subprocess.SubprocessError) as e:
             print("teslalinux-api: %s failed: %s" % (SET_GPU_SPEED, e), flush=True)
+
+
+# ---------------------------------------------------------------------------- audio output
+
+def audio_settings():
+    s = dict(AUDIO_DEFAULTS)
+    d = _read_json(AUDIO_SETTINGS) or {}
+    if d.get("output") in AUDIO_OUTPUTS:
+        s["output"] = d["output"]
+    v = d.get("volume")
+    if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 100:
+        s["volume"] = v
+    return s
+
+
+def audio_output_state():
+    """GET /api/audioOutput: {"output": "car"|"pi"|"both", "volume": 0..100 (the Pi speaker's),
+    "speaker": {name, description, kind: "usb"|"jack"|"other"} the Pi output the sound goes to (null
+    in "car", or with none), "speakers": the Pi outputs there are (the preferred first), "playing":
+    whether the Pi output plays now, "running": whether teslalinux-audio reported} (audio.py's status)"""
+    s = audio_settings()
+    st = _read_json(AUDIO_STATUS)
+    out = {"output": s["output"], "volume": s["volume"], "speaker": None, "speakers": [], "playing": False,
+           "running": st is not None}
+    if st:
+        speakers = [sp for sp in (st.get("speakers") or []) if isinstance(sp, dict)]
+        out["speakers"] = speakers
+        out["playing"] = bool(st.get("playing"))
+        if s["output"] in ("pi", "both"):
+            # the status may predate a change just made: the preferred output is what will be chosen
+            sp = st.get("speaker") if st.get("output") == s["output"] else None
+            out["speaker"] = sp if isinstance(sp, dict) else (speakers[0] if speakers else None)
+    return out
+
+
+def valid_audio_output_request(req):
+    """POST /api/audioOutput body: {"output"?: "car"|"pi"|"both", "volume"?: 0..100}, at least one"""
+    if not isinstance(req, dict) or not req or set(req) - {"output", "volume"}:
+        return False
+    if "output" in req and req["output"] not in AUDIO_OUTPUTS:
+        return False
+    if "volume" in req:
+        v = req["volume"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 100:
+            return False
+    return True
+
+
+def set_audio_output(req):
+    """the settings file teslalinux-audio follows (it checks it twice a second)"""
+    with _apply_lock:
+        s = audio_settings()
+        s.update(req)
+        os.makedirs(os.path.dirname(AUDIO_SETTINGS), exist_ok=True)
+        tmp = AUDIO_SETTINGS + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(s, f)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, AUDIO_SETTINGS)
 
 
 # ---------------------------------------------------------------------------- keyboard
@@ -1507,6 +1583,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(gpu_speed_state())
         if route == "keyboard":
             return self._json(keyboard_state())
+        if route == "audioOutput":
+            return self._json(audio_output_state())
         if route == "appInterface":
             return self._json(app_interface_state(with_map_skin=True))
         if route == "appUpdate":
@@ -1578,6 +1656,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error()
             set_gpu_speed(req["speed"])
             return self._json(gpu_speed_state())
+        if route == "audioOutput":
+            try:
+                req = json.loads(body.decode("utf-8") or "null")
+            except (ValueError, UnicodeDecodeError):
+                return self._error()
+            if not valid_audio_output_request(req):
+                return self._error()
+            try:
+                set_audio_output(req)
+            except OSError as e:
+                print("teslalinux-api: audio settings not written: %s" % e, flush=True)
+                return self._error()
+            return self._json(audio_output_state())
         if route == "keyboard":
             try:
                 req = json.loads(body.decode("utf-8") or "null")

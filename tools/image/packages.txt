@@ -56,6 +56,11 @@ pipewire-pulse
 # ALSA "default" -> PipeWire: ATL's AudioTrack plays through ALSA
 pipewire-alsa
 wireplumber
+# audio.py's Pi speaker: pw-dump follows the graph, pw-loopback carries the app's sound to the
+# Pi's USB card or 3.5 mm jack (wpctl, its volume, comes with wireplumber)
+pipewire-tools
+# ATL's AudioManager devices (android.media.HostAudioDevices) through the pulse server
+libpulse
 su-exec
 # display: mesa with v3d, the compositor's libraries
 mesa

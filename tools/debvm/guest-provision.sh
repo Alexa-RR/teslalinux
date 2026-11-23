@@ -53,7 +53,7 @@ inst \
   libegl-dev libgl-dev libgles-dev libbsd-dev libelf-dev libunwind-dev \
   libicu-dev libssl-dev libexpat1-dev liblz4-dev liblzma-dev zlib1g-dev libpng-dev libselinux1-dev \
   valgrind python-is-python3 \
-  libsndfile1-dev libsdl2-dev \
+  libsndfile1-dev libsdl2-dev libpulse-dev \
   libasm-java libgetopt-java \
   webp-pixbuf-loader
 

@@ -761,26 +761,43 @@ step_web() {
 }
 
 step_audio() {
+  # the sink the app plays into (the default sink); its sound goes to the car (audio.py records its
+  # monitor for the car page's stream), hence the form factor: ATL's AudioManager reports it as the
+  # car's audio bus (AudioDeviceInfo.TYPE_BUS)
   put_text /etc/pipewire/pipewire.conf.d/teslalinux-sink.conf 0644 <<'EOF'
 context.objects = [
   { factory = adapter
-    args = { factory.name = support.null-audio-sink node.name = "android" media.class = Audio/Sink
+    args = { factory.name = support.null-audio-sink node.name = "android" node.description = "Car"
+             device.form-factor = "car" media.class = Audio/Sink
              object.linger = true audio.position = [ FL FR ] audio.rate = 48000
              priority.session = 3000 priority.driver = 3000 }
   }
 ]
 EOF
-  # the null sink is the only sink: no ALSA/Bluetooth monitors, so the Pi's own outputs never win
+  # the Pi's own outputs (the 3.5 mm jack, USB sound cards) are seen, never the default sink ("android"
+  # stays it): audio.py carries the app's sound to one of them when Settings > Audio asks for it.
+  # HDMI never has anything attached; no Bluetooth
   put_text /etc/wireplumber/wireplumber.conf.d/teslalinux.conf 0644 <<'EOF'
 wireplumber.profiles = {
   main = {
-    monitor.alsa = disabled
     monitor.alsa-midi = disabled
     monitor.bluez = disabled
     monitor.v4l2 = disabled
     monitor.libcamera = disabled
   }
 }
+monitor.alsa.properties = {
+  # no other sound server competes for the cards: no D-Bus device reservation
+  alsa.reserve = false
+}
+monitor.alsa.rules = [
+  { matches = [ { device.name = "~alsa_card.platform-.*hdmi.*" } ]
+    actions = { update-props = { device.disabled = true } } }
+  { matches = [ { node.name = "~alsa_output.*" } ]
+    actions = { update-props = { priority.session = 1000 priority.driver = 1000 session.suspend-timeout-seconds = 3 } } }
+  { matches = [ { node.name = "~alsa_input.*" } ]
+    actions = { update-props = { priority.session = 1000 priority.driver = 1000 } } }
+]
 EOF
   # ALSA "default" -> PipeWire: ATL's AudioTrack (snd_pcm_open "default") reaches the null sink
   put_str /etc/asound.conf 0644 '# teslalinux: every ALSA client plays through PipeWire\npcm.!default { type pipewire }\nctl.!default { type pipewire }\n'
@@ -1031,7 +1048,8 @@ dtoverlay=cma,cma-256
 gpu_mem=128
 camera_auto_detect=0
 display_auto_detect=0
-dtparam=audio=off
+# the 3.5 mm jack (a speaker for the app's sound, Settings > Audio); its card adds nothing measurable at boot
+dtparam=audio=on
 dtoverlay=disable-bt
 dtparam=i2c_arm=on
 enable_uart=0"

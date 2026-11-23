@@ -23,6 +23,7 @@ Tesla browser ──Wi-Fi──> hostapd / dnsmasq / nftables ──> nginx (TLS
    │  /sockets/keyboard    <─> tacomp (9996) <─> text-input-v3
    │  /sockets/gps         ──> gps.py (9998) ──> line feed 9997 ──> ATL LocationManager
    │  /sockets/audio       <── audio.py (8080) <── PipeWire null sink <── ALSA <── ATL AudioTrack
+   │                                (and/or pw-loopback ──> the Pi's USB card or 3.5 mm jack)
    └  /api/*               <─> api.py (8081)
 ```
 
@@ -182,11 +183,26 @@ Browser `navigator.geolocation` → `/sockets/gps` JSON (upstream format) → `s
 ### 4.5 Audio
 
 ATL's `AudioTrack` plays through ALSA's default device, which `/etc/asound.conf` points at PipeWire.
-PipeWire, WirePlumber and pipewire-pulse run as system units for the `tesla` user with a single null
-sink `android` (no hardware sinks). `services/audio` reads `android.monitor` and encodes **FLAC in
-fragmented MP4** (upstream contract: `movflags empty_moov+separate_moof+default_base_moof+frag_discont`,
-~40 ms fragments, init segment re-sent on connect) to `/sockets/audio` on :8080, running ffmpeg only
-while someone listens.
+PipeWire, WirePlumber and pipewire-pulse run as system units for the `tesla` user. The default sink
+is the null sink `android` ("Car", `device.form-factor = car`). `services/audio` reads
+`android.monitor` and encodes **FLAC in fragmented MP4** (upstream contract:
+`movflags empty_moov+separate_moof+default_base_moof+frag_discont`, ~40 ms fragments, init segment
+re-sent on connect) to `/sockets/audio` on :8080, running ffmpeg only while someone listens.
+
+The app's sound can also play on a speaker connected to the Pi (Settings > Audio: Car, Pi speaker,
+Both; `/api/audioOutput`, settings in `/var/lib/teslalinux/state/audio.json`). WirePlumber's ALSA
+monitor sees the Pi's own outputs at a lower priority than `android` (the HDMI cards are disabled;
+`dtparam=audio=on` gives the 3.5 mm jack, which costs nothing measurable at boot), and `audio.py`
+runs a `pw-loopback` from `android`'s monitor into the preferred one: the newest USB sound card,
+else the jack. It follows `pw-dump --monitor`, so plugging a USB card in or out moves the sound
+within a second. Both ends of the loopback are passive: the card is opened only while the app
+plays. In "Pi speaker" the car's stream carries nothing. See `services/audio/README.md`.
+
+ATL's `AudioManager` reports these devices as Android does (`android.media.HostAudioDevices`, from
+the sound server's sinks and sources through libpulse): `android` as `TYPE_BUS` (the car), a USB card
+as `TYPE_USB_DEVICE`/`TYPE_USB_HEADSET`, the jack as `TYPE_LINE_ANALOG`; the default output plus the
+loopback's target are what `getAudioDevicesForAttributes` returns, and `AudioDeviceCallback`s hear
+every device added or removed.
 
 ### 4.6 Config API
 

@@ -78,6 +78,8 @@ os.environ.update({
     "TESLALINUX_APPUPDATE_STATE": os.path.join(TMP, "appupdate-state.json"),
     "TESLALINUX_APPUPDATE_SETTINGS": os.path.join(TMP, "state", "appupdate.json"),
     "TESLALINUX_APPUPDATE_MAX_UPLOAD": str(4 << 20),
+    "TESLALINUX_AUDIO_SETTINGS": os.path.join(TMP, "state", "audio.json"),
+    "TESLALINUX_AUDIO_STATUS": os.path.join(TMP, "audio-status.json"),
     "TESLALINUX_ENV": os.path.join(REPO, "host", "phase1-pios", "env"),
     "TESLALINUX_STATE": os.path.join(TMP, "props.json"),
     "TESLALINUX_APPLY_DISPLAY": os.path.join(TMP, "apply"),
@@ -388,6 +390,48 @@ class GpuSpeed(unittest.TestCase):
             self.assertEqual(f.read(), BOOT_CONFIG)
         for bad in ({"speed": "turbo"}, {}, []):
             self.assertEqual(call("gpuSpeed", "POST", json.dumps(bad), "application/json")[0], 500, bad)
+
+
+class AudioOutput(unittest.TestCase):
+    """/api/audioOutput: the settings audio.py follows, and its status"""
+
+    def post(self, req):
+        return call("audioOutput", "POST", json.dumps(req), "application/json")
+
+    def test_defaults_choice_and_validation(self):
+        settings = os.path.join(TMP, "state", "audio.json")
+        status = os.path.join(TMP, "audio-status.json")
+        for p in (settings, status):
+            if os.path.exists(p):
+                os.remove(p)
+        st = json.loads(call("audioOutput")[2])
+        self.assertEqual(st, {"output": "car", "volume": 80, "speaker": None, "speakers": [], "playing": False,
+                              "running": False})
+        # audio.py's status: the jack is there, nothing chosen yet
+        jack = {"name": "alsa_output.platform-fe00b840.mailbox.stereo-fallback", "description": "Built-in Audio Stereo",
+                "kind": "jack"}
+        with open(status, "w") as f:
+            json.dump({"output": "car", "volume": 80, "speaker": None, "speakers": [jack], "playing": False}, f)
+        code, _, body = self.post({"output": "both"})
+        self.assertEqual(code, 200)
+        st = json.loads(body)
+        # the status is still the old choice's: the output that will be chosen is shown
+        self.assertEqual((st["output"], st["volume"], st["speaker"], st["running"]), ("both", 80, jack, True))
+        with open(settings) as f:
+            self.assertEqual(json.load(f), {"output": "both", "volume": 80})
+        usb = {"name": "alsa_output.usb-Generic_USB_Audio-00.analog-stereo", "description": "USB Audio",
+               "kind": "usb"}
+        with open(status, "w") as f:
+            json.dump({"output": "both", "volume": 35, "speaker": usb, "speakers": [usb, jack], "playing": True}, f)
+        st = json.loads(self.post({"volume": 35})[2])
+        self.assertEqual((st["output"], st["volume"], st["speaker"], st["playing"]), ("both", 35, usb, True))
+        st = json.loads(self.post({"output": "car"})[2])
+        self.assertEqual((st["output"], st["volume"], st["speaker"]), ("car", 35, None))
+        for bad in ({}, {"output": "hdmi"}, {"volume": 101}, {"volume": -1}, {"volume": True}, {"volume": 5.5},
+                    {"output": "pi", "extra": 1}, [], "car"):
+            self.assertEqual(self.post(bad)[0], 500, bad)
+        with open(settings) as f:
+            self.assertEqual(json.load(f), {"output": "car", "volume": 35})
 
 
 class Settings(unittest.TestCase):

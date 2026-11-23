@@ -51,6 +51,16 @@
       return this._postJson(this.apiBaseUrl + "/keyboard", { mode });
     }
 
+    // teslalinux: where the app's sound plays ("car" | "pi" | "both") and the Pi speaker's volume
+    // (0..100); services/api/api.py, applied by services/audio/audio.py
+    fetchAudioOutput() {
+      return this._fetchJson(this.apiBaseUrl + "/audioOutput");
+    }
+
+    setAudioOutput(change) {
+      return this._postJson(this.apiBaseUrl + "/audioOutput", change);
+    }
+
     // teslalinux: the GPU clock (standard | faster | fastest; services/api/api.py, next restart)
     fetchGpuSpeed() {
       return this._fetchJson(this.apiBaseUrl + "/gpuSpeed");
