@@ -105,6 +105,9 @@ speed, on a road route.*
   Waze, so they stay right whatever Waze version is installed.
 - Leaving the settings page puts Waze back on its map. If Waze is asking something on the map at
   that moment, the group says so: answer it there first.
+- While Waze guides you it offers no way to its settings (on the car screen too), and while a
+  question or a list is on its map neither. The group now says which, opens Waze's settings by
+  itself as soon as Waze offers them again, and during a drive offers to end it.
 - Closing the car page (or the browser) while Waze's settings are open also puts Waze back on its
   map, at once; when the car simply drives out of the Wi-Fi's range, within about half a minute.
   Before, Waze's settings stayed on the car's map.

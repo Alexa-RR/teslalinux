@@ -103,14 +103,16 @@
         const again = UI.button("Try again", () => this.car.openAppSettings(this.listener), "btn--quiet", "refresh");
         const why = {
           offline: "Waze is not connected right now (it may be starting).",
-          noAction: "Waze opens its settings from its map. Waze is showing something else there now (a question or a list): answer or close it on the map, then try again.",
+          noAction: "Waze opens its settings from its map, and something else is on its map now (a question, a list or a search). Answer or close it there: Waze's settings open here by themselves once its map is back.",
+          navigating: "Waze offers its settings only when it is not guiding you. They open here by themselves when the drive ends, or end the drive now.",
           noAnswer: "Waze did not open its settings.",
           noNames: "Waze's settings need a newer Teslalinux runtime on this device (it comes with the next update).",
           closed: "Waze closed its settings.",
         }[s.state === "closed" ? "closed" : s.reason] || "Waze's settings are not available.";
         const buttons = s.reason === "noNames" ? []
+          : s.reason === "navigating" ? [UI.button("End the drive", () => this.car.endDriveForAppSettings(), "btn--quiet", "close")]
           : [s.state === "closed" ? UI.button("Open them again", () => this.car.openAppSettings(this.listener), "btn--quiet", "settings") : again];
-        if (s.reason === "noAction" && this.o.onMap) buttons.push(UI.button("Show the map", () => this.o.onMap(), "btn--quiet", "map"));
+        if ((s.reason === "noAction" || s.reason === "navigating") && this.o.onMap) buttons.push(UI.button("Show the map", () => this.o.onMap(), "btn--quiet", "map"));
         this.body.replaceChildren(h("div", { class: "waze-app-note" }, UI.warnbox(why, "info_outline"), h("div", { class: "waze-app-buttons" }, buttons)));
         return;
       }

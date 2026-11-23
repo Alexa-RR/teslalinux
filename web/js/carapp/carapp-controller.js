@@ -168,6 +168,8 @@
       this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
       // the app's own settings while the settings page shows them (openAppSettings), else null
       this.appSettings = null;
+      // the settings page's listener while it waits for the app to offer its settings action again
+      this.appSettingsWaiting = null;
     }
 
     // ---- the app's own settings, drawn by the settings page (carapp-settings-view.js) ----------
@@ -199,10 +201,18 @@
         return;
       }
       if (!action) {
-        // "noNames": the car-app host does not name icons yet (an older runtime)
-        listener({ state: "unavailable", reason: hasIconNames(wrapper) ? "noAction" : "noNames", depth: 0 });
+        // "noNames": the car-app host does not name icons yet (an older runtime). "navigating": Waze
+        // offers its settings action only on its map while it does not navigate (Waze 5.27.5: during
+        // a drive its map has search, routes and sound, and none of their screens leads to the
+        // settings). "noAction": something else is on its map (a question, a list, a search).
+        // Either way they open by themselves as soon as Waze offers the action again, while the
+        // settings page still asks (closeAppSettings stops waiting).
+        const reason = !hasIconNames(wrapper) ? "noNames" : this.navigating ? "navigating" : "noAction";
+        this.appSettingsWaiting = reason === "noNames" ? null : listener;
+        listener({ state: "unavailable", reason, depth: 0 });
         return;
       }
+      this.appSettingsWaiting = null;
       const t = {
         listener: listener,
         base: stackIds(wrapper), // the map's stack; corrected by the settings screen's own
@@ -232,6 +242,16 @@
       this.send({ type: "appSettings", state: "open" });
       this.send({ type: "click", cb: action.onClickDelegate.$cb });
       this.tellAppSettings();
+    }
+
+    /**
+     * The settings page's way to Waze's settings during a drive: the drive ends (the end-drive
+     * control's message), Waze goes back to its map, which offers the settings action, and the
+     * waiting settings page opens them (the template handler above).
+     */
+    endDriveForAppSettings() {
+      if (!this.navigating) return;
+      this.send({ type: "stopNavigation" });
     }
 
     /**
@@ -265,6 +285,7 @@
      * over the map as before.
      */
     closeAppSettings() {
+      this.appSettingsWaiting = null;
       const s = this.appSettings;
       if (!s) return;
       s.listener = null;
@@ -719,6 +740,14 @@
           if (this.appSettings && this.routeAppSettings(m.template)) break;
           this.template = m.template;
           this.draw();
+          // the settings page waits for Waze's settings action (navigating, a question on the map)
+          if (this.appSettingsWaiting && !this.appSettings && findSettingsAction(m.template.template || m.template)) {
+            this.openAppSettings(this.appSettingsWaiting);
+          } else if (this.appSettingsWaiting && !this.appSettings) {
+            // still not offered: the reason may have changed (the drive started or ended)
+            const reason = this.navigating ? "navigating" : "noAction";
+            this.appSettingsWaiting({ state: "unavailable", reason, depth: 0 });
+          }
           break;
         case "navigation":
           this.navigating = m.active;
