@@ -69,7 +69,9 @@
 .carapp-card::-webkit-scrollbar { display: none; }
 .carapp-card.content { min-height: var(--card-min-height); padding: var(--pad-2); display: flex; flex-direction: column; overflow: hidden; }
 .carapp-card.content > .carapp-content { flex: 1 1 auto; }
-.carapp-card.steps { width: var(--routing-card-width); padding: var(--pad-3); }
+/* the turn card: compact, so the map ahead stays in view (the maneuver tile, the distance and the
+   lanes row are smaller than a phone's; the street keeps its two lines) */
+.carapp-card.steps { width: var(--routing-card-width); padding: var(--pad-2); --nav-large-image: calc(var(--g) * 54); }
 .carapp-card.travel {
   top: auto;
   bottom: var(--card-bottom);
@@ -231,6 +233,9 @@
 .carapp-row-text { font-size: var(--body3); color: var(--on-surface-dim); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: pre-line; font-variant-numeric: tabular-nums; }
 /* an image inside a text (CarIconSpan): the text's height, in its colour when it is a glyph */
 .carapp-icon.inline { width: 1.15em; height: 1.15em; margin: 0 0.12em; }
+/* a picture in a text (a road or exit sign, drawn by the app in its own colours): its own aspect
+   ratio, taller than the letters so its symbol and number stay readable */
+.carapp-icon.inline.picture { height: 1.4em; width: auto; aspect-ratio: var(--picture-ratio, 1.9); margin: -0.2em 0.18em; }
 .carapp-section-header { font-size: var(--body3); font-weight: 500; color: var(--accent); padding: var(--pad-4) var(--pad-3) var(--pad-1); }
 .carapp-chevron::before { font-family: "Material Symbols Car"; content: "\e5cc"; font-size: var(--row-icon); color: var(--on-surface-dim); }
 
@@ -341,21 +346,22 @@
 @keyframes carapp-listening { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent); } }
 
 /* ---- navigation (detailed_step_view, compact_step_view, travel_estimate_view) ---- */
-.carapp-step.detailed { display: flex; align-items: center; gap: var(--pad-3); }
+.carapp-step.detailed { display: flex; align-items: center; gap: var(--pad-2); }
 .carapp-maneuver {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: calc(var(--nav-large-image) * 1.5);
-  height: calc(var(--nav-large-image) * 1.5);
-  border-radius: calc(var(--radius-card) * 0.85);
+  width: calc(var(--nav-large-image) * 1.45);
+  height: calc(var(--nav-large-image) * 1.45);
+  /* a third of the tile, whatever its size (the card's radius made a small tile a circle) */
+  border-radius: calc(var(--nav-large-image) * 0.48);
   background: #1a73e8;
   color: #fff;
 }
 .carapp-maneuver .carapp-icon { width: var(--nav-large-image); height: var(--nav-large-image); }
 .carapp-step-text { min-width: 0; display: flex; flex-direction: column; gap: var(--pad-0); }
-.carapp-nav-title { font-size: calc(var(--body1) * 1.25); font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.carapp-nav-title { font-size: calc(var(--body1) * 1.12); font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
 .carapp-step-cue { font-size: var(--body2); line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .carapp-step.compact {
   display: flex;
@@ -368,7 +374,7 @@
 }
 .carapp-step.compact .carapp-icon { --icon-size: var(--nav-small-image) !important; }
 .carapp-divider { display: none; }
-.carapp-icon.lanes { width: 100%; height: var(--nav-large-image); margin-top: var(--pad-2); }
+.carapp-icon.lanes { width: 100%; height: var(--nav-large-image); margin-top: var(--pad-1); }
 .carapp-icon.junction { width: 100%; height: calc(var(--routing-card-width) * 0.6); margin-top: var(--pad-2); border-radius: var(--radius-row); }
 .carapp-travel { display: flex; align-items: baseline; gap: var(--pad-3); white-space: nowrap; }
 .carapp-travel .carapp-nav-title { font-size: var(--body1); }
@@ -933,11 +939,11 @@ body.carapp-page-graphite .home-control-button.update .home-control-icon { color
 .carapp-graphite .carapp-card.search .carapp-header { padding-left: calc(var(--g) * 12); }
 
 /* ---- navigation: one turn card (maneuver, lanes, then-step), the trip card ---- */
-.carapp-graphite .carapp-card.steps { padding: 0; --nav-large-image: calc(var(--g) * 72); }
+.carapp-graphite .carapp-card.steps { padding: 0; --nav-large-image: calc(var(--g) * 56); }
 .carapp-graphite .carapp-step.detailed {
-  min-height: calc(var(--g) * 132);
-  gap: calc(var(--g) * 22);
-  padding: calc(var(--g) * 14) calc(var(--g) * 24) calc(var(--g) * 14) calc(var(--g) * 26);
+  min-height: calc(var(--g) * 100);
+  gap: calc(var(--g) * 18);
+  padding: calc(var(--g) * 10) calc(var(--g) * 20) calc(var(--g) * 10) calc(var(--g) * 22);
   box-sizing: border-box;
 }
 .carapp-graphite .carapp-maneuver {
@@ -949,11 +955,11 @@ body.carapp-page-graphite .home-control-button.update .home-control-icon { color
 }
 .carapp-graphite .carapp-maneuver .carapp-glyph { color: var(--gr-glyph); }
 .carapp-graphite .carapp-step-text { gap: calc(var(--g) * 2); }
-.carapp-graphite .carapp-nav-title { font-size: calc(var(--g) * 46); font-weight: 600; line-height: 1.13; letter-spacing: -0.01em; }
-.carapp-graphite .carapp-step-cue { font-size: calc(var(--g) * 23); font-weight: 500; line-height: 1.3; color: var(--gr-text-2); }
+.carapp-graphite .carapp-nav-title { font-size: calc(var(--g) * 38); font-weight: 600; line-height: 1.13; letter-spacing: -0.01em; }
+.carapp-graphite .carapp-step-cue { font-size: calc(var(--g) * 21); font-weight: 500; line-height: 1.3; color: var(--gr-text-2); }
 .carapp-graphite .carapp-lanes, .carapp-graphite .carapp-step.compact { margin: 0 calc(var(--g) * 20); border-top: 1px solid var(--gr-divider); }
-.carapp-graphite .carapp-lanes { padding: calc(var(--g) * 10) 0; }
-.carapp-graphite .carapp-lanes .carapp-icon.lanes { margin: 0; height: calc(var(--g) * 56); }
+.carapp-graphite .carapp-lanes { padding: calc(var(--g) * 6) 0; }
+.carapp-graphite .carapp-lanes .carapp-icon.lanes { margin: 0; height: calc(var(--g) * 48); }
 .carapp-graphite .carapp-step.compact {
   gap: calc(var(--g) * 18);
   min-height: calc(var(--g) * 64);

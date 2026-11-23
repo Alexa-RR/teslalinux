@@ -454,6 +454,17 @@
           if (!ic) return null;
           ic.classList.add("inline");
           ic.style.verticalAlign = ICON_SPAN_ALIGN[span.alignment] || "middle";
+          if (!ic.classList.contains("tinted") && ic.style.backgroundImage) {
+            // a picture of its own (a road or exit sign): its own shape, large enough to read; a
+            // single-colour glyph stays the text's height
+            ic.classList.add("picture");
+            ic.style.verticalAlign = "middle";
+            const img = new Image();
+            img.onload = () => {
+              if (img.naturalWidth && img.naturalHeight) ic.style.setProperty("--picture-ratio", String(img.naturalWidth / img.naturalHeight));
+            };
+            img.src = ic.style.backgroundImage.slice(5, -2);
+          }
           return ic;
         }
       }

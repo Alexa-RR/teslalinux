@@ -120,7 +120,7 @@
         "navigationInfo": {
           "$": "RoutingInfo",
           "currentDistance": {"$": "Distance", "displayDistance": 350.0, "displayUnit": 1},
-          "currentStep": {"$": "Step", "cue": "Harbor Rd", "lanesImage": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 7, "type": 2}}, "maneuver": {"$": "Maneuver", "type": 8}},
+          "currentStep": {"$": "Step", "cue": {"$": "CarText", "text": "￼ • רח' ארלוזורוב, דרך ז'בוטינסקי (רמת גן)", "spans": [{"start": 0, "end": 1, "span": {"$": "CarIconSpan", "alignment": 1, "icon": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 22, "type": 2}}}}]}, "lanesImage": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 7, "type": 2}}, "maneuver": {"$": "Maneuver", "type": 8}},
           "nextStep": {"$": "Step", "cue": "Station Ave", "maneuver": {"$": "Maneuver", "type": 7}}
         },
         "destinationTravelEstimate": {

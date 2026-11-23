@@ -19,6 +19,15 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### A smaller turn card
+
+*Car mode, both looks, day and night.*
+
+The card with the next turn took almost half the screen. It is now about a fifth shorter: a
+smaller turn sign and lanes row, and the street name gets room for its two lines. The exit and road
+signs Waze puts in front of a street name were drawn at the height of the letters, too small to
+read; they now keep their own shape and are a little taller than the text.
+
 ### Platform
 
 #### Fixed
