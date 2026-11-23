@@ -1902,23 +1902,26 @@
       const wrap = h("div", { class: "boot", "data-id": "dev.boot" });
       const st = h("div", { class: "row-status", "aria-live": "polite" });
       if (page) {
-        const map = b.appMapSeconds && b.appMapSeconds > page ? b.appMapSeconds : null;
+        // Waze's map ready ("Map shown and ready" exists in the phone interface only), else its first picture
+        const mapReady = b.appMapSeconds && b.appMapSeconds > page;
+        const map = mapReady ? b.appMapSeconds : b.appFrameSeconds && b.appFrameSeconds > page ? b.appFrameSeconds : null;
+        const mapLabel = mapReady ? "Waze's map ready after" : "Waze's first picture after";
         const end = map || page;
         const ph = [];
         if (kernel) ph.push({ key: "kernel", name: "Kernel", from: 0, to: kernel, what: "The Linux kernel starts and finds the hardware" });
         const sysEnd = hot && hot < page ? hot : page;
         if (kernel && sysEnd > kernel) ph.push({ key: "system", name: "System", from: kernel, to: sysEnd, what: hot && hot < page ? "Services start, up to the hotspot the car joins" : "Services start, up to the web server" });
         if (hot && hot < page) ph.push({ key: "page", name: "Page", from: hot, to: page, what: "The web server that serves this page" });
-        if (map) ph.push({ key: "waze", name: "Waze", from: page, to: map, what: "Waze starts and draws its map" });
+        if (map) ph.push({ key: "waze", name: "Waze", from: page, to: map, what: mapReady ? "Waze starts and draws its map" : "Waze starts and shows its first picture" });
         wrap.append(
           h(
             "div",
             { class: "boot-hero" },
             h("div", null, h("div", { class: "boot-label" }, "Last start: ready for the car in"), h("div", { class: "boot-value num" }, S1(page))),
             map
-              ? h("div", { class: "boot-side" }, h("div", { class: "boot-label" }, "Waze's map ready after"), h("div", { class: "boot-value boot-value--2 num" }, S1(map)))
+              ? h("div", { class: "boot-side" }, h("div", { class: "boot-label" }, mapLabel), h("div", { class: "boot-value boot-value--2 num" }, S1(map)))
               : !b.final
-                ? h("div", { class: "boot-side" }, h("div", { class: "boot-label" }, "Waze's map"), h("div", { class: "boot-value boot-value--2 num" }, "measuring…"))
+                ? h("div", { class: "boot-side" }, h("div", { class: "boot-label" }, "Waze"), h("div", { class: "boot-value boot-value--2 num" }, "measuring…"))
                 : null,
           ),
         );
@@ -1969,7 +1972,11 @@
             "div",
             { class: "pkg" },
             h("span", null, i === 0 && page && x.at === b.at ? "This start" : x.at ? new Date(x.at * 1000).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "Earlier"),
-            h("span", { class: "num" }, h("bdi", null, s1(x.pageSeconds) + " ready, map " + (x.appMapSeconds ? s1(x.appMapSeconds) : "not measured"))),
+            h(
+              "span",
+              { class: "num" },
+              h("bdi", null, s1(x.pageSeconds) + " ready, " + (x.appMapSeconds ? "map " + s1(x.appMapSeconds) : x.appFrameSeconds ? "Waze " + s1(x.appFrameSeconds) : "Waze not measured")),
+            ),
           ),
         );
         wrap.append(...UI.disclosure("Previous starts (typically " + s1(typical) + ")", h("div", { class: "pkgs" }, rows)));

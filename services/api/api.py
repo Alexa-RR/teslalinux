@@ -1339,7 +1339,8 @@ def boot_status():
     out["firmwareCounted"] = cur.get("firmwareCounted") is True
     hist = data.get("history") if isinstance(data.get("history"), list) else []
     out["history"] = [{"at": num(h.get("at")), "pageSeconds": num(h.get("pageSeconds")),
-                       "hotspotSeconds": num(h.get("hotspotSeconds")), "appMapSeconds": num(h.get("appMapSeconds"))}
+                       "hotspotSeconds": num(h.get("hotspotSeconds")), "appFrameSeconds": num(h.get("appFrameSeconds")),
+                       "appMapSeconds": num(h.get("appMapSeconds"))}
                       for h in hist[:10] if isinstance(h, dict)]
     return out
 

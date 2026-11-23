@@ -90,7 +90,7 @@ def merge(state, rec):
     """this boot's record into the state: {"current": rec, "history": [newest first, one per boot]}"""
     old = state.get("history") if isinstance(state, dict) else None
     history = [h for h in (old if isinstance(old, list) else []) if isinstance(h, dict) and h.get("bootId") != rec["bootId"]]
-    history.insert(0, {k: rec.get(k) for k in ("bootId", "at", "kernelSeconds", "hotspotSeconds", "pageSeconds", "appMapSeconds")})
+    history.insert(0, {k: rec.get(k) for k in ("bootId", "at", "kernelSeconds", "hotspotSeconds", "pageSeconds", "appFrameSeconds", "appMapSeconds")})
     return {"current": rec, "history": history[:KEEP]}
 
 

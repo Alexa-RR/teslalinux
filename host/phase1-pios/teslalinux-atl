@@ -149,7 +149,10 @@ else
   # the phone interface: Waze draws its own speedometer, as its own setting says
   if [[ -r "$SPEEDO_TOOL" ]]; then python3 -I "$SPEEDO_TOOL" restore "$DATA_DIR" >&2 || true; fi
 fi
-export ANDROID_LOG_TAGS="${ANDROID_LOG_TAGS:-*:w}"
+# warnings and errors only, except two lines a start writes once: the app's first picture
+# (SurfaceView's surfaceChanged) and, in the phone interface, "Map shown and ready" (MainActivity);
+# host/teslalinux-boottime reads them for the settings page's start-up time
+export ANDROID_LOG_TAGS="${ANDROID_LOG_TAGS:-*:w SurfaceView:i MainActivity:i}"
 export ANDROID_APP_DATA_DIR="$DATA_DIR"
 mkdir -p "$DATA_DIR" "$HOME/.cache/art" "$HOME/.local/share/android_translation_layer"
 
