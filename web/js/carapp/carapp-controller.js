@@ -170,6 +170,8 @@
       document.body.classList.toggle("carapp-page-graphite", graphite);
       document.body.classList.toggle("carapp-page-night", graphite && this.isNight());
       this.applyMapColours();
+      // the settings page follows the car interface's day and night
+      global.dispatchEvent(new CustomEvent("teslalinux-carapp-look"));
     }
 
     /**

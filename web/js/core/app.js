@@ -217,8 +217,9 @@
       updateButton: elements.homeUpdateButton,
       settingsButton: elements.homeSettingsButton,
       onSettingsRequested: () => {
+        // teslalinux: the gear opens Settings (it has no bottom bar; its "Map" button comes back)
         if (shellController) {
-          shellController.setPage("about");
+          shellController.setPage("settings");
         }
       },
     });
@@ -231,6 +232,12 @@
       flavor,
       sidebar: elements.settingsSidebar,
       content: elements.settingsContent,
+      onClose: () => {
+        if (shellController) shellController.setPage("home");
+      },
+      onOpenPage: (pageId) => {
+        if (shellController) shellController.setPage(pageId);
+      },
       onSystemConfigurationChanged: (configuration) => {
         homeController.applySystemConfiguration(configuration);
         gpsController.setEnabled(

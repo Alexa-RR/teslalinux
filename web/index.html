@@ -9,6 +9,7 @@
   <link rel="apple-touch-icon" href="./assets/teslalinux-logo.png" />
 
   <link rel="stylesheet" href="./css/app.css" />
+  <link rel="stylesheet" href="./css/settings.css" />
 
 
   <script defer src="./js/vendor/reconnecting/reconnecting-websocket.js"></script>
@@ -25,6 +26,7 @@
   <script defer src="./js/audio/audio-controller.js"></script>
   <script defer src="./js/release-notes/release-notes-data.js"></script>
   <script defer src="./js/release-notes/release-notes-controller.js"></script>
+  <script defer src="./js/settings/settings-ui.js"></script>
   <script defer src="./js/settings/settings-controller.js"></script>
   <script defer src="./js/home/home-controller.js"></script>
   <script defer src="./js/shell/shell-controller.js"></script>
@@ -126,12 +128,20 @@
         </div>
       </section>
 
+      <!-- teslalinux: the settings page (css/settings.css, js/settings/; README.teslalinux.md) -->
       <section id="page-settings" class="panel-page" hidden>
-        <div class="settings-layout">
-          <aside id="settings-sidebar"></aside>
-          <div class="settings-content-wrap">
-            <div id="settings-content"></div>
-          </div>
+        <div class="st-app" id="settings-app" data-view="section">
+          <header class="bar">
+            <button class="bar-back" id="settings-back" type="button"><span class="icon flip" aria-hidden="true">chevron_left</span><span>Map</span></button>
+            <h1 class="bar-title" id="settings-title">Settings</h1>
+            <div class="bar-end">
+              <span class="bar-state" id="settings-bar-state" role="status"><span class="spin"></span><span id="settings-bar-state-text">Waze is restarting</span></span>
+              <label class="search" id="settings-search"><span class="icon" aria-hidden="true">search</span><input id="settings-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search settings" aria-label="Search settings" /><button class="search-clear" id="settings-search-clear" type="button" aria-label="Clear"><span class="icon" aria-hidden="true">close</span></button></label>
+            </div>
+            <div class="busyline" id="settings-busyline"></div>
+          </header>
+          <nav class="rail" id="settings-sidebar" aria-label="Settings sections"></nav>
+          <main class="pane" id="settings-pane"><div class="content" id="settings-content"></div></main>
         </div>
       </section>
     </main>

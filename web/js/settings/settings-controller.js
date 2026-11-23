@@ -4,6 +4,11 @@
   const TAHtml = global.TAHtml;
   const utils = TAHtml.utils;
   const constants = TAHtml.constants;
+  const UI = TAHtml.SettingsUI;
+  const { h, icon } = UI;
+
+  const APP_WORDS = { active: "Running", activating: "Starting", restarting: "Restarting", inactive: "Stopped", failed: "Stopped after an error" };
+  const appWord = (s) => APP_WORDS[s] || "Unknown";
 
   class SettingsController {
     constructor(options) {
@@ -13,18 +18,31 @@
       this.audioController = options.audioController;
       this.flavor = options.flavor;
       this.onSystemConfigurationChanged = options.onSystemConfigurationChanged;
+      // teslalinux: the page has no bottom bar: "Map" goes back to the display, "What's new" opens the release notes
+      this.onClose = options.onClose || null;
+      this.onOpenPage = options.onOpenPage || null;
 
       this.sidebar = options.sidebar;
       this.content = options.content;
+      this.page = global.document.getElementById("page-settings");
+      this.app = global.document.getElementById("settings-app");
+      this.pane = global.document.getElementById("settings-pane");
+      this.titleEl = global.document.getElementById("settings-title");
+
+      // what the rail's live values, the overview and the search read (refreshed per section)
+      this.cache = {};
+      this._cacheAt = 0;
+      // changes that restart Waze, waiting together in one bar: key -> {label, value, saved, apply}
+      this.restart = new Map();
 
       this.sections = [
         // teslalinux: what the device is connected to right now (GET /api/status)
-        { id: "status", title: "Status", icon: "monitor_heart" },
-        { id: "display", title: "Display", icon: "monitor" },
+        { id: "status", title: "Status", icon: "dashboard" },
+        { id: "display", title: "Display", icon: "desktop_windows" },
         // teslalinux: hotspot and LTE (GET/POST /api/network); upstream's Rear Display is gone (the
         // app is a navigation app shown on the main screen)
         { id: "network", title: "Wi-Fi & LTE", icon: "wifi" },
-        { id: "audio", title: "Audio", icon: "speaker" },
+        { id: "audio", title: "Audio", icon: "volume_up" },
         { id: "gps", title: "GPS", icon: "gps_fixed" },
         // teslalinux: the device's language/region and time zone (GET/POST /api/locale)
         { id: "locale", title: "Language & region", icon: "language" },
@@ -36,37 +54,82 @@
         { id: "updates", title: "App updates", icon: "system_update" },
         // teslalinux: the operating system's own updates (GET/POST /api/systemUpdate)
         { id: "system", title: "System update", icon: "system_security_update" },
-        { id: "device", title: "Device", icon: "developer_board" },
+        { id: "device", title: "Device", icon: "memory" },
       ];
+
+      // the search index: [row id, section, title, the words a driver might use for it]
+      this.index = [];
 
       this.activeSectionId = "status";
       this._pollTimer = null;
       this._renderToken = 0;
-      this._activeDropdown = null;
 
       this.systemConfigCache = null;
-      this._bindGlobalEvents();
     }
 
     async initialize() {
+      UI.mount(this.page);
+      this._bindHeader();
+      this._applyTheme();
+      global.addEventListener("teslalinux-carapp-look", () => this._applyTheme());
       this._renderSidebar();
-      await this.setActiveSection(this.activeSectionId);
     }
 
-    async setActiveSection(sectionId) {
+    /** the section to show (and a row in it to scroll to and highlight) */
+    async setActiveSection(sectionId, focusId) {
+      if (!this.sections.some((s) => s.id === sectionId)) sectionId = this.sections[0].id;
       this.activeSectionId = sectionId;
+      if (this.app) this.app.dataset.view = "section";
+      this._closeSearch();
+      this._applyTheme();
       this._renderSidebar();
       await this._renderActiveSection();
+      if (focusId) {
+        const el = this.content.querySelector('[data-id="' + focusId + '"]');
+        if (el) {
+          el.scrollIntoView({ block: "center" });
+          el.classList.remove("flash");
+          void el.offsetWidth;
+          el.classList.add("flash");
+        }
+      } else if (this.pane) {
+        this.pane.scrollTop = 0;
+      }
+      this._refreshCacheSoon();
     }
 
-    async _renderActiveSection() {
+    /** the section drawn again where it is (after a change), and the rail */
+    async _rerender() {
+      await this._renderActiveSection(true);
+      this._renderSidebar();
+    }
+
+    async _renderActiveSection(keepScroll) {
       const token = ++this._renderToken;
-      this._setActiveDropdown(null);
       if (this._pollTimer) {
         global.clearTimeout(this._pollTimer);
         this._pollTimer = null;
       }
+      const section = this.sections.find((s) => s.id === this.activeSectionId) || this.sections[0];
+      if (this.titleEl) this.titleEl.textContent = section.title;
+      const scroll = this.pane ? this.pane.scrollTop : 0;
+      if (section.render) {
+        // the new sections return their nodes; until they arrive the old ones stay (no flash)
+        if (!this.content.childElementCount) this.content.replaceChildren(h("div", { class: "loading" }, "Loading…"));
+        let nodes;
+        try {
+          nodes = await section.render.call(this, token);
+        } catch (e) {
+          TAHtml.log && TAHtml.log("settings: " + section.id + ": " + e);
+          nodes = [h("div", { class: "error-note", role: "alert" }, icon("error_outline"), h("span", null, "The device did not answer. Try again in a moment."))];
+        }
+        if (token !== this._renderToken) return;
+        this.content.replaceChildren(...[].concat(nodes).filter(Boolean));
+        if (this.pane) this.pane.scrollTop = keepScroll ? scroll : this.pane.scrollTop;
+        return;
+      }
       this.content.innerHTML = "";
+      this._curBody = null;
 
       if (this.activeSectionId === "status") {
         await this._renderStatusSection(token);
@@ -1557,9 +1620,6 @@
         trailing: check,
         dense: false,
       });
-      if (busy) {
-        this.content.lastElementChild.querySelector(".settings-tile-icon").classList.add("settings-spin");
-      }
       const start = async (action, button) => {
         button.disabled = true;
         const r = await this.apiClient.systemUpdateAction(action);
@@ -1838,10 +1898,6 @@
         button.classList.remove("armed");
         await action();
       });
-    }
-
-    _appendHeading(text) {
-      (this._target || this.content).appendChild(utils.createElement("h3", "settings-subheading", text));
     }
 
     _createTextInput(value, options) {
@@ -2222,14 +2278,14 @@
           }
         },
       );
-      this._appendTile({
+      const gpuRow = this._appendTile({
         icon: "speed",
         title: "GPU speed",
         subtitle: describe(st),
         trailing: select,
         dense: false,
       });
-      const subtitle = this.content.lastElementChild.querySelector(".settings-tile-subtitle");
+      const subtitle = gpuRow.querySelector(".settings-tile-subtitle");
       this._appendDescription(
         "How fast the Pi's graphics chip runs. Waze's map is drawn by it, so a faster clock makes the map smoother. Faster needs a heatsink, Fastest a heatsink and a fan (it also raises the chip's voltage a little). A Pi that gets too hot slows itself down, so without cooling a faster setting only adds heat. Applies at the next restart.",
       );
@@ -2263,14 +2319,13 @@
         }
       };
       this._appendDivider();
-      this._appendTile({
+      const tile = this._appendTile({
         icon: "refresh",
         title: "Restart Waze",
         subtitle: describe(appState.state),
         trailing: this._createActionButton("Restart"),
         dense: false,
       });
-      const tile = this.content.lastElementChild;
       const subtitle = tile.querySelector(".settings-tile-subtitle");
       const button = tile.querySelector(".settings-action-button");
       this._appendDescription(
@@ -2502,13 +2557,12 @@
 
       // --- check now (automatic sources)
       if (source !== "manual" && !(source === "play" && !playUsable)) {
-        this._appendTile({
+        const checkTile = this._appendTile({
           icon: "sync",
           title: "Check for an update now",
           trailing: this._createActionButton("Check"),
           dense: false,
         });
-        const checkTile = this.content.lastElementChild;
         const checkButton = checkTile.querySelector(".settings-action-button");
         checkButton.addEventListener("click", async () => {
           checkButton.disabled = true;
@@ -2646,185 +2700,387 @@
     }
 
     _createActionButton(text) {
-      const button = utils.createElement("button", "settings-action-button", text);
-      button.type = "button";
-      return button;
+      return h("button", { class: "btn settings-action-button", type: "button" }, text);
     }
 
-    _bindGlobalEvents() {
-      if (!global.document || typeof global.document.addEventListener !== "function") {
-        return;
-      }
+    // ------------------------------------------------------------------ the page frame
 
-      global.document.addEventListener("pointerdown", (event) => {
-        this._handleDocumentPointerDown(event);
-      });
-      global.document.addEventListener("keydown", (event) => {
-        this._handleDocumentKeyDown(event);
-      });
-    }
-
-    _handleDocumentPointerDown(event) {
-      if (!this._activeDropdown) {
-        return;
-      }
-      if (this._activeDropdown.contains(event.target)) {
-        return;
-      }
-      // teslalinux: the open menu lives in <body> (see _openDropdownMenu)
-      if (this._activeMenu && this._activeMenu.contains(event.target)) {
-        return;
-      }
-      this._setActiveDropdown(null);
-    }
-
-    // teslalinux: an open dropdown menu is shown above everything, positioned from its trigger, so a
-    // scrolling settings panel (overflow: auto) cannot cut it off. It moves to <body> while open,
-    // opens downwards or upwards where there is more room, and closes on scroll or resize.
-    _openDropdownMenu(dropdown) {
-      const menu = dropdown.querySelector(".settings-dropdown-menu");
-      const trigger = dropdown.querySelector(".settings-dropdown-trigger");
-      if (!menu || !trigger) {
-        return;
-      }
-      const rect = trigger.getBoundingClientRect();
-      const margin = 8;
-      const below = global.innerHeight - rect.bottom - margin * 2;
-      const above = rect.top - margin * 2;
-      const openUp = below < 200 && above > below;
-      global.document.body.appendChild(menu);
-      menu.classList.add("settings-dropdown-menu-floating");
-      menu.style.minWidth = Math.max(rect.width, 160) + "px";
-      menu.style.right = Math.max(margin, global.innerWidth - rect.right) + "px";
-      menu.style.maxHeight = Math.max(120, Math.min(openUp ? above : below, 420)) + "px";
-      if (openUp) {
-        menu.style.top = "";
-        menu.style.bottom = global.innerHeight - rect.top + margin + "px";
-      } else {
-        menu.style.bottom = "";
-        menu.style.top = rect.bottom + margin + "px";
-      }
-      const active = menu.querySelector(".settings-dropdown-option.active");
-      if (active) {
-        // the chosen entry in view, scrolling only the menu (scrollIntoView could scroll the page too)
-        menu.scrollTop = Math.max(0, active.offsetTop - (menu.clientHeight - active.offsetHeight) / 2);
-      }
-      this._activeMenu = menu;
-      this._activeMenuHome = dropdown;
-      if (!this._closeOnViewportChange) {
-        this._closeOnViewportChange = (event) => {
-          // scrolling inside the open menu itself is fine
-          if (event && event.type === "scroll" && this._activeMenu && this._activeMenu.contains(event.target)) {
+    _bindHeader() {
+      const doc = global.document;
+      const back = doc.getElementById("settings-back");
+      if (back) {
+        back.addEventListener("click", () => {
+          if (this._phoneWidth() && this.app && this.app.dataset.view === "section") {
+            this.app.dataset.view = "list";
+            if (this.titleEl) this.titleEl.textContent = "Settings";
+            this._closeSearch();
             return;
           }
-          this._setActiveDropdown(null);
-        };
+          UI.closeSheet();
+          this._closeSearch();
+          if (this.onClose) this.onClose();
+        });
       }
-      global.addEventListener("resize", this._closeOnViewportChange);
-      global.document.addEventListener("scroll", this._closeOnViewportChange, true);
+      const box = doc.getElementById("settings-search");
+      const input = doc.getElementById("settings-search-input");
+      const clear = doc.getElementById("settings-search-clear");
+      if (input) {
+        input.addEventListener("input", () => this._runSearch(input.value));
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") {
+            input.value = "";
+            this._runSearch("");
+            input.blur();
+          }
+          if (e.key === "Enter" && this._results) {
+            const first = this._results.querySelector(".result");
+            if (first) first.click();
+          }
+        });
+      }
+      if (clear) {
+        clear.addEventListener("click", () => {
+          input.value = "";
+          this._runSearch("");
+          input.focus();
+        });
+      }
+      this._searchBox = box;
+      this._searchInput = input;
     }
 
-    _closeDropdownMenu() {
-      const menu = this._activeMenu;
-      const home = this._activeMenuHome;
-      this._activeMenu = null;
-      this._activeMenuHome = null;
-      if (this._closeOnViewportChange) {
-        global.removeEventListener("resize", this._closeOnViewportChange);
-        global.document.removeEventListener("scroll", this._closeOnViewportChange, true);
-      }
-      if (!menu) {
-        return;
-      }
-      menu.classList.remove("settings-dropdown-menu-floating");
-      menu.style.top = menu.style.bottom = menu.style.right = menu.style.maxHeight = menu.style.minWidth = "";
-      if (home) {
-        home.appendChild(menu);
-      } else if (menu.parentNode) {
-        menu.parentNode.removeChild(menu);
-      }
+    _phoneWidth() {
+      return global.matchMedia && global.matchMedia("(max-width: 600px)").matches;
     }
 
-    _handleDocumentKeyDown(event) {
-      if (!this._activeDropdown) {
-        return;
-      }
-      if (event.key === "Escape") {
-        this._setActiveDropdown(null);
-      }
+    /** the settings page is on screen (not the map, and the browser tab in front) */
+    _visible() {
+      return this.page && !this.page.hidden && !global.document.hidden;
     }
 
-    _setActiveDropdown(dropdown) {
-      if (this._activeDropdown && this._activeDropdown !== dropdown) {
-        this._closeDropdownMenu();
-        this._activeDropdown.classList.remove("open");
-        const previousTrigger = this._activeDropdown.querySelector(".settings-dropdown-trigger");
-        if (previousTrigger) {
-          previousTrigger.setAttribute("aria-expanded", "false");
-        }
+    /**
+     * The page follows the car interface's day and night: the driver's Day or Night, or on
+     * Automatic the car-app host's state (the sun at the car's position). With the phone interface
+     * there is no car-app host, and the browser's prefers-color-scheme decides.
+     */
+    _applyTheme() {
+      if (!this.page) return;
+      const car = global.TLCarApp;
+      if (car && car.mode === "car" && typeof car.isNight === "function") {
+        this.page.dataset.theme = car.isNight() ? "night" : "day";
+      } else {
+        delete this.page.dataset.theme;
       }
-
-      if (!dropdown) {
-        this._activeDropdown = null;
-        return;
-      }
-
-      if (this._activeDropdown === dropdown) {
-        return;
-      }
-
-      dropdown.classList.add("open");
-      const trigger = dropdown.querySelector(".settings-dropdown-trigger");
-      if (trigger) {
-        trigger.setAttribute("aria-expanded", "true");
-      }
-      this._activeDropdown = dropdown;
-      this._openDropdownMenu(dropdown);
     }
 
     _renderSidebar() {
-      this.sidebar.innerHTML = "";
+      this.sidebar.replaceChildren(
+        ...this.sections.map((section) =>
+          h(
+            "button",
+            {
+              class: "rail-item",
+              type: "button",
+              "aria-current": section.id === this.activeSectionId ? "page" : null,
+              onclick: () => this.setActiveSection(section.id),
+            },
+            icon(section.icon),
+            h("span", { class: "rail-label" }, section.title),
+            h("span", { class: "rail-value" }, this._railValue(section.id)),
+            this._railDot(section.id) ? h("span", { class: "rail-dot", "aria-label": "Needs attention" }) : null,
+          ),
+        ),
+      );
+    }
 
-      for (let index = 0; index < this.sections.length; index += 1) {
-        const section = this.sections[index];
-        const button = utils.createElement("button", "settings-menu-item", null);
-        button.type = "button";
-        if (section.id === this.activeSectionId) {
-          button.classList.add("active");
-        }
-
-        const icon = utils.createElement(
-          "span",
-          "material-symbols-rounded settings-menu-icon",
-          this._iconName(section.icon),
-        );
-        const label = utils.createElement("span", "settings-menu-label", section.title);
-
-        button.appendChild(icon);
-        button.appendChild(label);
-        button.addEventListener("click", async () => {
-          await this.setActiveSection(section.id);
-        });
-        this.sidebar.appendChild(button);
+    /** the rail entry's live value (empty until the cache has what it needs) */
+    _railValue(id) {
+      const section = this.sections.find((s) => s.id === id);
+      if (!section || !section.railValue) return "";
+      try {
+        return section.railValue.call(this) || "";
+      } catch (_e) {
+        return "";
       }
     }
 
-    async _updateDisplayConfig(mutator, showRebootBanner) {
-      const shouldShowRebootBanner = showRebootBanner !== false;
+    _railDot(id) {
+      if (id === "overview") return false;
+      return this._attention().some((x) => x.section === id);
+    }
 
+    /** what needs the driver (the Overview's list, and the rail's dots) */
+    _attention() {
+      return [];
+    }
+
+    /** the answers the rail and the overview read, all at once; each part null when it fails */
+    async _refreshCache() {
+      const api = this.apiClient;
+      const safe = (p) => p.then((v) => v, () => null);
+      const [status, iface, audio, display, appUpdate, sys, config, gpu, keyboard] = await Promise.all([
+        safe(api.fetchStatus()),
+        safe(api.fetchAppInterface()),
+        safe(api.fetchAudioOutput()),
+        safe(api.fetchDisplayState()),
+        safe(api.fetchAppUpdate()),
+        safe(api.fetchSystemUpdate()),
+        safe(api.fetchSystemConfiguration()),
+        safe(api.fetchGpuSpeed()),
+        safe(api.fetchKeyboard()),
+      ]);
+      const c = this.cache;
+      const keep = (k, v) => {
+        if (v) c[k] = v;
+      };
+      keep("status", status);
+      keep("iface", iface);
+      keep("audio", audio);
+      keep("display", display);
+      keep("appUpdate", appUpdate);
+      keep("sys", sys);
+      keep("config", config);
+      keep("gpu", gpu);
+      keep("keyboard", keyboard);
+      this._cacheAt = Date.now();
+      this._renderSidebar();
+    }
+
+    _refreshCacheSoon() {
+      if (Date.now() - this._cacheAt < 8000 || this._cacheBusy) return;
+      this._cacheBusy = true;
+      this._refreshCache().finally(() => {
+        this._cacheBusy = false;
+      });
+    }
+
+    // ------------------------------------------------------------------ the interface picked
+
+    /** a value as it will be after the restart: the staged one, else the saved one */
+    _staged(key, saved) {
+      return this.restart.has(key) ? this.restart.get(key).value : saved;
+    }
+
+    /**
+     * The interface the page shows settings for: the one picked, even while it waits for the
+     * restart (the other interface's settings keep their values and waiting changes, and come back
+     * with it).
+     */
+    _ifaceNow() {
+      const saved = this.cache.iface ? this.cache.iface.interface : global.TLCarApp && global.TLCarApp.mode;
+      return this._staged("interface", saved === "car" ? "car" : "phone");
+    }
+
+    // ------------------------------------------------------------------ changes that restart Waze
+
+    /**
+     * Changes that restart Waze wait together in one bar at the bottom of the pane until the
+     * driver restarts Waze, so several changes cost one restart. Choosing the saved value again
+     * takes a change out; Undo drops them all. The row says that its change is waiting.
+     */
+    _stage(r, key, label, saved, value, apply) {
+      if (String(value) === String(saved)) this.restart.delete(key);
+      else this.restart.set(key, { label, value, saved, apply });
+      this._markStaged(r, key);
+      this._renderRestartBar();
+      return true;
+    }
+
+    _markStaged(r, key) {
+      if (!r) return;
+      const st = UI.status(r);
+      if (this.restart.has(key)) st.info("Applies when Waze restarts");
+      else st.clear();
+    }
+
+    _renderRestartBar() {
+      if (!this.page) return;
+      let bar = this.page.querySelector(".rbar");
+      this.page.classList.toggle("has-rbar", this.restart.size > 0);
+      if (!this.restart.size) {
+        if (bar && !bar.classList.contains("leaving")) {
+          bar.classList.add("leaving");
+          bar._t = global.setTimeout(() => bar.remove(), 180);
+        }
+        return;
+      }
+      if (!bar) {
+        bar = h("div", { class: "rbar", role: "region", "aria-label": "Changes waiting for Waze to restart" });
+        this.page.append(bar);
+      }
+      global.clearTimeout(bar._t);
+      bar.classList.remove("leaving");
+      const names = [...this.restart.values()].map((x) => x.label);
+      bar.replaceChildren(
+        h(
+          "div",
+          { class: "rbar-text" },
+          h("b", null, names.length === 1 ? "Restart Waze to apply your change" : "Restart Waze to apply " + names.length + " changes"),
+          names.join(", ") + ". Waze is back in about a minute; navigation stops until then.",
+        ),
+        UI.button("Undo", () => this._undoRestart(), "btn--ghost"),
+        UI.button("Restart Waze now", () => this._applyRestart(bar), "btn--primary", "restart_alt"),
+      );
+    }
+
+    async _undoRestart() {
+      this.restart.clear();
+      this._renderRestartBar();
+      await this._rerender();
+    }
+
+    async _applyRestart(bar) {
+      bar.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      bar.querySelector(".rbar-text").replaceChildren(h("b", null, "Restarting Waze…"), "Saving the changes.");
+      UI.busy(1);
+      const iface = this.restart.has("interface") ? this.restart.get("interface").value : null;
+      try {
+        for (const [k, x] of [...this.restart]) {
+          await x.apply();
+          this.restart.delete(k);
+        }
+      } catch (_e) {
+        bar.querySelector(".rbar-text").replaceChildren(h("b", null, "Not applied"), "The device did not answer. Your changes are kept.");
+        bar.querySelectorAll("button").forEach((b) => (b.disabled = false));
+        UI.busy(-1);
+        return;
+      }
+      UI.busy(-1);
+      this._renderRestartBar();
+      if (iface) {
+        // the page itself changes with the interface: it reloads once the device reports the new one
+        UI.toast("Waze restarts with the " + iface + " interface. This page reloads by itself.");
+        for (let i = 0; i < 20; i += 1) {
+          await UI.wait(500);
+          try {
+            if ((await this.apiClient.fetchAppInterface()).interface === iface) break;
+          } catch (_e) {
+            // the API restarting with the app: try again
+          }
+        }
+        global.location.reload();
+        return;
+      }
+      this._watchApp();
+      await this._rerender();
+    }
+
+    /** the header's pill, the rail and the overview follow the app until it runs again (or 3 minutes pass) */
+    _watchApp() {
+      global.clearTimeout(this._appWatch);
+      const pill = global.document.getElementById("settings-bar-state");
+      const text = global.document.getElementById("settings-bar-state-text");
+      const started = Date.now();
+      let seen = false;
+      const tick = async () => {
+        let state = "unknown";
+        try {
+          state = (await this.apiClient.fetchAppState()).state;
+        } catch (_e) {
+          // keep following
+        }
+        if (this.cache.status && this.cache.status.app) this.cache.status.app.state = state;
+        const down = state !== "active";
+        if (down) seen = true;
+        if (pill) pill.classList.toggle("on", down);
+        if (text) text.textContent = state === "restarting" || state === "inactive" ? "Waze is restarting" : "Waze is starting";
+        this._renderSidebar();
+        if (this.activeSectionId === "overview" || this.activeSectionId === "device") this._rerender();
+        if ((down || !seen) && Date.now() - started < 180000) {
+          this._appWatch = global.setTimeout(tick, 1500);
+        } else {
+          if (pill) pill.classList.remove("on");
+          if (!down) UI.toast("Waze is running again.");
+        }
+      };
+      this._appWatch = global.setTimeout(tick, 800);
+    }
+
+    // ------------------------------------------------------------------ search
+
+    _closeSearch() {
+      if (this._results) {
+        this._results.remove();
+        this._results = null;
+      }
+    }
+
+    /** settings of one interface only are found only in it */
+    _searchable(id) {
+      const entry = this.index.find((x) => x[0] === id);
+      if (!entry) return false;
+      const only = entry[4];
+      return !only || only.call(this);
+    }
+
+    _runSearch(q) {
+      const box = this._searchBox;
+      if (box) box.classList.toggle("has-text", q.length > 0);
+      if (!q.trim()) {
+        this._closeSearch();
+        return;
+      }
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const hits = this.index
+        .filter((x) => this.sections.some((s) => s.id === x[1]) && this._searchable(x[0]))
+        .map(([id, sec, title, keys]) => {
+          const hay = (title + " " + keys).toLowerCase();
+          if (!words.every((w) => hay.includes(w))) return null;
+          const t = title.toLowerCase();
+          return { id, sec, title, score: t.startsWith(words[0]) ? 0 : t.includes(words[0]) ? 1 : 2 };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.score - b.score);
+      if (!this._results) {
+        this._results = h("div", { class: "results", role: "listbox", "aria-label": "Search results" });
+        this.page.append(this._results);
+      }
+      const mark = (t) => {
+        const i = t.toLowerCase().indexOf(words[0]);
+        return i < 0 ? t : [t.slice(0, i), h("mark", null, t.slice(i, i + words[0].length)), t.slice(i + words[0].length)];
+      };
+      this._results.replaceChildren();
+      UI.append(
+        this._results,
+        hits.length
+          ? hits.map((x) => {
+              const sec = this.sections.find((s) => s.id === x.sec);
+              return h(
+                "button",
+                {
+                  class: "result",
+                  type: "button",
+                  role: "option",
+                  onclick: () => {
+                    this._searchInput.value = "";
+                    if (box) box.classList.remove("has-text");
+                    this._searchInput.blur();
+                    this.setActiveSection(x.sec, x.id);
+                  },
+                },
+                icon(sec.icon),
+                h("div", null, h("div", { class: "result-title" }, mark(x.title)), h("div", { class: "result-path" }, sec.title)),
+                icon("chevron_right", "flip"),
+              );
+            })
+          : h("p", { class: "results-empty" }, "No setting matches “" + q + "”. Try a word like sound, map, Wi-Fi or update."),
+      );
+    }
+
+    // ------------------------------------------------------------------ display state
+
+    async _updateDisplayConfig(mutator) {
+      // teslalinux: no alert(); the row (or a toast for the old sections) says it applied
       try {
         const config = this._normalizeDisplayState(await this.apiClient.fetchDisplayState());
         const draft = { ...config };
         mutator(draft);
         await this.apiClient.postDisplayState(draft);
-        if (shouldShowRebootBanner) {
-          global.alert(
-            "Display configuration has been updated. Please restart the device in case of any issues.",
-          );
-        }
         this.displayController.triggerResizeFromViewport();
+        this.cache.display = draft;
+        return true;
       } catch (_error) {
-        this._renderErrorState("Service error");
+        return false;
       }
     }
 
@@ -2890,211 +3146,85 @@
       }
     }
 
+    // ------------------------------------------------------------------ the old sections' helpers, on the new rows
+
+    /** the group the old append helpers write into: the current one, else a new untitled one */
+    _body() {
+      const container = this._target || this.content;
+      if (!this._curBody || !this._curBody.isConnected || this._curBody.closest(".group").parentNode !== container) {
+        const g = UI.group(null, []);
+        container.appendChild(g);
+        this._curBody = g.querySelector(".group-body");
+      }
+      return this._curBody;
+    }
+
     _appendTile(options) {
-      const dense = options.dense !== false;
-      const tile = utils.createElement(
-        "div",
-        dense ? "settings-tile settings-tile-dense" : "settings-tile settings-tile-wide",
-        null,
-      );
-
-      const leading = utils.createElement("div", "settings-tile-leading", null);
-      const leadingIcon = utils.createElement(
-        "span",
-        "material-symbols-rounded settings-tile-icon",
-        this._iconName(options.icon || ""),
-      );
-      leading.appendChild(leadingIcon);
-      const content = utils.createElement("div", "settings-tile-content", null);
-      const title = utils.createElement("div", "settings-tile-title", options.title || "");
-      content.appendChild(title);
-      if (options.subtitle) {
-        content.appendChild(utils.createElement("div", "settings-tile-subtitle", options.subtitle));
+      const control = options.trailing || null;
+      const stack = Boolean(control && control.classList && (control.classList.contains("seg") || control.classList.contains("slider")));
+      const r = UI.row({ title: options.title || "", detail: options.subtitle || "", control, stack });
+      // the old sections update their tile's subtitle in place
+      let detail = r.querySelector(".row-detail");
+      if (!detail) {
+        detail = h("div", { class: "row-detail" });
+        detail.hidden = !options.subtitle;
+        r.querySelector(".row-main").append(detail);
       }
-
-      const trailing = utils.createElement("div", "settings-tile-trailing", null);
-      if (options.trailing) {
-        trailing.appendChild(options.trailing);
-      }
-
-      tile.appendChild(leading);
-      tile.appendChild(content);
-      tile.appendChild(trailing);
-      (this._target || this.content).appendChild(tile);
+      detail.classList.add("settings-tile-subtitle");
+      this._body().appendChild(r);
+      return r;
     }
 
     _appendDescription(text) {
-      const description = utils.createElement("p", "settings-description", text);
-      (this._target || this.content).appendChild(description);
+      this._body().appendChild(h("p", { class: "group-note" }, text));
     }
 
     _appendDivider() {
-      (this._target || this.content).appendChild(utils.createElement("hr", "settings-divider", null));
+      this._curBody = null;
+    }
+
+    _appendHeading(text) {
+      const g = UI.group(text, []);
+      (this._target || this.content).appendChild(g);
+      this._curBody = g.querySelector(".group-body");
     }
 
     _appendLoadingState() {
-      this.content.innerHTML = "";
-      this.content.appendChild(utils.createElement("div", "settings-loading", "Loading..."));
+      this.content.replaceChildren(h("div", { class: "loading" }, "Loading…"));
+      this._curBody = null;
     }
 
+    /** an error above what the section shows (it no longer wipes the section) */
     _renderErrorState(message) {
-      this.content.innerHTML = "";
-      this.content.appendChild(utils.createElement("div", "settings-error", message));
+      if (this.content.querySelector(":scope > .loading")) this.content.replaceChildren();
+      this.content.querySelectorAll(":scope > .error-note").forEach((e) => e.remove());
+      this.content.prepend(h("div", { class: "error-note", role: "alert" }, icon("error_outline"), h("span", null, message)));
     }
 
+    /** a choice: up to six short ones in a segmented control, more in a picker sheet */
     _createSelect(options, value, onChange) {
-      const selectedOption = this._findOptionByValue(options, value);
-
-      const root = utils.createElement("div", "settings-dropdown", null);
-      const trigger = utils.createElement("button", "settings-dropdown-trigger", null);
-      trigger.type = "button";
-      trigger.setAttribute("aria-haspopup", "listbox");
-      trigger.setAttribute("aria-expanded", "false");
-
-      const valueLabel = utils.createElement(
-        "span",
-        "settings-dropdown-value",
-        selectedOption ? selectedOption.label : "",
-      );
-      const arrow = utils.createElement(
-        "span",
-        "material-symbols-rounded settings-dropdown-arrow",
-        this._iconName("arrow_drop_down"),
-      );
-      trigger.appendChild(valueLabel);
-      trigger.appendChild(arrow);
-
-      const menu = utils.createElement("div", "settings-dropdown-menu", null);
-      menu.setAttribute("role", "listbox");
-
-      for (let index = 0; index < options.length; index += 1) {
-        const option = options[index];
-        const item = utils.createElement(
-          "button",
-          "settings-dropdown-option",
-          String(option.label),
-        );
-        item.type = "button";
-        item.dataset.value = String(option.value);
-        if (String(option.value) === String(value)) {
-          item.classList.add("active");
-        }
-
-        item.addEventListener("click", async () => {
-          if (trigger.disabled) {
-            return;
-          }
-          this._setActiveDropdown(null);
-          root.classList.add("is-busy");
-          trigger.disabled = true;
-          try {
-            await onChange(item.dataset.value || "");
-            if (this.activeSectionId) {
-              await this._renderActiveSection();
-            }
-          } finally {
-            trigger.disabled = false;
-            root.classList.remove("is-busy");
-          }
-        });
-
-        menu.appendChild(item);
+      const after = async (v) => {
+        await onChange(String(v));
+        if (this.activeSectionId) await this._renderActiveSection(true);
+      };
+      if (options.length <= 6) {
+        return UI.segmented(options.map((o) => ({ value: o.value, label: String(o.label) })), value, after);
       }
-
-      trigger.addEventListener("click", () => {
-        if (this._activeDropdown === root) {
-          this._setActiveDropdown(null);
-          return;
-        }
-        this._setActiveDropdown(root);
+      const chosen = options.find((o) => String(o.value) === String(value)) || options[0];
+      return UI.tapValue(chosen ? String(chosen.label) : "", async () => {
+        const v = await UI.pickFrom({ title: "Choose", value, options: options.map((o) => ({ value: o.value, label: String(o.label) })) });
+        if (v != null && String(v) !== String(value)) await after(v);
       });
-
-      root.appendChild(trigger);
-      root.appendChild(menu);
-      return root;
     }
 
     _createSwitch(value, onChange) {
-      const label = utils.createElement("label", "settings-switch", null);
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = Boolean(value);
-      const slider = utils.createElement("span", "settings-switch-slider", null);
-
-      input.addEventListener("change", async () => {
-        input.disabled = true;
-        try {
-          await onChange(Boolean(input.checked));
-        } finally {
-          input.disabled = false;
-        }
+      return UI.toggle(value, async (checked) => {
+        await onChange(Boolean(checked));
       });
-
-      label.appendChild(input);
-      label.appendChild(slider);
-      return label;
     }
 
     _createTrailingText(text) {
-      return utils.createElement("span", "settings-trailing-text", text);
-    }
-
-    _findOptionByValue(options, value) {
-      for (let index = 0; index < options.length; index += 1) {
-        if (String(options[index].value) === String(value)) {
-          return options[index];
-        }
-      }
-      return options.length > 0 ? options[0] : null;
-    }
-
-    _iconName(iconName) {
-      const source = String(iconName || "");
-      switch (source) {
-        case "monitor":
-          return "desktop_windows";
-        case "speaker":
-          return "volume_up";
-        case "developer_board":
-          return "memory";
-        case "display_settings":
-          return "settings_overscan";
-        case "photo_size_select_actual_outlined":
-          return "photo_size_select_actual";
-        case "photo_size_select_large":
-          return "aspect_ratio";
-        case "screenshot_monitor":
-          return "desktop_windows";
-        case "wifi_channel":
-          return "wifi";
-        case "data_thresholding_sharp":
-          return "data_usage";
-        case "device_thermostat":
-          return "thermostat";
-        case "developer_board_rounded":
-          return "developer_board";
-        case "broadcast_on_home_sharp":
-          return "phonelink";
-        case "cell_tower":
-          return "network_cell";
-        // teslalinux: names of the newer Material Symbols set, drawn with the bundled Material Icons font
-        case "monitor_heart":
-          return "dashboard";
-        case "wifi_find":
-          return "wifi_tethering";
-        case "lan":
-          return "settings_ethernet";
-        case "memory_alt":
-          return "sd_storage";
-        case "data_thresholding":
-          return "data_usage";
-        case "key":
-          return "vpn_key";
-        case "terminal":
-          return "computer";
-        default:
-          return source;
-      }
+      return UI.value(text);
     }
   }
 

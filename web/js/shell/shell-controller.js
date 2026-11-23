@@ -57,6 +57,9 @@
 
       this.homeShell.hidden = !isHome;
       this.panelShell.hidden = isHome;
+      // teslalinux: Settings fills the panel itself, without the app bar and the bottom bar
+      // (css/settings.css); the other pages keep both
+      this.panelShell.classList.toggle("is-settings", pageId === "settings");
       this.displayController.setPaused(!isHome);
 
       this._renderNavSelection(pageId);
