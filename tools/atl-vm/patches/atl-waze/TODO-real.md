@@ -7,24 +7,36 @@ replaced; each is removed from this list only when the real behavior is in.
 
 | Where | Shortcut | Real behavior needed |
 |---|---|---|
-| `members/android/graphics/Canvas.java.frag` | `saveLayerAlpha` ignores alpha | `saveLayer` with a paint whose alpha is set, so the layer composites at that alpha |
-| same | `drawVertices`, `drawBitmapMesh`, `drawPosText` are no-ops | Implement on cairo meshes or document as unsupported with a visible log |
-| `android/location/LocationProvider.java`, `LocationManager` additions | GNSS measurements callback returns false | Fine as "not supported" only until the host GPS feed exists; then `getCurrentLocation`/updates must come from `services/gps` |
+| `android/location/LocationProvider.java`, `LocationManager` additions | GNSS measurements report not supported, as a receiver without them | Nothing more unless a host receiver with raw measurements appears |
 
-## Open after the Nov 23 integration (fork tracks A, B and C)
-- `Bitmap.getPixel`/`getPixels` return premultiplied colour (AOSP: unpremultiplied); fix together
-  with `setPixels`. (Track D is fixing it.)
+## Open after the Nov 23 integration (fork tracks A to G)
+- Account and login (signed in) is the settings page `settings_main.account.account_and_login`;
+  signed out it is `TempUserProfileActivity`, whose ScrollView scrolls, and atl-tests/scroll
+  (ScrollView with EditText rows) scrolls. Check it with a signed-in Waze.
+- The IME window inset is the built-in on-screen keyboard's (WindowInsets.Type.ime(), adjustResize,
+  WindowInsetsAnimation). A keyboard of the car page or a device keyboard has no inset: nothing
+  tells ATL its height (Wayland text-input-v3 carries none).
+
+## Deferred (not needed by Waze yet)
+Real work for later, not dropped. Each is a gap no Waze code path reaches today.
 - OpenGL ES 1 contexts: Debian's Mesa is built without GLES1 (`eglCreateContext` fails with
   `EGL_BAD_ALLOC`, also without ATL); GLES10/GLES11/GL10 apps (a GLSurfaceView renderer that never
-  sets a client version) need an ES 1 on ES 2 layer.
-- AndroidKeyStore: Curve 25519 keys (x25519/ed25519), XDH KeyAgreement, Ed25519 Signature.
-- `Bitmap.copy` keeps the new bitmap's blank snapshot, so drawing on a copy starts empty.
-- Canvas on a Bitmap: a clip still pushed when the bitmap is read loses the drawing made before the
-  clip (GTK keeps only the innermost state).
-- `bionic_eglQuerySurface` answers only `EGL_WIDTH`/`EGL_HEIGHT` for ATL's own surfaces; other
-  attributes go to Mesa with ATL's pointer.
-- A KHR_debug Java callback's global reference leaks when its GL context is destroyed with the
-  callback still set.
+  sets a client version) need an ES 1 on ES 2 layer. Not started.
+- android.transition is not ported (ATL's Transition is an empty class): popups show and hide
+  without their Material enter/exit transition, app-set transitions do not run. Not started.
+- AssistStructure/ViewNode and the ContentCaptureSession ViewStructure methods
+  (`newViewStructure`, `newVirtualViewStructure`, `notifyViewAppeared`, `notifyViewsAppeared`,
+  `notifyViewsDisappeared`, `newAutofillId`): they need `ViewNode` (extends
+  `AssistStructure.ViewNode`) and the full `AutofillId`; ATL ships a 4-line `AutofillId` and no
+  `ViewStructure`. Port `AutofillId`, `AutofillValue`, `ViewStructure`, `AssistStructure`/`ViewNode`
+  from AOSP. Not started.
+- AndroidKeyStore Curve 25519 keys (x25519/ed25519), XDH KeyAgreement, Ed25519 Signature: started
+  on fork branch `track-g-later` (key generation, import, agreement and RFC 8032 signing pass in one
+  process). Left: an x25519/ed25519 key stored by the keystore does not load again in a new process
+  ("Keystore public key unreadable"); the PlatformTest checks are in that branch as
+  `test-notes/teslalinux-platformtest-curve25519.patch`.
+- The AccessibilityNodeInfo connection (no accessibility service runs here), a per-window
+  accessibility node query.
 
 ## Placeholders seen in the upstream ATL merge (added 2026-11-11, fix in the fork)
 - Keystore backend: the fork's KeyStoreStorage is kept. Upstream's libsecret natives
@@ -32,13 +44,7 @@ replaced; each is removed from this list only when the real behavior is in.
   for the user.
 
 ## Content capture / autofill (added 2026-10-08)
-- `android.view.contentcapture.ContentCaptureSession` is the AOSP abstract base without the
-  ViewStructure-building methods (`newViewStructure`, `newVirtualViewStructure`,
-  `notifyViewAppeared`, `notifyViewsAppeared`, `notifyViewsDisappeared`, `newAutofillId`): they need
-  `ViewNode` (extends `AssistStructure.ViewNode`) and the full `AutofillId`. ATL ships a 4-line
-  `AutofillId` and no `ViewStructure`. Port `AutofillId`, `AutofillValue`, `ViewStructure`,
-  `AssistStructure`/`ViewNode` from AOSP if Compose autofill (`dispatchProvideAutofillStructure`) is
-  ever exercised.
+- The ContentCaptureSession ViewStructure methods: see "Deferred (not needed by Waze yet)".
 - `ContentCaptureContext` carries only the app-side fields; the @SystemApi half needs the system
   service (absent here, as on devices without a content capture service).
 - No `ContentCaptureManager`: `Context.CONTENT_CAPTURE_MANAGER_SERVICE` resolves to null, which is
@@ -47,48 +53,19 @@ replaced; each is removed from this list only when the real behavior is in.
   PictureInPictureUiState are not ported (no PiP window mode in ATL). Waze references them for
   the navigation PiP; add when PiP is designed for the car screen.
 
-## Animation (added 2026-10-08)
-- View animations (android.view.animation) keep the ATL instant-completion model: Animation.start()
-  runs the animation to its end state on the next main-loop turn (no per-frame sampling; GTK draws
-  the views). AOSP API/state/attribute parsing is in place, so a time-driven implementation only
-  needs a frame clock calling getTransformation() and a View applying the Transformation.
-- PathInterpolator(Path) and pathData XML need Path.approximate (GskPath flattening) -> native.
-- ObjectAnimator.ofObject(Object, Property, TypeConverter, Path) and
-  PropertyValuesHolder.ofObject(Property, TypeConverter, Path) need PathKeyframes (same Path
-  sampling); not ported yet.
-
-## Display density (added 2026-10-08)
-- ATL reports mdpi (160) and configures assets for 160; ATL_DENSITY_DPI (Java DisplayMetrics +
-  native asset config via native-density.sh) overrides it. Waze picks @2x/@3x skin assets from
-  the density (ResourcesNativeManager); at 160 it asks for 1x files that the APK does not ship
-  ("Error obtaining image buffer ... moods/..."). Decide the car-screen density (240 or 320) and
-  make the Tesla display service pass it.
-
 ## Boot classpath (ART libcore) and lambdas
 - The guest's core-oj/core-libart hostdex jars were dexed with dx (invoke-custom left in), and the
   shipped java.lang.invoke.LambdaMetafactory was a placeholder returning null: every lambda inside
   libcore threw BootstrapMethodError. patches/atl-waze/bootcp/java/lang/invoke/LambdaMetafactory.java
   (installed by patch-core-oj.sh) implements the metafactory with a Proxy per function object over
   MethodHandles (captures, method refs, default methods such as Function.andThen all work).
-- ART itself cannot invoke a varargs bootstrap method, so altMetafactory call sites (serializable
-  lambdas: Comparator.comparing/thenComparing, Map.Entry.comparingByKey...) still fail with
-  "ClassCastException: MethodType cannot be cast to Object" before the metafactory runs. The full fix
-  is to re-dex libcore with D8 (desugared lambdas, no invoke-custom): atl-host/jars/core-all_classes.jar
-  holds the class files; it would have to be split back into the per-jar boot classpath layout.
+- Fixed by tools/debvm/patches/libcore-d8.py (D8-dexed core-oj/core-libart; atl-tests/lambda 7/7),
+  run by build-dist.sh.
 - Test harness: dalvikvm runs a dex directly in the guest (dalvikvm -cp /home/atl/x.dex Main);
   scratchpad/mhtest has the lambda/method-handle tests. A boot jar change costs one boot-image
   rebuild (~3 min) instead of a Waze relaunch (~10 min).
 
 ## Open after 2026-10-08 evening (Mac VM)
-- Main menu (WazeMainMenuFragment, ComposeView in FragmentContainerView 0x7f0a025f): composed and laid
-  out (tap.sh dump shows header, avatar, rows) but its AndroidComposeView draws nothing; hiding the
-  main ComposeView (tap.sh setvis 0x7f0a0493 4) leaves a black screen, so it is the drawing of a second
-  Compose owner view, not stacking. Compare View.draw/drawRenderNode of the two owners (ATL_DEBUG_DRAW).
-- Bottom sheet area of the main screen is empty (Compose content; same investigation).
-- Activity stop crash: five unnamed JNI-attached native threads (Thread-N, exiting when Godot tears down on
-  onStop) end without DetachCurrentThread -> ART FATAL -> abort recursion -> SIGSEGV. Find their owner
-  (Godot WorkerThreadPool vs Waze pool); core.619 in ~/waze.
-- Vehicle screen: Switch renders as rectangles; "Navigation" title overlaps the back button.
 - Audit (scratchpad/apicheck3.txt): accessibility (176 members), content/pm (59), inputmethod (43),
   Notification, media/session, WebView, camera2 (no camera: report absence), GnssStatus.
 
@@ -103,13 +80,10 @@ replaced; each is removed from this list only when the real behavior is in.
 - FIXED (Oct 10): dialogs are layers in the main window (native-dialog-overlay.sh: GtkOverlay, AOSP dim 0.6,
   outside-touch cancel, BACK to the topmost dialog). Still separate GTK windows: ATL's software keyboard
   (ATLKeyboardDialog) and NotificationManager popups; under cage they cover the screen.
-- wolfSSL SIGTRAP: a BRK inside libwolfssl.so on an OkHttp thread (not the fortify wrappers).
 - AccessibilityNodeInfo.setQueryFromAppProcessEnabled keeps no connection (no in-process node
   query service yet); AccessibilityManager/View accessibility event dispatch still ATL's minimal one.
 
-- Voice prompt played from a scheme-less path "/S3_TTS/<voice>/.../<sha>.mp3" fails with FileNotFoundException once per drive (the other prompts come from the media3 voice_files cache and play). The path is built outside logcat-visible code; find who hands media3 a bare "/S3_TTS" path (a base directory that resolves to "" on ATL?).
-
-- ProgressBar/AbsSeekBar/SeekBar are now the AOSP drawable-based views (Oct 10); SeekBar touch/keys go through View.onTouchEvent. Verify a visible SeekBar (volume) and the Material progress indicators in Waze.
+- /S3_TTS/...mp3 is Waze's media3 cache key for a server TTS clip; a clip missing from downloads/voice_files falls through to FileDataSource. Open: why that clip was not downloaded (trace a drive).
 
 - FIXED (Oct 10): drawer buttons unreachable: ATL's View.requestLayout only flipped flags up the chain, so Compose's AndroidViewsHandler never remeasured holders whose View went GONE and a stale 1280x72 node kept catching taps. requestLayout now calls the parent's virtual requestLayout (AOSP). One-off crash seen once right after Stop: 'Must run runDetachLifecycle() before markAsDetached()' (Compose detach ordering) - not reproduced since; watch for it.
 
@@ -187,12 +161,6 @@ split APK set from tools/apps/install-app.sh, and the dalvik cache warmed (dex2o
   UnsatisfiedLinkError. The guard is now the full marker of its own block.
 - Still open from this area:
   - (fixed Nov 9, see "Nov 9: app windows and popups") PopupWindow was a GtkPopover.
-  - ATL's focus model: every view is focusable by default (atl_focusable = true; AOSP: only
-    focusable/clickable views), isFocusableInTouchMode is isFocusable(), requestFocus does not apply
-    AOSP's touch-mode gate (FOCUSABLE_IN_TOUCH_MODE) or descendant focusability, and only EditText
-    gets onFocusChanged when GTK focus moves (no unFocus of the old view, no global focus change).
-    Fixing the defaults first is required before the touch-mode gate (EditText relies on them).
-  - Dialog layers share the main GtkWindow's single focus; AOSP keeps one focused view per window.
 
 ## Nov 9: app windows and popups (fixed)
 - Symptom: the Home/Work address dropdown was an empty 40 px strip at the left edge that took the
@@ -214,14 +182,7 @@ split APK set from tools/apps/install-app.sh, and the dalvik cache warmed (dex2o
 - Verified: Home and Work address screens show suggestions under the field, typing filters them,
   picking one saves it ("Work saved" snackbar), BACK leaves.
 - Still open from this area:
-  - android.transition is not ported (ATL's Transition is an empty class): popups show and hide
-    without their Material enter/exit transition, app-set transitions do not run.
-  - Window insets are empty objects (WindowInsets.java.frag): the on-screen keyboard is not an IME
-    inset, setOnApplyWindowInsetsListener does nothing, so adjustResize/inset-driven layouts never
-    see the keyboard (the visible display frame does).
-  - Text drawn by GTK keeps Pango's paragraph direction; ATL's own GTK containers do not mirror;
-    resolution is not redone on a runtime locale or configuration change.
-  - Dialog layers and the on-screen keyboard: dialogs shown while the keyboard is up stack above it.
+  - android.transition: see "Deferred (not needed by Waze yet)".
   - The window layer covers only the main window; app windows of other toplevels (none today) and
     the ATLKeyboardDialog / notification GtkWindows are not managed.
 
@@ -257,9 +218,6 @@ split APK set from tools/apps/install-app.sh, and the dalvik cache warmed (dex2o
   the trip overview was this exit; libwaze's atexit destructors then faulted inside exit(), which
   is what the signal reports showed. Fixed (native-viewtreeobserver-idempotent.sh: AOSP no-op).
 - Bitmap.getPixels of a sub-rectangle called exit(1): implemented (native-bitmap-getpixels-rect.sh).
-- Still fatal in ATL natives, to be replaced with AOSP error behaviour when they are hit:
-  MediaCodec dmabuf texture build / VA-API frame map failures (exit(1)), and a touch event sequence
-  id beyond MAX_POINTERS in View.c (exit(1)).
 - Diagnostics that worked: LD_PRELOAD=~/libtlsegv.so (scratchpad tl_segv.c) prints the fault pc, a
   frame-pointer chain mapped to library offsets, and the caller chain of exit/_exit/abort; the
   view dump's /tmp/atl-stack and /tmp/atl-stack-all give Java stacks from a side thread while the

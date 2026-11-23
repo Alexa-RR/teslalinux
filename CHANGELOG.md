@@ -121,6 +121,13 @@ speed, on a road route.*
   nothing. The setting says so, and the voice language and the microphone test appear only when
   it is on. With it off, Waze is told that this page cannot recognise speech.
 
+### Voice search in the phone interface
+
+*Settings > Sound > Voice search button.*
+
+- Waze's own microphone button in the phone interface works: with voice search switched on in this
+  browser, a tap listens through the car page and Waze searches what was said.
+
 ### A new settings page
 
 *Settings, in the car and on a phone, day and night.*
@@ -209,6 +216,24 @@ In ATL (the fork):
   `TESLALINUX_MAP_PACING=auto|app|full` (auto when unset), `/api/appInterface` `mapPacing` and
   `mapPacingSupport.modes`. The generated override jars keep their dex 4-byte aligned, so ART maps
   it instead of extracting a copy.
+- Bitmap pixel access as Android (un-premultiplied colours, setPixels replaces, exact buffer
+  copies, the NDK bitmap API on the pixel memory) and GLUtils; Gouraud-shaded
+  drawVertices/drawBitmapMesh; the expanding clip ops for apps targeting API 27; the Matrix
+  operations that had no native code.
+- View accessibility delegates and event dispatch; the hover, generic motion, drag, system UI and
+  unhandled-key listeners; PathInterpolator(Path) and pathData; PropertyValuesHolder keyframes,
+  evaluators (ArgbEvaluator colour animations) and Path animations; getCurrentLocation as Android;
+  a requested RECORD_AUDIO is granted while the car page offers speech recognition.
+- libcore dexed with D8 (tools/debvm/patches/libcore-d8.py), so libcore's own lambdas
+  (Comparator.comparing, Collectors.groupingBy, ...) work.
+- The built-in on-screen keyboard is the window's IME inset (`WindowInsets.Type.ime()`, the
+  activity resized for `adjustResize`, `WindowInsetsAnimation` callbacks with AOSP's dispatch
+  modes); each window (a dialog, the activity) keeps its own focused view. Android's key character
+  maps (`KeyCharacterMap` from Generic.kcm and Virtual.kcm, AOSP's parser); EGL surface queries and
+  attributes as EGL 1.5 (`EGL_SWAP_BEHAVIOR`, buffer age, `eglGetError` per thread). The Java
+  natives that had no C code: `Process`, `Trace`, `SystemClock`, `SQLiteConnection` blob file
+  descriptors, `AssetManager`, `XmlBlock` and `StringBlock` (styled strings), `BitmapFactory`;
+  `tools/debian/atl-tests/natives/` checks them.
 - `tools/debian/pi-bench.py --procs NAME,... --gpu --per-second`: each process's CPU and V3D
   share (DRM fdinfo) over the measured seconds, and the frames of every second.
 
@@ -225,6 +250,13 @@ In ATL (the fork):
   leaking a list per call. Measured with 300 managers a round over framework-res.apk: the process
   grew about 560 MB a round, now not at all. `tools/debian/atl-tests/assets/` checks it (11 checks:
   streams, themes, sharing, memory).
+- Right-to-left text in ATL's text views is aligned as Android aligns it: a Hebrew place name with
+  the default alignment starts at the right, from the text's own direction (AOSP's text direction
+  heuristics; they were placeholders), also when the view's layout is left to right.
+- `Bitmap.copy` drew on the copy's blank snapshot, and a clip still pushed when a bitmap was read
+  lost what was drawn before it. A KHR_debug message callback's global reference leaked when its
+  GL context was destroyed. `new EditText(context)` skipped the theme's `editTextStyle`, so it was
+  not focusable.
 
 ## [0.3.1] - 2026-11-20
 
