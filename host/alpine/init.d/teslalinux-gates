@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# teslalinux: PalGate gates (loopback 8082, behind /api/gates*; services/gates, docs/GATES.md)
+description="teslalinux PalGate gates"
+command=/usr/bin/python3
+command_args="/usr/local/lib/teslalinux/gates.py"
+command_user="tesla:tesla"
+command_background=true
+pidfile=/run/teslalinux-gates.pid
+output_log=/var/log/teslalinux/gates.log
+error_log=/var/log/teslalinux/gates.log
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
+umask=077
+
+depend() {
+	need localmount
+	after net teslalinux-gps
+}
+
+start_pre() {
+	checkpath -d -m 0755 -o tesla:tesla /var/log/teslalinux
+	# the linked account's token and the gates' settings: the service user's alone
+	checkpath -d -m 0700 -o tesla:tesla /var/lib/teslalinux/gates
+	export TESLALINUX_GATES_BIND=127.0.0.1 TESLALINUX_GATES_PORT=8082
+	export TESLALINUX_GATES_DIR=/var/lib/teslalinux/gates TESLALINUX_GATES_GPS_FEED=127.0.0.1:9997
+	export PYTHONPATH=/usr/local/lib/teslalinux
+}

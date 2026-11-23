@@ -1,0 +1,380 @@
+/* teslalinux: the gate button, its tray and the gate notices (js/gates/gates-controller.js). The
+   button is one of the page's own map buttons (#home-controls, css/app.css; in Car mode the car
+   interface sizes them, and the Graphite look makes them one frosted group, js/carapp/carapp.css).
+   The tray and the notice follow the same looks: dark rounded cards by default (the Rounded look,
+   and the Phone interface), frosted light or dark cards with the Graphite look by day or night. */
+
+#home-gates-button {
+  order: 1;
+  position: relative;
+}
+
+#home-gates-button.is-ok,
+#home-gates-button.is-ok .home-control-icon {
+  color: #3cc47a;
+}
+
+#home-gates-button.is-err,
+#home-gates-button.is-err .home-control-icon {
+  color: #f0675d;
+}
+
+/* sending: a ring turning round the button's edge */
+#home-gates-button.is-sending::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  border-top-color: currentColor;
+  border-right-color: currentColor;
+  animation: gates-turn 0.8s linear infinite;
+}
+
+body.carapp-page-graphite #home-gates-button.is-sending::after {
+  border-radius: calc(var(--hc-size) * 0.14);
+}
+
+@keyframes gates-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- tokens ---------- */
+.gates-tray,
+.gates-notice {
+  --gt-surface: #1e2125;
+  --gt-raised: #2b2f34;
+  --gt-pressed: #3a3f46;
+  --gt-ink: #f1f3f4;
+  --gt-ink-2: #aeb3b9;
+  --gt-line: rgba(255, 255, 255, 0.08);
+  --gt-blue: #8ab4f8;
+  --gt-green: #3cc47a;
+  --gt-red: #f0675d;
+  --gt-lift: 0 6px 24px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
+  --gt-radius: 20px;
+  --gt-blur: none;
+  font-family: "Roboto", Arial, sans-serif;
+}
+
+body.carapp-page-graphite .gates-tray,
+.gates-notice.graphite {
+  --gt-surface: rgba(250, 250, 251, 0.92);
+  --gt-raised: rgba(20, 20, 30, 0.055);
+  --gt-pressed: rgba(20, 20, 30, 0.11);
+  --gt-ink: #1d1d1f;
+  --gt-ink-2: #5c5e63;
+  --gt-line: rgba(0, 0, 0, 0.085);
+  --gt-blue: #2d61e6;
+  --gt-green: #1f9d55;
+  --gt-red: #d93b30;
+  --gt-lift: 0 0 0 1px rgba(16, 18, 24, 0.09), 0 1px 3px rgba(16, 18, 24, 0.1), 0 8px 24px rgba(16, 18, 24, 0.14);
+  --gt-radius: 12px;
+  --gt-blur: blur(24px) saturate(1.2);
+  font-family: "Inter Car", "Roboto", Arial, sans-serif;
+}
+
+body.carapp-page-graphite.carapp-page-night .gates-tray,
+.gates-notice.graphite.night {
+  --gt-surface: rgba(38, 38, 40, 0.9);
+  --gt-raised: rgba(255, 255, 255, 0.07);
+  --gt-pressed: rgba(255, 255, 255, 0.13);
+  --gt-ink: #f3f3f4;
+  --gt-ink-2: #b0b2b7;
+  --gt-line: rgba(255, 255, 255, 0.085);
+  --gt-blue: #7aa0ff;
+  --gt-green: #3cc47a;
+  --gt-red: #f0675d;
+  --gt-lift: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 22px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- the tray ---------- */
+.gates-tray {
+  --gt-row: 64px;
+  position: absolute;
+  z-index: 45;
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 120px);
+  display: flex;
+  flex-direction: column;
+  background: var(--gt-surface);
+  color: var(--gt-ink);
+  border-radius: var(--gt-radius);
+  box-shadow: var(--gt-lift);
+  -webkit-backdrop-filter: var(--gt-blur);
+  backdrop-filter: var(--gt-blur);
+  overflow: hidden;
+}
+
+.gates-tray[hidden] {
+  display: none;
+}
+
+.gates-tray-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px 6px 20px;
+  border-bottom: 1px solid var(--gt-line);
+}
+
+.gates-tray-title {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.gates-tray-close {
+  width: 52px;
+  height: 52px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gt-ink-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gates-tray-close:active {
+  background: var(--gt-pressed);
+}
+
+.gates-tray-list {
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gates-tray-gate {
+  min-height: var(--gt-row);
+  width: 100%;
+  border: 0;
+  border-radius: calc(var(--gt-radius) * 0.7);
+  background: var(--gt-raised);
+  color: var(--gt-ink);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px 8px 12px;
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease;
+}
+
+.gates-tray-gate:active {
+  background: var(--gt-pressed);
+}
+
+.gates-tray-gate:focus-visible {
+  outline: 3px solid var(--gt-blue);
+  outline-offset: -3px;
+}
+
+.gates-tray-lead {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gt-pressed);
+  color: var(--gt-blue);
+}
+
+.gates-tray-lead .material-symbols-rounded {
+  font-size: 26px;
+}
+
+.gates-tray-gate.is-ok .gates-tray-lead {
+  color: var(--gt-green);
+}
+
+.gates-tray-gate.is-err .gates-tray-lead {
+  color: var(--gt-red);
+}
+
+.gates-tray-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.gates-tray-name {
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gates-tray-line {
+  font-size: 15px;
+  color: var(--gt-ink-2);
+}
+
+.gates-tray-gate.is-ok .gates-tray-line {
+  color: var(--gt-green);
+}
+
+.gates-tray-gate.is-err .gates-tray-line {
+  color: var(--gt-red);
+}
+
+/* ---------- the notice: top centre, over everything ---------- */
+.gates-notice {
+  position: fixed;
+  z-index: 1000;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 22px 10px 16px;
+  border-radius: 999px;
+  background: var(--gt-surface);
+  color: var(--gt-ink);
+  box-shadow: var(--gt-lift);
+  -webkit-backdrop-filter: var(--gt-blur);
+  backdrop-filter: var(--gt-blur);
+  font-size: 19px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.gates-notice[hidden] {
+  display: none;
+}
+
+.gates-notice .material-symbols-rounded {
+  font-size: 28px;
+}
+
+.gates-notice.is-ok .material-symbols-rounded {
+  color: var(--gt-green);
+}
+
+.gates-notice.is-err .material-symbols-rounded {
+  color: var(--gt-red);
+}
+
+.gates-spin {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 999px;
+  border: 3px solid var(--gt-line);
+  border-top-color: var(--gt-blue);
+  animation: gates-turn 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #home-gates-button.is-sending::after,
+  .gates-spin {
+    animation-duration: 2.4s;
+  }
+}
+
+/* ---------- Settings > Gates (js/settings/settings-gates.js), in the settings page's tokens ---------- */
+#page-settings .gates-ctl {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#page-settings .gates-move {
+  width: 52px;
+  min-height: 52px;
+  padding: 0;
+}
+
+#page-settings .gates-move:disabled {
+  opacity: 0.25;
+}
+
+#page-settings .gates-opts {
+  width: 60px;
+  padding: 0;
+  margin-inline-end: 10px;
+}
+
+#page-settings .gates-link {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+#page-settings .gates-qr {
+  flex: none;
+  width: 228px;
+  height: 228px;
+  padding: 6px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--line);
+  transition: opacity 0.2s;
+}
+
+#page-settings .gates-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#page-settings .gates-qr.is-stale {
+  opacity: 0.25;
+}
+
+#page-settings .gates-steps {
+  margin: 0 0 14px;
+  padding-inline-start: 22px;
+  font-size: 17px;
+  line-height: 1.45;
+  color: var(--ink);
+  max-width: 34ch;
+}
+
+#page-settings .gates-steps li + li {
+  margin-top: 6px;
+}
+
+#page-settings .gates-link-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin-bottom: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+#page-settings .gates-link-status.is-ok {
+  color: var(--green);
+}
+
+#page-settings .gates-link-status.is-err {
+  color: var(--red);
+}
+
+#page-settings .gates-fine {
+  margin: 18px 0 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+#page-settings .gates-sheet .group {
+  margin-bottom: 18px;
+}

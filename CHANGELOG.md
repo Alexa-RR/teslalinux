@@ -19,6 +19,24 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### Open PalGate gates from the car
+
+*Settings > Gates, and a gate button on the map in both interfaces.*
+
+- Link the device to your PalGate account once: Settings > Gates shows a code, and the PalGate
+  app on your phone scans it (Device Linking > Link a Device). The PalGate app does not run on the
+  device; it opens your gates the way the app's linked devices do.
+- A gate button stands next to the settings and sound buttons. With one gate shown it opens that
+  gate at once; with more it lists them, one tap each. You see it being sent, then opened, or why
+  it did not open.
+- Choose which gates the button shows, their order, their names, and which output a two-output
+  gate opens.
+- Open on arrival, per gate and off until you turn it on: take the gate's position from the car,
+  then it opens when the car comes into the circle around it from outside, driving towards it at
+  a speed you set, and not again until the car has left and the cooldown has passed. A notice on
+  the map says when it did.
+- Your PalGate phone number and link stay on the device, readable by its service only.
+
 ### New settings and sound buttons on the map
 
 *Both interfaces, both looks, day and night.*
@@ -145,6 +163,12 @@ read; they now keep their own shape and are a little taller than the text.
 ### Platform
 
 #### Added
+
+- `services/gates` (`teslalinux-gates.service`, loopback 8082 behind `/api/gates*`): PalGate's
+  cloud API as a linked device (our own implementation of the request token, checked against
+  published vectors), a stdlib QR encoder, per-gate auto-open from the GPS feed, an events long
+  poll; tests against a local mock of the API (`services/gates/test/`); `docs/GATES.md`. Needs
+  `python3-cryptography` (`py3-cryptography` on Alpine), now in the install package lists.
 
 In ATL (the fork):
 

@@ -116,6 +116,7 @@ PAYLOAD=(
   host/teslalinux-render host/teslalinux-restart-app host/teslalinux-set-locale host/teslalinux-set-keyboard host/teslalinux-set-app-interface
   host/teslalinux-network host/teslalinux-system-update host/teslalinux-uplink host/teslalinux-dexopt host/teslalinux-android-cacerts host/teslalinux-set-gpu-speed host/teslalinux-boottime
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
+  services/gates/gates.py services/gates/palgate.py services/gates/tlqr.py docs/GATES.md
   services/display/test/ws-client.py
   web
   tools/apps/install-app.sh tools/apps/apk-info.py tools/apps/apk_verify.py tools/apps/waze-map-pacing.py tools/apps/waze-speedometer.py

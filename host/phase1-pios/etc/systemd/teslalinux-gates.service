@@ -1,0 +1,26 @@
+[Unit]
+Description=teslalinux: PalGate gates (loopback 8082, behind /api/gates*; services/gates)
+After=network-online.target teslalinux-gps.service
+Wants=network-online.target
+
+[Service]
+User=tesla
+Environment=TESLALINUX_GATES_BIND=127.0.0.1
+Environment=TESLALINUX_GATES_PORT=8082
+# the linked account's token and the gates' settings, 0600 in a 0700 directory of the service user
+Environment=TESLALINUX_GATES_DIR=/var/lib/teslalinux/gates
+# the car's position for auto-open: gps.py's feed on loopback
+Environment=TESLALINUX_GATES_GPS_FEED=127.0.0.1:9997
+Environment=PYTHONPATH=/usr/local/lib/teslalinux
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/lib/teslalinux/gates.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/teslalinux/gates
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

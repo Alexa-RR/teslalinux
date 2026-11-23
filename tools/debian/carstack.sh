@@ -108,7 +108,7 @@ ENVF=/etc/teslalinux/env
 LIB=/usr/local/lib/teslalinux
 PREFIX=/opt/teslalinux
 APPS=/var/lib/teslalinux/apps
-UNITS="teslalinux-dbus teslalinux-uplink tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-pipewire-pulse teslalinux-atl"
+UNITS="teslalinux-dbus teslalinux-uplink tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-pipewire-pulse teslalinux-atl teslalinux-gates"
 
 guest_install() {
   [[ $EUID -eq 0 ]] || die "run as root"
@@ -129,7 +129,7 @@ guest_install() {
 
   log "1/7 packages"
   export DEBIAN_FRONTEND=noninteractive
-  local pkgs="nginx python3 python3-websockets openssl curl bind9-dnsutils rsync ffmpeg ca-certificates dbus
+  local pkgs="nginx python3 python3-websockets python3-cryptography openssl curl bind9-dnsutils rsync ffmpeg ca-certificates dbus
     pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd webp-pixbuf-loader"
   [[ $radio == 1 ]] && pkgs="$pkgs hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data"
   local missing="" p
@@ -158,6 +158,8 @@ guest_install() {
   install -m 0755 "$REPO/host/teslalinux-render" /usr/local/bin/teslalinux-render
   install -m 0644 "$REPO/services/gps/gps.py" "$REPO/services/audio/audio.py" "$REPO/services/api/api.py" \
     "$REPO/services/api/tlprops.py" $LIB/
+  install -m 0644 "$REPO/services/gates/gates.py" "$REPO/services/gates/palgate.py" "$REPO/services/gates/tlqr.py" $LIB/
+  install -d -m 0700 -o tesla -g tesla /var/lib/teslalinux/gates
   install -d $LIB/apps
   install -m 0755 "$REPO/tools/apps/install-app.sh" "$REPO/tools/apps/apk-info.py" $LIB/apps/
   install -m 0755 "$REPO/host/phase1-pios/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display

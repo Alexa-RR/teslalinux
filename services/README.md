@@ -9,6 +9,7 @@ upstream port, so the browser frontend in `web/` is untouched.
 | `gps/` | 9998 → 9997 | `gps.py`: browser geolocation JSON → line protocol; consumed by the ATL LocationManager (`ATL_LOCATION_SOURCE=tesla:9997`, tools/atl-vm/patches/atl-waze/android/location) | written, untested on hardware |
 | `audio/` | 8080 | `audio.py`: PipeWire `android.monitor` → ffmpeg FLAC fMP4 → WebSocket with cached init segment | written, untested on hardware |
 | `api/` | 8081 | `api.py`: `/api/*` state + display re-configuration | written, untested on hardware |
+| `gates/` | 8082 (loopback, behind `/api/gates*`) | `gates.py`: PalGate gates as a linked device of the driver's account (`palgate.py`), the QR code (`tlqr.py`), auto-open from the GPS feed (`docs/GATES.md`) | tested against a local mock of the API |
 
 Install location on the Pi: `/usr/local/lib/teslalinux/*.py`; tacomp in `/opt/teslalinux/tacomp`
 (from the release dist, `tools/pios/install.sh`). All daemons run as the unprivileged `tesla` user;

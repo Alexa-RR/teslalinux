@@ -11,6 +11,11 @@
         "versionName": "Unreleased",
         "changelogItems": [
           {
+            "title": "Open PalGate gates from the car",
+            "shortDescription": "Settings > Gates, and a gate button on the map in both interfaces.",
+            "descriptionMarkdown": "• Link the device to your PalGate account once: Settings > Gates shows a code, and the PalGate app on your phone scans it (Device Linking > Link a Device). The PalGate app does not run on the device; it opens your gates the way the app's linked devices do.\n• A gate button stands next to the settings and sound buttons. With one gate shown it opens that gate at once; with more it lists them, one tap each. You see it being sent, then opened, or why it did not open.\n• Choose which gates the button shows, their order, their names, and which output a two-output gate opens.\n• Open on arrival, per gate and off until you turn it on: take the gate's position from the car, then it opens when the car comes into the circle around it from outside, driving towards it at a speed you set, and not again until the car has left and the cooldown has passed. A notice on the map says when it did.\n• Your PalGate phone number and link stay on the device, readable by its service only."
+          },
+          {
             "title": "New settings and sound buttons on the map",
             "shortDescription": "Both interfaces, both looks, day and night.",
             "descriptionMarkdown": "• The settings and sound buttons are no longer a small black tab squeezed into the top right corner. They are map buttons like Waze's own on the car screen: round and dark with the Rounded look, a frosted tile with Graphite, the same size as Waze's map buttons and lined up with them, never smaller than a fingertip.\n• They never cover Waze's buttons, the directions or a card: on a narrow screen, such as a phone's, the cards start below them, and full-screen lists and search end before them.\n• The settings button now shows sliders, so it is not mistaken for Waze's own settings gear."

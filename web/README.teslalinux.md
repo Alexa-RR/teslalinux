@@ -250,6 +250,14 @@ Changes from upstream:
   cut to the code points U+E570 E57B E5C4 E5CC E5CD E89F EB95 EB96 EB98 EB99 EB9A EB9C EBA0-EBA4
   EBA6 EBA7 EBAA EBAB EBAC EFF5 F06E F0C6 with fontTools
   (`fonttools varLib.instancer` then `pyftsubset --flavor=woff2`).
+* `js/gates/gates-controller.js`, `js/gates/gates.css`, `js/settings/settings-gates.js` (new):
+  PalGate gates (`docs/GATES.md`). The gate button `#home-gates-button` in `index.html`'s
+  `#home-controls` (hidden until gates are linked and shown; one gate shown: it opens it, more: a
+  tray of them), the notices at the top (opens, failures with their reason, auto-opens from the
+  `/api/gatesEvents` long poll), and Settings > Gates (installed into SettingsController's
+  sections after Waze: link with a QR code, unlink, the gates shown and their order, per gate its
+  name, output, Open now and auto-open). The tray and notices follow the Rounded and Graphite
+  looks, day and night.
 * `404.html` (new): the page nginx serves for unknown paths (upstream's lighttpd names
   `/404.html` as its 404 handler but ships none).
 * `online/status.html`, `online/connectivity_check.txt`: byte-for-byte copies of upstream's

@@ -202,6 +202,9 @@
         ["sound.mictest", "sound", "Test the microphone", "microphone mic test voice", () => car() && this._voiceOn()],
       ];
 
+      // teslalinux: PalGate gates (js/settings/settings-gates.js): its section after Waze, and its search entries
+      if (TAHtml.SettingsGates) TAHtml.SettingsGates.install(this);
+
       this.activeSectionId = "overview";
       this._pollTimer = null;
       this._renderToken = 0;

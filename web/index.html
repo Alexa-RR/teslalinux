@@ -29,6 +29,10 @@
   <script defer src="./js/release-notes/release-notes-data.js"></script>
   <script defer src="./js/release-notes/release-notes-controller.js"></script>
   <script defer src="./js/settings/settings-ui.js"></script>
+  <!-- teslalinux: PalGate gates (the map button, its tray and notices; Settings > Gates; README.teslalinux.md) -->
+  <link rel="stylesheet" href="./js/gates/gates.css" />
+  <script defer src="./js/gates/gates-controller.js"></script>
+  <script defer src="./js/settings/settings-gates.js"></script>
   <script defer src="./js/settings/settings-controller.js"></script>
   <script defer src="./js/home/home-controller.js"></script>
   <script defer src="./js/shell/shell-controller.js"></script>
@@ -68,6 +72,10 @@
       <div id="home-controls">
         <button id="home-audio-button" class="home-control-button" type="button" title="Toggle audio">
           <span class="material-symbols-rounded home-control-icon">volume_off</span>
+        </button>
+        <!-- teslalinux: PalGate gates (js/gates/gates-controller.js); shown once gates are linked and shown -->
+        <button id="home-gates-button" class="home-control-button" type="button" title="Gates" aria-label="Gates" hidden>
+          <span class="material-symbols-rounded home-control-icon" aria-hidden="true">garage</span>
         </button>
         <button id="home-update-button" class="home-control-button update" type="button" title="Open updater" hidden>
           <span class="material-symbols-rounded home-control-icon">download</span>

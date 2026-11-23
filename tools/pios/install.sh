@@ -68,13 +68,15 @@ OWNED_DIRS=(/usr/share/teslalinux /usr/local/lib/teslalinux /usr/local/share/tes
 # the car stack's units (host/phase1-pios/etc/systemd)
 UNITS=(teslalinux-netconfig.service teslalinux-dbus.service teslalinux-uplink.service tacomp.service
   teslalinux-api.service teslalinux-gps.service teslalinux-audio.service teslalinux-pipewire.service
-  teslalinux-wireplumber.service teslalinux-pipewire-pulse.service teslalinux-atl.service teslalinux-boottime.service)
+  teslalinux-wireplumber.service teslalinux-pipewire-pulse.service teslalinux-atl.service teslalinux-boottime.service
+  teslalinux-gates.service)
 APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.service teslalinux-api.service
   teslalinux-pipewire-pulse.service teslalinux-wireplumber.service teslalinux-pipewire.service tacomp.service teslalinux-dbus.service)
 # runtime packages next to the dist's MANIFEST list (tools/debian/carstack.sh, host/phase1-pios/provision.sh)
 # (bind9-dnsutils: delv/dig, teslalinux-tls reads the certificate's DNS version pointer with them;
-# uhubctl: teslalinux-uplink's last LTE stick recovery step, a USB power cycle)
-RUNTIME_PKGS=(nginx python3 python3-websockets openssl curl ca-certificates bind9-dnsutils rsync ffmpeg dbus
+# uhubctl: teslalinux-uplink's last LTE stick recovery step, a USB power cycle;
+# python3-cryptography: AES for PalGate's request tokens, services/gates/palgate.py)
+RUNTIME_PKGS=(nginx python3 python3-websockets python3-cryptography openssl curl ca-certificates bind9-dnsutils rsync ffmpeg dbus
   pipewire pipewire-pulse pipewire-alsa wireplumber libasound2-plugins seatd
   hostapd dnsmasq nftables network-manager modemmanager usb-modeswitch usb-modeswitch-data uhubctl iw rfkill iproute2
   libgl1-mesa-dri libegl-mesa0 libgbm1 libgles2 v4l-utils webp-pixbuf-loader
@@ -492,6 +494,9 @@ step_files() {
   put_str /etc/ca-certificates/update.d/teslalinux-android-cacerts 0755 '#!/bin/sh\n# teslalinux: the system CAs as /etc/ssl/certs/android for the apps (teslalinux-android-cacerts)\nexec /usr/local/bin/teslalinux-android-cacerts >/dev/null\n'
   /usr/local/bin/teslalinux-android-cacerts || warn "the apps' CA store was not written (teslalinux-android-cacerts)"
   install -m 0644 "$P/services/gps/gps.py" "$P/services/audio/audio.py" "$P/services/api/api.py" "$P/services/api/tlprops.py" "$LIB/"
+  # PalGate gates (docs/GATES.md); the linked account lives in $STATE_DIR/gates, the service user's alone
+  install -m 0644 "$P/services/gates/gates.py" "$P/services/gates/palgate.py" "$P/services/gates/tlqr.py" "$LIB/"
+  install -d -m 0700 -o tesla -g tesla "$STATE_DIR/gates"
   install -m 0644 "$P/tools/atl-vm/mk-android-tzdata.py" "$LIB/mk-android-tzdata.py"
   # the car map's Graphite colours: ATL's file overlay manifest with its verified app versions, and
   # the tool that checks a new version (docs/MAP-COLOURS.md)
@@ -1189,6 +1194,7 @@ doctor_static() {
   [[ -e /dev/video11 ]] && ok "V4L2 M2M encoder /dev/video11" || meh "no /dev/video11 (bcm2835-codec; tacomp falls back to CPU JPEG)"
   if nginx -t >/dev/null 2>&1; then ok "nginx -t"; else bad "nginx -t: $(nginx -t 2>&1 | tail -1)"; fi
   python3 -c 'import websockets' 2>/dev/null && ok "python3-websockets" || bad "python3 cannot import websockets"
+  python3 -c 'import cryptography' 2>/dev/null && ok "python3-cryptography" || bad "python3 cannot import cryptography (PalGate gates)"
   if [[ -f "$ENVF" ]]; then
     [[ "$(stat -c '%a %U:%G' "$ENVF")" == "640 root:tesla" ]] && ok "$ENVF mode 0640 root:tesla" || meh "$ENVF is $(stat -c '%a %U:%G' "$ENVF") (0640 root:tesla expected)"
     [[ "$(cfg AP_PSK)" != changeit ]] && ok "hotspot password set" || bad "AP_PSK is the placeholder 'changeit'"
@@ -1212,7 +1218,7 @@ doctor_live() {
   local u failed
   failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{ print $1 }' | tr '\n' ' ')
   [[ -z "${failed// }" ]] && ok "no failed units" || bad "failed units: $failed"
-  for u in teslalinux-ap-addr hostapd dnsmasq nftables nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-dbus; do
+  for u in teslalinux-ap-addr hostapd dnsmasq nftables nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-dbus teslalinux-gates; do
     [[ "$(systemctl is-active "$u" 2>/dev/null)" == active ]] || bad "$u is $(systemctl is-active "$u" 2>/dev/null)"
   done
   ok "core units checked"

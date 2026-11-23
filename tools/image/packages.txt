@@ -50,6 +50,8 @@ bind-tools
 # services
 python3
 py3-websockets
+# PalGate gates: AES for the request tokens (services/gates/palgate.py)
+py3-cryptography
 ffmpeg
 pipewire
 pipewire-pulse

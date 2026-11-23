@@ -26,7 +26,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends \
   hostapd dnsmasq nftables nginx \
-  python3 python3-websockets \
+  python3 python3-websockets python3-cryptography \
   pipewire pipewire-pulse pipewire-alsa wireplumber ffmpeg curl openssl bind9-dnsutils \
   modemmanager network-manager usb-modeswitch usb-modeswitch-data uhubctl \
   mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 libgbm1 \
@@ -126,6 +126,9 @@ systemctl disable --now teslalinux-tls.service 2>/dev/null || true
 rm -f /etc/systemd/system/teslalinux-tls.service
 install -d /usr/local/lib/teslalinux
 install -m 0644 "$REPO/services/gps/gps.py" "$REPO/services/audio/audio.py" "$REPO/services/api/api.py" "$REPO/services/api/tlprops.py" /usr/local/lib/teslalinux/
+# PalGate gates (docs/GATES.md): the service and its state directory, the service user's alone
+install -m 0644 "$REPO/services/gates/gates.py" "$REPO/services/gates/palgate.py" "$REPO/services/gates/tlqr.py" /usr/local/lib/teslalinux/
+install -d -m 0700 -o tesla -g tesla /var/lib/teslalinux/gates
 install -m 0755 "$HERE/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display
 # the ATL launcher (teslalinux-atl.service starts it once /opt/teslalinux holds the ATL prefix and
 # the app is installed)
@@ -157,7 +160,7 @@ systemctl daemon-reload
 systemctl enable teslalinux-netconfig.service teslalinux-tls-fetch.timer \
   teslalinux-pipewire.service teslalinux-wireplumber.service teslalinux-pipewire-pulse.service \
   teslalinux-dbus.service tacomp.service teslalinux-atl.service teslalinux-api.service teslalinux-gps.service \
-  teslalinux-audio.service teslalinux-uplink.service
+  teslalinux-audio.service teslalinux-uplink.service teslalinux-gates.service
 
 # ---------------------------------------------------------------------------------------------
 log "6/9 audio: PipeWire for tesla in /run/tesla with a null sink the app plays into"

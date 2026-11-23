@@ -97,6 +97,12 @@ The settings page's Status, Network and System update sections (new routes only)
                           available, last check/upgrade, reboot needed, log tail, current uplink kind
 * POST /api/systemUpdate  JSON {action: "check"|"upgrade"|"reboot"}; 409 while a run is going on
 
+PalGate gates (services/gates/gates.py, docs/GATES.md), new routes only:
+* GET/POST /api/gates*    forwarded unchanged to teslalinux-gates on 127.0.0.1:8082 (TESLALINUX_GATES_URL):
+                          the linked account (masked), the gates and their settings, linking with a QR
+                          code, opening, auto-open events (a long poll of at most 25 s). The account's
+                          token stays in that service; 503 while it is not running
+
 Settings are stored by tlprops (property names and string values as upstream). The hotspot band,
 channel and offline-mode switches take effect at the next boot (host/teslalinux-render), exactly as
 the frontend says ("Apply it during the next system startup?").
@@ -174,6 +180,8 @@ AUDIO_DEFAULTS = {"output": "car", "volume": 80}
 # how long the device took to start (host/teslalinux-boottime writes it once per boot)
 BOOTTIME_STATE = os.environ.get("TESLALINUX_BOOTTIME_STATE", "/var/lib/teslalinux/state/boottime.json")
 BOOT_ID_FILE = os.environ.get("TESLALINUX_BOOT_ID", "/proc/sys/kernel/random/boot_id")
+# PalGate gates: services/gates/gates.py serves /api/gates* on loopback; this forwards them
+GATES_URL = os.environ.get("TESLALINUX_GATES_URL", "http://127.0.0.1:8082")
 
 ENV = tp.load_env()
 _lock = threading.Lock()
@@ -1608,6 +1616,31 @@ def certificate_state():
     return st
 
 
+# ---------------------------------------------------------------------------- PalGate gates
+
+GATES_ROUTES_GET = {"gates", "gatesLink", "gatesEvents"}
+GATES_ROUTES_POST = {"gatesLink", "gatesUnlink", "gatesRefresh", "gatesSettings", "gatesPosition", "gatesOpen"}
+GATES_MAX_BODY = 65536
+
+
+def gates_forward(method, path, body):
+    """one /api/gates* request to teslalinux-gates, unchanged: (status, JSON body). The events route
+    is a long poll of at most 25 s (nginx's proxy_read_timeout for /api is 30 s)."""
+    import http.client
+    u = urllib.parse.urlsplit(GATES_URL)
+    conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=35)
+    try:
+        conn.request(method, path, body=body if method == "POST" else None,
+                     headers={"Content-Type": "application/json"} if method == "POST" else {})
+        r = conn.getresponse()
+        data = r.read()
+        return r.status, data
+    except (OSError, http.client.HTTPException):
+        return 503, json.dumps({"ok": False, "message": "The gates service is not running."}).encode()
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
@@ -1649,7 +1682,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         route = self._route()
-        if route in ROUTES_GET or route in ROUTES_POST:
+        if route in ROUTES_GET or route in ROUTES_POST or route in GATES_ROUTES_GET or route in GATES_ROUTES_POST:
             # handle_preflight (cpp:160-165)
             return self._send(204, b"", "text/plain; charset=utf-8", (("Access-Control-Max-Age", "1728000"),))
         self._send(404)
@@ -1707,6 +1740,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "certificate":
             st = certificate_state()
             return self._json(st) if st is not None else self._send(404)
+        if route in GATES_ROUTES_GET:
+            code, data = gates_forward("GET", self.path, None)
+            return self._send(code, data, "application/json")
         self._send(404)
 
     def do_POST(self):
@@ -1722,6 +1758,13 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             code, res = appupdate_upload(self, n, (q.get("name") or ["bundle"])[0])
             return self._send(code, json.dumps(res).encode(), "application/json")
+        if route in GATES_ROUTES_POST:
+            n = int(self.headers.get("Content-Length") or 0)
+            if not 0 <= n <= GATES_MAX_BODY:
+                self.close_connection = True
+                return self._send(413, b'{"ok": false, "message": "too large"}', "application/json")
+            code, data = gates_forward("POST", self.path, self.rfile.read(n) if n else b"")
+            return self._send(code, data, "application/json")
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n > 0 else b""
         if route in TEXT_ROUTES:

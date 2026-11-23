@@ -206,6 +206,11 @@ POST `displayState` `{width,height,density,resolutionPreset,renderer,isResponsiv
 refreshRate,isRearDisplayEnabled,isRearDisplayPrioritised}`, `gpsState`, `browserAudioState`,
 `browserAudioVolume`, `softAp*`, `offlineMode*`, `overrideReleaseType`, `overrideOtaUrl`.
 
+teslalinux only (no upstream counterpart): `/api/gates*` (PalGate gates, `docs/GATES.md`), JSON,
+forwarded by api.py to `services/gates/gates.py`: GET `gates`, `gatesLink`, `gatesEvents?after=N&wait=S`
+(a long poll, at most 25 s); POST `gatesLink {action: start|cancel}`, `gatesUnlink`, `gatesRefresh`,
+`gatesSettings`, `gatesPosition {id}`, `gatesOpen {id, output?}` (`{ok, message, event}`).
+
 ## Network scheme
 
 * AP SSID `Tesla-Android`, WPA2 `changeit`, 5 GHz ch 44 / 80 MHz (upstream default); car ticks

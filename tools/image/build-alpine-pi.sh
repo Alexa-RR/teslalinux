@@ -115,7 +115,8 @@ rm -f "$ROOT/etc/nginx/http.d/default.conf"
 # services, the renderer and its templates (the boot-time re-render reads them from /usr/share)
 install -d "$ROOT/usr/local/lib/teslalinux" "$ROOT/usr/local/bin" "$ROOT/usr/share/teslalinux/templates"
 install -m 0644 "$REPO/services/gps/gps.py" "$REPO/services/audio/audio.py" "$REPO/services/api/api.py" \
-	"$REPO/services/api/tlprops.py" "$ROOT/usr/local/lib/teslalinux/"
+	"$REPO/services/api/tlprops.py" "$REPO/services/gates/gates.py" "$REPO/services/gates/palgate.py" \
+	"$REPO/services/gates/tlqr.py" "$ROOT/usr/local/lib/teslalinux/"
 install -m 0755 "$REPO/host/teslalinux-render" "$ROOT/usr/local/bin/teslalinux-render"
 cp -r "$REPO/host/phase1-pios/etc/." "$ROOT/usr/share/teslalinux/templates/"
 rm -rf "$ROOT/usr/share/teslalinux/templates/systemd" "$ROOT/usr/share/teslalinux/templates/NetworkManager"
@@ -234,7 +235,7 @@ for svc in hwclock modules sysctl hostname bootmisc syslog; do chroot "$ROOT" rc
 for svc in mount-ro killprocs savecache; do chroot "$ROOT" rc-update add $svc shutdown >/dev/null 2>&1 || true; done
 for svc in dbus seatd udev-postmount chronyd teslalinux-firstboot teslalinux-netconfig networking dhcpcd crond \
 	hostapd dnsmasq nftables nginx teslalinux-tls teslalinux-pipewire teslalinux-wireplumber teslalinux-pipewire-pulse \
-	teslalinux-gps teslalinux-api teslalinux-audio teslalinux-uplink tacomp teslalinux-atl; do
+	teslalinux-gps teslalinux-api teslalinux-audio teslalinux-uplink tacomp teslalinux-atl teslalinux-gates; do
 	chroot "$ROOT" rc-update add $svc default >/dev/null 2>&1 || log "   (service $svc not added)"
 done
 
