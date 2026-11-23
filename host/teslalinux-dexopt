@@ -81,7 +81,12 @@ fingerprint() {
 }
 
 status=0
+# the dex files in front of the APKs on the app's class loader: ATL's ATL_APP_CLASS_OVERRIDES (the
+# launcher's), part of every APK's context as ATLLoadedApp puts them there
 earlier=()
+if [[ -n "${ATL_APP_CLASS_OVERRIDES:-}" ]]; then
+	IFS=: read -r -a earlier <<<"$ATL_APP_CLASS_OVERRIDES"
+fi
 for apk in "$@"; do
 	[[ -f "$apk" ]] || { log "no such APK $apk"; status=1; continue; }
 	if ! has_code "$apk"; then
@@ -96,7 +101,7 @@ for apk in "$@"; do
 	earlier+=("$apk")
 	want="$(
 		echo "teslalinux-dexopt $VERSION filter=$FILTER context=$context boot=$BOOT_IMAGE"
-		fingerprint "$apk" "$API_IMPL" "$DEX2OAT" "${BOOT_FILES[@]}" "$DEX_DIR"/art/*.jar
+		fingerprint "$apk" "$API_IMPL" "$DEX2OAT" "${BOOT_FILES[@]}" "$DEX_DIR"/art/*.jar ${earlier[@]+"${earlier[@]}"}
 	)"
 	if [[ $FORCE == 0 && -s "$odex" && -s "$out/$name.vdex" && -f "$stamp" && "$(cat "$stamp")" == "$want" ]]; then
 		continue

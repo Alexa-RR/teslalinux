@@ -16,10 +16,11 @@
 #                                        give the app's frame limiter the display's 60 frames/s while the
 #                                        map moves (driving, panning, zooming, the car page's input) and
 #                                        its own rate while it is still; "app" is the app's own (Waze
-#                                        holds its car map at 30 frames/s); "full" gives the app its map
-#                                        loop on the display's 60 frames/s schedule all the time. "auto"
-#                                        and "full" are for verified app versions only
-#                                        (tools/apps/waze-map-pacing.py); others keep their own
+#                                        holds its car map at 30 frames/s); "full" is the display's 60
+#                                        frames/s all the time. "auto" and "full" are for verified app
+#                                        versions only (tools/apps/waze-map-pacing.py); others keep their
+#                                        own. The app is restarted for a change, but not recompiled: the
+#                                        launcher loads the same classes for every choice
 # Writes /etc/teslalinux/interface.env (TESLALINUX_APP_INTERFACE, TESLALINUX_MAP_COLOURS and
 # TESLALINUX_MAP_PACING, read by teslalinux-atl.service and the launcher) and restarts only the app,
 # only when what it starts with changed: the interface, or in the car interface the map colours to or

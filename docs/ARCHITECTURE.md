@@ -241,17 +241,25 @@ In the car interface, `TESLALINUX_MAP_PACING` (Settings > Waze interface > Map f
 `teslalinux-set-app-interface pacing auto|app|full`) chooses the car map's frame rate. Waze holds it
 at 30 frames/s in its map loop and its renderer's frame limiter (a phone battery's choice, lifted only
 for 5 s after a touch on the map or a pan or zoom from the car host, never while the car drives).
-"Automatic", the default, replaces the frame limiter class (the one thing Waze's car render thread
-asks before each frame) with a generated one that extends ATL's `ATLFrameRateLimiter`: Waze's own
-rate and boosts hold, and for 5 s after ATL saw the map move (a location fix of a moving car, a touch
-on the car map, any message from the car page, a different car template) frames may come at the
-display's refresh rate. "Full" has the launcher make, from the installed APK, a copy of that one dex
-with those constants on the 60 frames/s schedule. Both come from `tools/apps/waze-map-pacing.py`
-(listed versions only; Full checks each literal, Automatic checks the limiter's code instruction by
-instruction and every reference to it in the APK, and that this ATL has the class it extends; the APK
-and its signing block are untouched) and go to ATL as `ATL_APP_CLASS_OVERRIDES`, which loads them in
-front of the app's own classes. They are kept in the `tesla` user's cache and made again after an app,
-tool or ATL update; for an unlisted version the app keeps its own rate.
+The launcher replaces the frame limiter class (the one thing Waze's car render thread asks before
+each frame) with a generated one that extends ATL's `ATLFrameRateLimiter`, whose policy
+(`ATL_FRAME_RATE`) is the choice: "Automatic", the default (`boost`): Waze's own rate and boosts
+hold, and for 5 s after ATL saw the map move (a location fix of a moving car, a touch on the car map,
+any message from the car page, a different car template) frames may come at the display's refresh
+rate; "Full" (`display`): the display's rate all the time; "Waze's own" (`app`), and the phone
+interface: Waze's limiter exactly. The class comes from `tools/apps/waze-map-pacing.py` (listed
+versions only; it checks the limiter's code instruction by instruction and every reference to it in
+the APK, and that this ATL has the class it extends; the APK and its signing block are untouched) and
+goes to ATL as `ATL_APP_CLASS_OVERRIDES`, which loads it in front of the app's own classes, with the
+speedometer class (`tools/apps/waze-speedometer.py`). They are kept in the `tesla` user's cache and
+made again after an app, tool or ATL update; for an unlisted version the app keeps its own rate.
+
+The launcher loads both override classes whatever the interface and the frame rate, and only the
+policy and the car host change at run time. The overrides are part of the app's class loader context,
+which ART records in the code it compiles for each APK (one compiled copy per APK): a different list
+at a start throws the code away and compiles Waze again, about 3 minutes on a Pi 4. With one list, the
+code `teslalinux-atl --compile` (TlPrewarm, the same overrides in front) makes after an install
+serves every later start.
 
 The AOSP Templates Host (the Android Automotive renderer) also runs under ATL as a privileged
 system app (`tools/carhost/`), but supports car API level 4 at most; Waze needs 5, so the car page

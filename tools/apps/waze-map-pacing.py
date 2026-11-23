@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """teslalinux: Waze's car map on the display's 60 frames/s schedule (verified Waze versions only).
 
-  waze-map-pacing.py [--mode full|auto] APP_DIR OUT.jar [--atl API_IMPL_JAR]
+  waze-map-pacing.py APP_DIR OUT.jar [--atl API_IMPL_JAR]
                                             make the class override (APP_DIR: an installed app,
                                             /var/lib/teslalinux/apps/com.waze); exit 2: not this version
-                                            (auto with --atl: and only if this ATL has ATLFrameRateLimiter)
-  waze-map-pacing.py --check [--mode full|auto] APP_DIR [--atl API_IMPL_JAR]
+                                            (with --atl: and only if this ATL has ATLFrameRateLimiter)
+  waze-map-pacing.py --check APP_DIR [--atl API_IMPL_JAR]
                                             report only: is this version known and the code as expected
 
 Waze 5.27.5 holds its car map at 30 frames/s in two places, both meant to save a phone's battery and
@@ -20,28 +20,28 @@ zoom or tap the car host hands its SurfaceCallback):
     (com.waze.bq.e, "RenderThread") asks only this limiter before each frame.
 So the car's map draws at 30 frames/s while the car drives, whatever the hardware does.
 
-Two modes (Settings > Waze interface > Map frame rate):
+OUT.jar holds one class written here: the frame limiter class of the same name, extending ATL's
+android.atl.ATLFrameRateLimiter, with the limiter's methods (each calling ATL's for the same thing)
+and Waze's own starting rate. Before writing it, every reference to the class in every dex of the
+APK is checked to be to one of those methods, the class's own code to be the limiter it is known to
+be, and its subclasses to be the one known.
 
-full: 60 frames/s all the time. This copies the dex that holds those classes out of the installed
-  base.apk, changes those literals (the loop's 33 ms to 17; the limiter's starting and falling-back
-  30 frames/s to 60), each checked to be exactly where and what it should be, recomputes the dex's
-  SHA-1 signature and Adler-32 checksum and writes the dex as classes.dex of OUT.jar.
+The one class serves every choice of Settings > Waze interface > Map frame rate: ATL's class reads
+the policy when the app starts (ATL_FRAME_RATE, which the launcher sets from the choice):
+  Automatic (boost): Waze's rate and its own boosts, and frames at the display's rate for 5 s after
+    ATL saw the map move (the car host's map surface touched, the car page's input, a new car
+    template, a location fix of a moving car): 60 frames/s while the map moves, 30 while it is still.
+  Full (display): the display's rate all the time.
+  Waze's own (app): exactly Waze's limiter; also what the phone interface runs with.
+The launcher loads the jar whichever is chosen, so the app's class loader context, and with it the
+code ART compiled for the app, stays the same when the choice changes.
 
-auto: 60 frames/s while the map moves, Waze's own 30 while it is still. OUT.jar holds one class
-  written here: the frame limiter class of the same name, extending ATL's
-  android.atl.ATLFrameRateLimiter, with the limiter's methods (each calling ATL's for the same
-  thing) and Waze's own starting rate. ATL's class keeps the app's rate and its own boosts, and lets
-  frames come at the display's rate for 5 s after ATL saw the map move: the car host's map surface
-  touched, the car page's input, a new car template, a location fix of a moving car. Before writing
-  it, every reference to the class in every dex of the APK is checked to be to one of those methods,
-  the class's own code to be the limiter it is known to be, and its subclasses to be the one known.
+ATL puts OUT.jar in front of the app's own classes (ATL_APP_CLASS_OVERRIDES), so the class in it is
+loaded from it; the APK itself is never changed (Google APIs check its signing block). Nothing of
+Waze is in this repository: the jar is made on the device from the installed APK.
 
-ATL puts OUT.jar in front of the app's own classes (ATL_APP_CLASS_OVERRIDES), so the class(es) in
-it are loaded from it; the APK itself is never changed (Google APIs check its signing block).
-Nothing of Waze is in this repository: the jar is made on the device from the installed APK.
-
-Only a Waze version listed in VERIFIED (full) or VERIFIED_AUTO (auto), whose code holds exactly what
-is expected, is changed; anything else exits 2 and writes nothing.
+Only a Waze version listed in VERIFIED_AUTO, whose code holds exactly what is expected, gets the
+jar; anything else exits 2 and writes nothing.
 """
 import hashlib
 import json
@@ -56,19 +56,7 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 APK_INFO = os.path.join(HERE, "apk-info.py")
 
-# versionCode -> edits: (class, method, opcode, the value to change, its replacement, other values the
-# method must hold exactly once each, to be sure it is that code). Opcodes, both format 21s (a 16-bit
-# literal): 0x13 const/16, 0x16 const-wide/16.
-CONST16, CONST_WIDE16 = 0x13, 0x16
-VERIFIED = {
-    1030750: [  # Waze 5.27.5.0
-        ("Lcom/waze/map/de;", "run", CONST_WIDE16, 33, 17, (5000, 17)),
-        ("Lcom/waze/bq/a;", "<init>", CONST16, 30, 60, ()),
-        ("Lcom/waze/map/opengl/m;", "b", CONST16, 30, 60, ()),  # what opengl.l calls 5 s after a boost
-    ],
-}
-
-# auto: versionCode -> the frame limiter as it was read in that version (by hand, from its dex): its
+# versionCode -> the frame limiter as it was read in that version (by hand, from its dex): its
 # class and fields, its methods with their code (the disassembly below, references resolved), the
 # subclasses that extend it, and Waze's starting rate.
 LIMITER_5_27_5 = "Lcom/waze/bq/a;"
@@ -271,23 +259,7 @@ class Dex:
         return [self.field(i) for i in range(self.field_ids_size)]
 
 
-# ---------------------------------------------------------------------------- mode full
-
-def literals(insns_off, insns_units, data, opcode):
-    """(offset of the literal, register, value) of every instruction OPCODE of format 21s"""
-    out = []
-    pc = 0
-    # Walking the instruction stream needs every opcode's width; this scans 16-bit units for the
-    # opcode instead. A unit that only looks like one adds a value, and the exact counts checked
-    # below then refuse the edit: a miss is safe, never a wrong change.
-    while pc < insns_units:
-        unit = struct.unpack_from("<H", data, insns_off + 2 * pc)[0]
-        if unit & 0xFF == opcode and pc + 1 < insns_units:
-            value = struct.unpack_from("<h", data, insns_off + 2 * (pc + 1))[0]
-            out.append((insns_off + 2 * (pc + 1), unit >> 8, value))
-        pc += 1
-    return out
-
+# ---------------------------------------------------------------------------- reading
 
 def app_info(app_dir):
     base = os.path.join(app_dir, "base.apk")
@@ -296,58 +268,6 @@ def app_info(app_dir):
     return base, info, int(info["versionCode"])
 
 
-def patch_full(app_dir, out_jar, check_only):
-    base, info, vc = app_info(app_dir)
-    if info.get("package") != "com.waze" or vc not in VERIFIED:
-        print("waze-map-pacing: %s versionCode %s is not a verified Waze version (%s): nothing changed"
-              % (info.get("package"), vc, ", ".join(str(v) for v in VERIFIED)), file=sys.stderr)
-        return 2
-    edits = VERIFIED[vc]
-    with zipfile.ZipFile(base) as z:
-        for name in sorted(n for n in z.namelist() if n.startswith("classes") and n.endswith(".dex")):
-            data = bytearray(z.read(name))
-            dex = Dex(data)
-            found = [(e, dex.find_class(e[0])) for e in edits]
-            if all(cd is None for _, cd in found):
-                continue
-            # every edit's class must be in this one dex: the jar carries one dex
-            missing = [e[0] for e, cd in found if cd is None]
-            if missing:
-                print("waze-map-pacing: %s holds some of the classes but not %s: nothing changed"
-                      % (name, ", ".join(missing)), file=sys.stderr)
-                return 2
-            planned = []
-            for (descriptor, method, opcode, old, new, others), class_data in found:
-                code = [c for n, c in dex.methods(class_data) if n == method and c]
-                if len(code) != 1:
-                    print("waze-map-pacing: %s.%s not found once in %s: nothing changed" % (descriptor, method, name), file=sys.stderr)
-                    return 2
-                insns_units = struct.unpack_from("<I", data, code[0] + 12)[0]
-                consts = literals(code[0] + 16, insns_units, data, opcode)
-                values = [v for _, _, v in consts]
-                expected = (old,) + tuple(others)
-                if any(values.count(v) != 1 for v in expected):
-                    print("waze-map-pacing: %s %s.%s: literals %s, expected exactly one each of %s: nothing changed"
-                          % (name, descriptor, method, values, ", ".join(str(v) for v in expected)), file=sys.stderr)
-                    return 2
-                where = [off for off, _, v in consts if v == old][0]
-                planned.append((where, new))
-                print("waze-map-pacing: Waze %s (%d): %s %s.%s: %d -> %d (dex offset 0x%x)"
-                      % (info.get("versionName"), vc, name, descriptor, method, old, new, where))
-            if check_only:
-                return 0
-            for where, new in planned:
-                struct.pack_into("<h", data, where, new)
-            data[12:32] = hashlib.sha1(bytes(data[32:])).digest()
-            struct.pack_into("<I", data, 8, zlib.adler32(bytes(data[12:])) & 0xFFFFFFFF)
-            write_jar(bytes(data), out_jar)
-            print("waze-map-pacing: wrote %s" % out_jar)
-            return 0
-    print("waze-map-pacing: none of %s is in a dex of %s" % (", ".join(e[0] for e in edits), base), file=sys.stderr)
-    return 2
-
-
-# ---------------------------------------------------------------------------- mode auto: reading
 
 def s16(u):
     return struct.unpack("<h", struct.pack("<H", u))[0]
@@ -515,7 +435,7 @@ def check_auto(app_dir):
     return vc, info.get("versionName"), v
 
 
-# ---------------------------------------------------------------------------- mode auto: writing
+# ---------------------------------------------------------------------------- writing
 
 def write_uleb(value):
     out = bytearray()
@@ -733,24 +653,18 @@ def main():
     usage = __doc__.split("\n\n")[1]
     check = "--check" in args
     args = [a for a in args if a != "--check"]
-    mode, atl = "full", None
-    for opt in ("--mode", "--atl"):
-        if opt in args:
-            i = args.index(opt)
-            if i + 1 >= len(args):
-                print(usage, file=sys.stderr)
-                return 2
-            if opt == "--mode":
-                mode = args[i + 1]
-            else:
-                atl = args[i + 1]
-            args = args[:i] + args[i + 2:]
-    if mode not in ("full", "auto") or (check and len(args) != 1) or (not check and len(args) != 2):
+    atl = None
+    if "--atl" in args:
+        i = args.index("--atl")
+        if i + 1 >= len(args):
+            print(usage, file=sys.stderr)
+            return 2
+        atl = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    if (check and len(args) != 1) or (not check and len(args) != 2):
         print(usage, file=sys.stderr)
         return 2
-    if mode == "auto":
-        return patch_auto(args[0], None if check else args[1], check, atl)
-    return patch_full(args[0], None if check else args[1], check)
+    return patch_auto(args[0], None if check else args[1], check, atl)
 
 
 if __name__ == "__main__":

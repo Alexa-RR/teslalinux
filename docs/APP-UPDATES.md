@@ -233,7 +233,7 @@ then it needs a dispenser address that accepts the Pi.
 Waze can be kept on one version: **Settings > App updates > Waze version** ("Latest", or "Stay on" a
 version), `teslalinux-appupdate pin VERSIONCODE [VERSIONNAME]` / `pin latest` on the Pi, or
 `install.sh --waze-version VERSIONCODE` for a new install. The page offers the versions the Map frame
-rate "Full" is verified for (`VERIFIED` in `tools/apps/waze-map-pacing.py`; now 5.27.5.0, versionCode
+rate is verified for (`VERIFIED_AUTO` in `tools/apps/waze-map-pacing.py`; now 5.27.5.0, versionCode
 1030750) and the installed one. The pin is `pinVersionCode`/`pinVersionName` in the settings file.
 
 With a pin, each check still asks the source for its latest version (shown on the page), but the

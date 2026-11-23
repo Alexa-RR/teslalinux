@@ -20,12 +20,65 @@ APKS=("$APP_DIR/base.apk")
 for f in "$APP_DIR"/split_config.*.apk; do [[ -f "$f" ]] && APKS+=("$f"); done
 [[ -f "${APKS[0]}" ]] || { echo "teslalinux-atl: no base.apk in $APP_DIR (run tools/apps/install-app.sh)" >&2; exit 1; }
 
+# ---- classes ATL loads in front of the app's own (ATL_APP_CLASS_OVERRIDES), each made here from the
+# installed APK by a tool that knows the app versions it was checked with (the APK is never changed),
+# made again when the app, the tool or ATL (whose class each one extends) changed:
+#   - the speedometer: for the Waze versions tools/apps/waze-speedometer.py knows, Waze's own
+#     speedometer readings (a value class it makes on every position) become a class that extends
+#     ATL's ATLCarSpeedometer, which hands each one to ATL's car-app host ({"type":"speedometer"} on
+#     /sockets/carapp) for the car page to draw. Without the car host (the phone interface) the
+#     readings go nowhere and the class is Waze's value class as before.
+#   - the map's frame limiter: for the Waze versions tools/apps/waze-map-pacing.py knows, Waze's
+#     frame limiter becomes a class that extends ATL's ATLFrameRateLimiter, whose policy
+#     (ATL_FRAME_RATE, below) is the Map frame rate chosen on the settings page; "app" is Waze's own
+#     limiter exactly.
+# Both are loaded whatever the interface and the frame rate: the list is part of the app's class loader
+# context, which ART's compiled code for the app records, so a different list at a start would throw
+# that code away and compile the whole app again (minutes on a Pi 4). With the same list every time,
+# the code --compile makes after an install serves every start, in either interface and at any frame
+# rate. What the choices change is only read at run time.
+OVERRIDE_DIR="$HOME/.cache/teslalinux/app-overrides"
+API_IMPL="$ATL_PREFIX/lib/java/dex/android_translation_layer/api-impl.jar"
+VC="$(sed -n 's/.*"versionCode": *\([0-9]*\).*/\1/p' "$APP_DIR/installed.json" 2>/dev/null | head -1)"
+SPEEDO_TOOL="${TESLALINUX_SPEEDOMETER_TOOL:-/usr/local/lib/teslalinux/apps/waze-speedometer.py}"
+PACING_TOOL="${TESLALINUX_MAP_PACING_TOOL:-/usr/local/lib/teslalinux/apps/waze-map-pacing.py}"
+SPEEDO_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-speedometer.jar"
+PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-auto.jar"
+OVERRIDES=()
+# override_jar JAR TOOL ARGS...: JAR made (again) by TOOL ARGS when missing or older than the app, the
+# tool or ATL; added to OVERRIDES when there is one for this app version
+override_jar() {
+  local jar=$1 tool=$2; shift 2
+  [[ -n "$VC" ]] || return 1
+  if [[ -r "$tool" && ( ! -s "$jar" || "${APKS[0]}" -nt "$jar" || "$tool" -nt "$jar" || "$API_IMPL" -nt "$jar" ) ]]; then
+    mkdir -p "$OVERRIDE_DIR"
+    python3 -I "$tool" "$@" >&2 || rm -f "$jar"
+  fi
+  [[ -s "$jar" ]] || return 1
+  OVERRIDES+=("$jar")
+}
+SPEEDO_OK=0 PACING_OK=0
+override_jar "$SPEEDO_JAR" "$SPEEDO_TOOL" jar "$APP_DIR" "$SPEEDO_JAR" --atl "$API_IMPL" && SPEEDO_OK=1
+override_jar "$PACING_JAR" "$PACING_TOOL" "$APP_DIR" "$PACING_JAR" --atl "$API_IMPL" && PACING_OK=1
+# jars of other app versions, and the whole-dex "full" frame rate jar of earlier releases
+if [[ -d "$OVERRIDE_DIR" ]]; then
+  for f in "$OVERRIDE_DIR"/com.waze-*.jar; do
+    [[ -e "$f" && "$f" != "$SPEEDO_JAR" && "$f" != "$PACING_JAR" ]] && rm -f "$f"
+  done
+fi
+unset ATL_APP_CLASS_OVERRIDES
+if (( ${#OVERRIDES[@]} )); then
+  ATL_APP_CLASS_OVERRIDES="$(IFS=:; echo "${OVERRIDES[*]}")"
+  export ATL_APP_CLASS_OVERRIDES
+fi
+
 # ---- --compile: the app's code compiled now instead of at its next start (the installer after an
 # install or a runtime update, teslalinux-appupdate after an app update). ART compiles an app when its
 # class loader first opens it, minutes for Waze on a Pi 4; android.atl.TlPrewarm (ATL) opens the same
 # APKs in the same class loaders with the VM options android-translation-layer uses (its class path
-# derived from libart's directory as main.c derives it), so the start after this finds the result
-# ready. Run as the app's user, with the unit's environment (the compiled code goes to $HOME/.cache/art).
+# derived from libart's directory as main.c derives it, the same ATL_APP_CLASS_OVERRIDES in front), so
+# the start after this finds the result ready. Run as the app's user (the compiled code goes to
+# $HOME/.cache/art).
 if [[ "${1:-}" == --compile ]]; then
   export ANDROID_APP_DATA_DIR="$DATA_DIR" ANDROID_DATA="${ANDROID_DATA:-$HOME/android-data}" ANDROID_LOG_TAGS="${ANDROID_LOG_TAGS:-*:w}"
   export PATH="$ATL_PREFIX/bin:$PATH" LD_LIBRARY_PATH="$ATL_PREFIX/lib:${LD_LIBRARY_PATH:-}"
@@ -79,32 +132,18 @@ fi
 # Android starts a process for a service binding, as on a phone running Android Auto) and its car
 # app service draws only the car map.
 LAUNCH_ARGS=()
-unset ATL_FILE_OVERLAYS ATL_APP_CLASS_OVERRIDES
-# classes ATL loads in front of the app's own (ATL_APP_CLASS_OVERRIDES), each made here from the
-# installed APK by a tool that knows the app versions it was checked with (the APK is never changed)
-OVERRIDES=()
-OVERRIDE_DIR="$HOME/.cache/teslalinux/app-overrides"
-VC="$(sed -n 's/.*"versionCode": *\([0-9]*\).*/\1/p' "$APP_DIR/installed.json" 2>/dev/null | head -1)"
-SPEEDO_TOOL="${TESLALINUX_SPEEDOMETER_TOOL:-/usr/local/lib/teslalinux/apps/waze-speedometer.py}"
+unset ATL_FILE_OVERLAYS
+# Waze's frame limiter in the phone interface: its own (the Map frame rate is the car map's)
+export ATL_FRAME_RATE=app
 if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
   export ATL_CAR_HOST=1 ATL_CAR_APP_CHANNEL_PORT="${ATL_CAR_APP_CHANNEL_PORT:-9995}"
   LAUNCH_ARGS+=(--background)
   # the speedometer: Waze draws its own into the car map (speed and the road's speed limit, bottom
-  # right), where the car page can neither place nor style it. For the Waze versions
-  # tools/apps/waze-speedometer.py knows, the app's own speedometer readings go to the car page
-  # instead (a class ATL loads in front of the app's, which hands each reading to ATL's car-app
-  # host: {"type":"speedometer"} on /sockets/carapp), the page draws it (Settings > Waze interface >
-  # Speedometer), and Waze's own is turned off: its "Show speedometer" setting, kept to be put back
-  # in the phone interface. Other versions keep their own. Made again when the app, the tool or ATL
-  # (whose class it extends) changed.
-  SPEEDO_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-speedometer.jar"
-  API_IMPL="$ATL_PREFIX/lib/java/dex/android_translation_layer/api-impl.jar"
-  if [[ -n "$VC" && -r "$SPEEDO_TOOL" && ( ! -s "$SPEEDO_JAR" || "${APKS[0]}" -nt "$SPEEDO_JAR" || "$SPEEDO_TOOL" -nt "$SPEEDO_JAR" || "$API_IMPL" -nt "$SPEEDO_JAR" ) ]]; then
-    mkdir -p "$OVERRIDE_DIR"
-    python3 -I "$SPEEDO_TOOL" jar "$APP_DIR" "$SPEEDO_JAR" --atl "$API_IMPL" >&2 || rm -f "$SPEEDO_JAR"
-  fi
-  if [[ -n "$VC" && -s "$SPEEDO_JAR" ]]; then
-    OVERRIDES+=("$SPEEDO_JAR")
+  # right), where the car page can neither place nor style it. With the speedometer class above, the
+  # car page draws it from Waze's readings (Settings > Waze interface > Speedometer), and Waze's own is
+  # turned off: its "Show speedometer" setting, kept to be put back in the phone interface. Other
+  # versions keep their own.
+  if (( SPEEDO_OK )); then
     python3 -I "$SPEEDO_TOOL" hide "$DATA_DIR" >&2 || true
   else
     echo "teslalinux-atl: the car page's speedometer is not available for this app version; it draws its own" >&2
@@ -123,38 +162,19 @@ if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
     fi
   fi
   # the car map's frame rate chosen on the settings page (teslalinux-set-app-interface pacing ...):
-  # Waze holds its car map at 30 frames/s (a phone battery's choice). "auto" (the default) replaces
-  # the app's frame limiter with one that extends ATL's ATLFrameRateLimiter: the display's 60
-  # frames/s for 5 s after the map moved (a location fix of a moving car, a touch on the map, the
-  # car page's input, a new car template), the app's own 30 while it is still. "full" gives the
-  # app its map loop and frame limiter on the display's 60 frames/s schedule all the time. Both are
-  # a class ATL loads in front of the app's own (ATL_APP_CLASS_OVERRIDES), made here from the
-  # installed APK by tools/apps/waze-map-pacing.py, for the Waze versions it lists and only when the
-  # code is exactly as expected (auto also only when this ATL has the class it extends); the APK is
-  # never changed. Made again when the app, the tool or (auto) ATL changed.
+  # Waze holds its car map at 30 frames/s (a phone battery's choice). With the frame limiter class
+  # above, ATL's ATLFrameRateLimiter applies the choice: "auto" (the default) the display's 60
+  # frames/s for 5 s after the map moved (a location fix of a moving car, a touch on the map, the car
+  # page's input, a new car template) and Waze's own 30 while it is still ("boost"); "full" the
+  # display's rate all the time ("display"); "app" Waze's own limiter exactly.
   PACING="${TESLALINUX_MAP_PACING:-auto}"
-  if [[ "$PACING" == auto || "$PACING" == full ]]; then
-    PACING_TOOL="${TESLALINUX_MAP_PACING_TOOL:-/usr/local/lib/teslalinux/apps/waze-map-pacing.py}"
-    if [[ "$PACING" == auto ]]; then
-      PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-auto.jar"
-      PACING_ARGS=(--mode auto --atl "$API_IMPL")
-    else
-      PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-pacing.jar"
-      PACING_ARGS=(--mode full)
-    fi
-    if [[ -n "$VC" && -r "$PACING_TOOL" && ( ! -s "$PACING_JAR" || "${APKS[0]}" -nt "$PACING_JAR" || "$PACING_TOOL" -nt "$PACING_JAR" || ( "$PACING" == auto && "$API_IMPL" -nt "$PACING_JAR" ) ) ]]; then
-      mkdir -p "$OVERRIDE_DIR"
-      python3 -I "$PACING_TOOL" "${PACING_ARGS[@]}" "$APP_DIR" "$PACING_JAR" >&2 || rm -f "$PACING_JAR"
-    fi
-    if [[ -n "$VC" && -s "$PACING_JAR" ]]; then
-      OVERRIDES+=("$PACING_JAR")
-    else
-      echo "teslalinux-atl: the $PACING map frame rate is not available for this app version; it keeps its own" >&2
-    fi
-  fi
-  if (( ${#OVERRIDES[@]} )); then
-    ATL_APP_CLASS_OVERRIDES="$(IFS=:; echo "${OVERRIDES[*]}")"
-    export ATL_APP_CLASS_OVERRIDES
+  case "$PACING" in
+    auto) export ATL_FRAME_RATE=boost ;;
+    full) export ATL_FRAME_RATE=display ;;
+    *) export ATL_FRAME_RATE=app ;;
+  esac
+  if [[ "$PACING" != app ]] && (( ! PACING_OK )); then
+    echo "teslalinux-atl: the $PACING map frame rate is not available for this app version; it keeps its own" >&2
   fi
 else
   # the phone interface: Waze draws its own speedometer, as its own setting says

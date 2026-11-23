@@ -140,8 +140,8 @@ APP_INTERFACES = ("phone", "car")
 # muted (the car page recolours the stream), app (the app's own)
 MAP_COLOURS = ("graphite", "muted", "app")
 # the car map's frame rate: auto (the default: the display's 60 while the map moves, Waze's own 30 while it
-# is still), app (Waze's own, 30 frames/s) or full (the display's 60 all the time); for auto and full the
-# launcher gives the app a class made by tools/apps/waze-map-pacing.py, verified versions only
+# is still), app (Waze's own, 30 frames/s) or full (the display's 60 all the time); the launcher gives the
+# app a class made by tools/apps/waze-map-pacing.py (verified versions only), whose policy it sets
 MAP_PACINGS = ("auto", "app", "full")
 MAP_PACING_DEFAULT = "auto"
 MAP_PACING_TOOLS = tuple(p for p in (
@@ -865,8 +865,9 @@ def map_skin_status():
 
 def map_pacing_status():
     """Whether the "auto" and "full" map frame rates apply to the app as installed: its versionCode
-    against the versions tools/apps/waze-map-pacing.py knows (VERIFIED_AUTO and VERIFIED; the
-    launcher's run of the tool also checks the code itself and leaves the app alone if it differs).
+    against the versions tools/apps/waze-map-pacing.py knows (VERIFIED_AUTO: its one frame limiter
+    class serves both; the launcher's run of the tool also checks the code itself and leaves the app
+    alone if it differs).
     state: "verified" (for both), "unverified-version", "no-tool", "not-installed"; "modes" names the
     choices the installed version is verified for (["auto", "full"], one of them, or none)."""
     inst = _read_json(os.path.join(APP_DIR, "installed.json")) or {}
@@ -880,7 +881,8 @@ def map_pacing_status():
             spec = importlib.util.spec_from_file_location("waze_map_pacing", path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            verified = {"full": set(mod.VERIFIED), "auto": set(getattr(mod, "VERIFIED_AUTO", {}))}
+            known = set(mod.VERIFIED_AUTO)
+            verified = {"full": known, "auto": known}
             names = getattr(mod, "VERIFIED_NAMES", {})
             break
         except Exception as e:  # a broken tool: reported as missing, never a failed request

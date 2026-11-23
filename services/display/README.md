@@ -177,7 +177,7 @@ Waze's car render thread (`com.waze.bq.e`, "RenderThread") asks one object befor
 whether it may draw: its frame limiter (`com.waze.bq.a`, under `com.waze.map.opengl.m`), 30 frames
 a second, 60 for 5 s after a pan, zoom or tap the car host hands its SurfaceCallback (Waze boosts
 that itself), never for driving. "Automatic", the default, replaces that class
-(`tools/apps/waze-map-pacing.py --mode auto`: a one-class dex made on the device, the original's
+(`tools/apps/waze-map-pacing.py`: a one-class dex made on the device, the original's
 fields, methods and code checked instruction by instruction and every reference to it in the APK's
 ten dexes checked to be one the new class provides) with one that extends ATL's
 `ATLFrameRateLimiter`: Waze's rate and its own boosts as before, and the display's frame interval for
