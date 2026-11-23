@@ -2134,6 +2134,11 @@ body:has(#panel-shell.is-settings:not([hidden])) {
     padding-inline: 44px 0;
   }
 
+  /* folded to its icon until it is used */
+  #page-settings .search:not(:focus-within):not(.has-text) input::placeholder {
+    color: transparent;
+  }
+
   #page-settings .search:focus-within,
   #page-settings .search.has-text {
     position: absolute;

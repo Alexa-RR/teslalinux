@@ -12,8 +12,13 @@
         "changelogItems": [
           {
             "title": "The car's keyboard by default, voice search off",
-            "shortDescription": "Settings > Keyboard and Settings > Waze interface > Voice search button.",
+            "shortDescription": "Settings > Waze > Keyboard and Settings > Sound > Voice search button.",
             "descriptionMarkdown": "• Typing into Waze now uses the car's own keyboard by default (also a phone's, when the page is open on one), and the car's keyboard has a microphone for dictating a place. Waze's built-in keyboard is still there: turn \"Use this device's keyboard\" off. A Pi that already has a choice keeps it.\n• The microphone button in the car interface's search is off unless switched on. It uses the browser's speech recognition, which a Tesla's browser does not have, so in the car it did nothing. The setting says so, and the voice language and the microphone test appear only when it is on. With it off, Waze is told that this page cannot recognise speech."
+          },
+          {
+            "title": "A new settings page",
+            "shortDescription": "Settings, in the car and on a phone, day and night.",
+            "descriptionMarkdown": "• Seven sections instead of eleven, by what you want to do: Overview, Waze, Display, Sound, Connections, Updates and This device. Each shows its state in the list on the left (for example \"LTE, 4 of 5 bars\" or \"Up to date\"), with a dot where something needs you.\n• Overview tells at a glance whether the car is connected, the internet works, Waze has the car's position and is running, lists what needs you, and has the controls you change most.\n• Bigger buttons and switches for the touchscreen; choices you can see at once instead of drop-down lists; language and time zone in a list you can filter. Every change says in its row whether it was saved, and a failure no longer empties the page.\n• Changes that restart Waze wait in one bar at the bottom: change several, then restart Waze once, or undo them.\n• Hotspot and LTE changes are collected until you apply them, now or at the next start.\n• Search finds any setting by name or by what it does.\n• This device shows how long the last start took: ready for the car after about 8 seconds on a Pi 4, and when Waze's map was ready, with the previous starts.\n• The page follows the car interface's day and night. Release notes open from Updates > What's new."
           },
           {
             "title": "A smaller turn card",

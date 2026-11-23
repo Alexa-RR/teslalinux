@@ -31,65 +31,66 @@ Changes from upstream:
   or its last update failed or was rejected. It reads the new read-only `GET /api/certificate`
   (`services/api/api.py`), shows nothing if that route is missing or fails, and touches no upstream
   code, style or protocol.
-* Settings, Device: a "Restart Waze" tile (`js/settings/settings-controller.js`, `css/app.css`
-  `.settings-action-button`, two `js/core/api-client.js` methods). It shows the app's service state from
-  the new `GET /api/appState` and restarts only the app with `POST /api/appRestart` (two taps within 4 s,
-  so a stray touch cannot restart navigation), then follows the state until the app runs again. The
-  tile is left out when the API lacks the route. `services/api/api.py` runs `host/teslalinux-restart-app`
-  (systemd or OpenRC) through one sudoers rule, like `teslalinux-apply-display`.
-* Settings reworked for this device (`js/settings/settings-controller.js`, `css/app.css`,
-  `js/core/api-client.js`), new routes in `services/api/api.py`, no upstream route changed:
-  * **Status** (first section, opens by default): what the device is connected to right now, refreshed
-    every 3 s: the car and other clients on the hotspot (DHCP name, address, signal, link rate,
-    connected time), pages showing the app, the internet uplink (LTE / Wi-Fi / Ethernet, address,
-    reachability and latency, data since start), the LTE modem (operator, network type, signal bars,
-    roaming, connection, radio values, data this session and month, SIM problems: a HiLink stick's web
-    API or ModemManager, read by `host/teslalinux-uplink`) and its automatic recovery (status, last
-    step, next step), the hotspot (SSID, band, channel, width), the car's last GPS
-    fix, the app's state, and the device (OS, kernel, uptime, load, memory, storage, CPU temperature,
-    Pi under-voltage/throttling). `GET /api/status`.
-  * **Wi-Fi & LTE** replaces upstream's "Network": hotspot name, password (never sent to the page),
-    country, band and channel; the "no internet" switches (upstream's offline mode, telemetry,
-    firmware downloads); LTE APN/user/password/roaming/mobile data where NetworkManager runs (Pi OS),
-    otherwise what the modem is and why it needs no APN here. One "Save and apply now" (restarts the
-    hotspot a moment later) or "Save for next start", instead of upstream's apply-at-boot banner (the
-    banner is gone). `GET/POST /api/network`, `host/teslalinux-network` (root, sudoers).
-    **Backup Wi-Fi** below it (changes apply at once): a second (USB) Wi-Fi card joins one of the saved
-    networks (scan list or typed, hidden networks too; stored as the WPA key, never the password) and
-    `host/teslalinux-uplink` (root daemon, systemd/OpenRC) routes the car and the app through it when LTE
-    has no internet, e.g. underground ("When LTE has no internet"), or whenever it is connected
-    ("Whenever connected", saves mobile data). The daemon checks every uplink through its own interface
-    every 5 s and installs its own default route (metric 5) through the best one that works; Status
-    shows which uplink is in use, why, and each uplink's check. `GET /api/wifiScan`.
-  * **System update**: the OS underneath (apt on Pi OS/Debian, apk on Alpine): check, the list of
-    updates, install (two taps; warns when the download would go over LTE), a live progress bar fed by
-    the package manager's own progress (apt's Status-Fd, apk's --progress-fd) and a terminal that
-    streams the run's output line by line (`?log=OFFSET`), "restart needed" after a new kernel, restart
-    the device. `GET/POST /api/systemUpdate`,
-    `host/teslalinux-system-update` (root, sudoers; holds from `/etc/teslalinux/system-update.hold`).
-  * Removed: Rear Display (a navigation app on the main screen), the Device tiles CarPlay Module, LTE
-    Modem (now on Status) and Release type; Android wording in GPS.
-  * Dropdown menus open above the page (moved to `<body>` with fixed positioning from the trigger,
-    flipped upwards when there is no room below), so the scrolling settings panel no longer cuts them.
+* **Settings**, redesigned for this device and the car's touchscreen (`js/settings/settings-ui.js` and
+  `css/settings.css`, new, one `<script defer>` and one stylesheet line in `index.html`;
+  `js/settings/settings-controller.js`; `js/core/api-client.js`). Our own look in the spirit of the car
+  interface's Graphite panels (no Tesla assets), English only with an RTL-ready layout (logical
+  properties). Upstream's settings routes are kept and used as before; the new routes are in
+  `services/api/api.py`.
+  * The frame: no bottom bar on Settings (the map's gear opens it, "Map" goes back; the other pages
+    keep it); a sticky header with the section's title, search across every setting (by title and the
+    words a driver might use; a result opens the section and highlights the row; settings of the other
+    Waze interface are not offered), a busy line and a "Waze is restarting" pill; a rail with each
+    section's live value and a dot where something needs the driver. The page follows the car
+    interface's day and night (Automatic: the sun at the car), `prefers-color-scheme` with the phone
+    interface. At 600 px and below the rail is the first screen. Rows of at least 80 px, segmented
+    controls for up to six short choices, picker sheets with a filter for long lists (language, time
+    zone), editor sheets for text, switches, sliders, picture tiles for looks, two-tap buttons for
+    anything that restarts or removes; every row has its own status line (Saving, Saved, Not saved +
+    Try again), so a failure never wipes the section, and no `alert()` remains. Hover effects only for
+    a fine pointer.
+  * Changes that restart Waze (interface, keyboard, language and time zone, map frame rate, map colours
+    to or from Graphite) wear a "Restarts Waze" chip and wait in one bar at the bottom ("Restart Waze
+    to apply ...", Undo / Restart Waze now): several changes cost one restart, choosing the saved value
+    again takes one out, a failed apply keeps them. The page shows the settings of the interface
+    picked at once, even while that change waits (the other interface's values and waiting changes are
+    kept).
+  * **Overview**: a glance (the car on the hotspot, the internet, the car's position, Waze; each opens
+    where it is explained), what needs the driver, and quick controls (where Waze's sound plays, day
+    and night, Restart Waze); refreshed every 3 s from `GET /api/status`.
+  * **Waze**: the interface (Phone / Car), the keyboard (phone interface only; the car's keyboard is the
+    default), language and time zone, the car's position (upstream's GPS switch), and in the car
+    interface its look (panel style, day and night, panel size) and map (colours, text size, frame
+    rate, sharpness).
+  * **Display**: the picture sent to the car (format, resolution, quality, follow the window size,
+    refresh rate; upstream's `displayState`) and the Pi's graphics speed (`/api/gpuSpeed`, at the next
+    device start).
+  * **Sound**: where Waze's sound plays (`/api/audioOutput`), the Pi speaker and its volume, the car's
+    browser audio and its volume, and voice search (car interface only).
+  * **Connections** (replaces upstream's "Network"): the internet now (uplink, LTE operator and bars,
+    data, the backup uplinks' own checks, failover and SIM notes, the modem's radio and recovery
+    folded; `GET /api/status`, read from `host/teslalinux-uplink`), the hotspot (name, password, country,
+    band and channel) and the "no internet" switches (upstream's offline mode) and the LTE APN as one
+    draft with an apply bar (Discard / At next start / Apply now; `POST /api/network`,
+    `host/teslalinux-network`, upstream's softAp and offline routes; upstream's apply-at-boot banner is
+    gone), and the backup Wi-Fi, applied at once (a second USB Wi-Fi card joins a saved network when
+    LTE has no internet or whenever connected; Add a network with a scan, `GET /api/wifiScan`).
+  * **Updates**: Waze's own (`tools/appupdate`, docs/APP-UPDATES.md: source, automatic updates, version
+    pin, LTE downloads, Check now, upload of a bundle with progress, Google Play via a token dispenser
+    under Advanced; `GET /api/appUpdate`, `POST /api/appUpdateSettings`, `/api/appUpdateCheck`,
+    `/api/appUpdateUpload?name=`, unbuffered in nginx), the system's (apt or apk: check, two-tap
+    install, the package manager's progress and a terminal streaming the run, `?log=OFFSET`; restart
+    when needed; `GET/POST /api/systemUpdate`, `host/teslalinux-system-update`), and "What's new",
+    which opens the Release Notes page.
+  * **This device**: health (temperature, power or heat problems, load, memory, storage, running time),
+    the start-up (`system.boot` in `GET /api/status`, measured each boot by `host/teslalinux-boottime`:
+    ready for the car, Waze's map ready, the phases on one time axis, the previous starts), restart
+    Waze (`GET /api/appState`, `POST /api/appRestart`, `host/teslalinux-restart-app`) or the device,
+    what it is, and the credits.
+  * Removed: Rear Display (a navigation app on the main screen), the Device tiles CarPlay Module and
+    Release type; Android wording in GPS.
   * The page's own text fields count as "keyboard open" for `js/keyboard/device-keyboard.js`: typing in
     them neither resizes the app's display nor hands the keyboard to the app.
-  * The sidebar and the content scroll separately inside the page (`css/app.css` `.settings-layout`,
-    `#settings-content`). At 820 px and below (the car: 773 CSS px) upstream turned the sidebar into a
-    wrapped strip above the content, which got a zero-height grid row and hid every entry; it stays a
-    212 px column there now, and only at 560 px and below becomes one sideways-scrolling row.
-* Settings, **App updates** (new sidebar section between "Language & region" and "Device";
-  `js/settings/settings-controller.js` `_renderAppUpdateSection`, four `js/core/api-client.js` methods,
-  the upload one with XMLHttpRequest for its progress events; `css/app.css` `.settings-inline-field`,
-  `.settings-text-input`): Waze updates (`tools/appupdate`, docs/APP-UPDATES.md). Update source
-  (APKPure automatic / manual uploads only / Google Play via Aurora, "unavailable" unless enabled under
-  Advanced), "Update Waze automatically", "Waze version" (Latest, or a version pin from the API's `pinChoices`),
-  "Allow updates over LTE", the status ("Update server
-  unavailable since ...", a verified update waiting, the health check, the last result and notice),
-  "Check for an update now", "Upload an update" (.apkm/.xapk/.apks/.zip/.apk up to 400 MB, progress,
-  then the verification result), and Advanced: the Google Play switch and the dispenser address.
-  Routes: `GET /api/appUpdate`, `POST /api/appUpdateSettings` (JSON), `POST /api/appUpdateCheck`,
-  `POST /api/appUpdateUpload?name=` (the file as the body), all new in `services/api/api.py`; nginx
-  passes the upload through unbuffered (`teslalinux-app.inc`). No upstream route or response changed.
 * Branding: the page is **Teslalinux**, a fork of Tesla Android, and says so. Title, favicon and
   home-screen icon (`assets/teslalinux-logo.svg` + `.png`, our own mark; upstream's logo is removed),
   the About page (what Teslalinux is, that it is a fork of Tesla Android and how it differs, and the
@@ -114,7 +115,7 @@ Changes from upstream:
 * Browser audio on iPhone: `js/audio/audioplayback.js` `setupMSE()` falls back to
   `ManagedMediaSource` (Safari on iPhone has no `MediaSource`; iOS 17.1+) and disables remote
   playback on the audio element, as that API requires. The car's Chromium keeps `MediaSource`.
-* Settings, **Keyboard**: "Use this device's keyboard" (`_renderKeyboardSection`, `fetchKeyboard` /
+* Settings, **Keyboard** (now Settings > Waze > Keyboard; `fetchKeyboard` /
   `setKeyboard` in `js/core/api-client.js`, `GET/POST /api/keyboard`; the root helper
   `host/teslalinux-set-keyboard` writes `/etc/teslalinux/keyboard.env` and restarts the app, whose
   launcher then turns the app's own on-screen keyboard off). `js/keyboard/device-keyboard.js` (new,
@@ -127,8 +128,8 @@ Changes from upstream:
   changes (one guard): the keyboard shrinks the viewport, and resizing the display for it would
   restart tacomp and close the keyboard. A field that turns text input off and on again within 600 ms
   (a tap on it) keeps the keyboard.
-* Settings, **Waze interface**: Phone (default) or Car (`_renderInterfaceSection`,
-  `fetchAppInterface` / `setAppInterface` in `js/core/api-client.js`, `GET/POST /api/appInterface`;
+* Settings, **Waze interface** (now Settings > Waze): Phone (default) or Car
+  (`fetchAppInterface` / `setAppInterface` in `js/core/api-client.js`, `GET/POST /api/appInterface`;
   the root helper `host/teslalinux-set-app-interface` writes `/etc/teslalinux/interface.env` and
   restarts the app; the page reloads once the API reports the new interface, and a page left open
   elsewhere follows through the `X-Teslalinux-App-Interface` header of its health checks, without
