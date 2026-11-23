@@ -551,6 +551,73 @@ public class GfxTest {
 		check("PathParser.createPathFromPathData (pathInterpolator pathData)", Math.abs(new android.view.animation.PathInterpolator(parsed).getInterpolation(0.5f) - 0.2f) < 1e-3f, null);
 	}
 
+	/** an animation target with float, int and two-argument setters */
+	public static class AnimTarget {
+		public float x, y;
+		public int color;
+		public float a, b;
+		public void setX(float v) { x = v; }
+		public float getX() { return x; }
+		public void setY(float v) { y = v; }
+		public float getY() { return y; }
+		public void setColor(int v) { color = v; }
+		public int getColor() { return color; }
+		public void setPos(float a, float b) { this.a = a; this.b = b; }
+	}
+
+	static float pvhValue(android.animation.PropertyValuesHolder p, float fraction) {
+		p.calculateValue(fraction);
+		return ((Number) p.getAnimatedValue()).floatValue();
+	}
+
+	/* ---- PropertyValuesHolder / ObjectAnimator values (AOSP KeyframeSet, evaluators, Path) ---- */
+	static void animatorValues() {
+		android.animation.PropertyValuesHolder f = android.animation.PropertyValuesHolder.ofFloat("x", 0, 10, 30);
+		check("ofFloat with three values: the second interval at 0.75", Math.abs(pvhValue(f, 0.75f) - 20) < 1e-3f, "" + pvhValue(f, 0.75f));
+		android.animation.PropertyValuesHolder o = android.animation.PropertyValuesHolder.ofFloat("x", 0, 10);
+		check("an overshooting fraction extrapolates (not clamped)", Math.abs(pvhValue(o, 1.2f) - 12) < 1e-3f, "" + pvhValue(o, 1.2f));
+		android.animation.PropertyValuesHolder c = android.animation.PropertyValuesHolder.ofInt("color", 0xFFFF0000, 0xFF0000FF);
+		c.setEvaluator(android.animation.ArgbEvaluator.getInstance());
+		c.calculateValue(0.5f);
+		Object want = android.animation.ArgbEvaluator.getInstance().evaluate(0.5f, 0xFFFF0000, 0xFF0000FF);
+		check("ofInt with ArgbEvaluator uses the evaluator", want.equals(c.getAnimatedValue()), c.getAnimatedValue() + " want " + want);
+		android.animation.PropertyValuesHolder k = android.animation.PropertyValuesHolder.ofKeyframe("x", android.animation.Keyframe.ofFloat(0f, 0f),
+		                                                                                     android.animation.Keyframe.ofFloat(0.5f, 100f), android.animation.Keyframe.ofFloat(1f, 0f));
+		check("ofKeyframe: the keyframes are evaluated", Math.abs(pvhValue(k, 0.25f) - 50) < 1e-3f && Math.abs(pvhValue(k, 0.75f) - 50) < 1e-3f, pvhValue(k, 0.25f) + " " + pvhValue(k, 0.75f));
+		Path p = new Path();
+		p.moveTo(0, 0);
+		p.lineTo(100, 0);
+		p.lineTo(100, 100);
+		AnimTarget t = new AnimTarget();
+		android.animation.ObjectAnimator a = android.animation.ObjectAnimator.ofFloat(t, "x", "y", p);
+		android.animation.PropertyValuesHolder[] vs = a.getValues();
+		boolean ok = vs != null && vs.length == 2;
+		if (ok) {
+			for (android.animation.PropertyValuesHolder v : vs) {
+				v.setupSetterAndGetter(t);
+				v.calculateValue(0.75f);
+				v.setAnimatedValue(t);
+			}
+		}
+		check("ObjectAnimator.ofFloat(target, x, y, Path): three quarters along the path", ok && Math.abs(t.x - 100) < 0.5f && Math.abs(t.y - 50) < 0.5f, t.x + "," + t.y);
+		android.animation.PropertyValuesHolder m = android.animation.PropertyValuesHolder.ofMultiFloat("pos", p);
+		m.setupSetterAndGetter(t);
+		m.calculateValue(0.25f);
+		m.setAnimatedValue(t);
+		check("ofMultiFloat(name, Path) calls the two-argument setter", Math.abs(t.a - 50) < 0.5f && Math.abs(t.b) < 0.5f, t.a + "," + t.b);
+		android.animation.PropertyValuesHolder conv = android.animation.PropertyValuesHolder.ofObject("x", new android.animation.TypeConverter<android.graphics.PointF, Float>(android.graphics.PointF.class, Float.class) {
+			@Override
+			public Float convert(android.graphics.PointF value) {
+				return value.x + value.y;
+			}
+		}, p);
+		conv.setupSetterAndGetter(t);
+		conv.calculateValue(1f);
+		conv.setAnimatedValue(t);
+		check("ofObject(name, TypeConverter, Path) converts the point", Math.abs(t.x - 200) < 0.5f, "" + t.x);
+		check("PropertyValuesHolder.getPropertyName (AOSP)", "x".equals(conv.getPropertyName()), conv.getPropertyName());
+	}
+
 	/* ---- GLUtils: the GL format and type of a bitmap's config (AOSP util.cpp) ---- */
 	static void glUtils() {
 		Bitmap a = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888);
@@ -567,7 +634,7 @@ public class GfxTest {
 	public static void main(String[] args) {
 		System.loadLibrary("translation_layer_main"); /* the executable loads api-impl's natives in an app */
 		for (Runnable r : new Runnable[] { GfxTest::fillPath, GfxTest::pathBounds, GfxTest::matrixCopy, GfxTest::strokeWidth, GfxTest::clipBounds, GfxTest::ninePatch,
-		                                   GfxTest::pixels, GfxTest::legacyClipOps, GfxTest::matrixOps, GfxTest::approximate, GfxTest::glUtils, GfxTest::runCases }) {
+		                                   GfxTest::pixels, GfxTest::legacyClipOps, GfxTest::matrixOps, GfxTest::approximate, GfxTest::animatorValues, GfxTest::glUtils, GfxTest::runCases }) {
 			try {
 				r.run();
 			} catch (Throwable t) {

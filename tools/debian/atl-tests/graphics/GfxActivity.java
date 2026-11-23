@@ -263,6 +263,38 @@ public class GfxActivity extends Activity {
 		check("the group's delegate is asked and its veto stops the event", !sent && asked[0] == gc, sent + " " + asked[0]);
 	}
 
+	int sysUiSeen = -1;
+
+	/* the listener setters kept nothing; hover/generic motion/drag/unhandled-key dispatch (AOSP) */
+	void listenerChecks(View attached) {
+		View v = new View(this);
+		final int[] hovered = { 0 }, generic = { 0 };
+		v.setOnHoverListener((x, e) -> { hovered[0]++; return true; });
+		v.setOnGenericMotionListener((x, e) -> { generic[0]++; return true; });
+		android.view.MotionEvent hover = android.view.MotionEvent.obtain(0, 0, android.view.MotionEvent.ACTION_HOVER_MOVE, 1, 1, 0);
+		hover.setSource(android.view.InputDevice.SOURCE_MOUSE);
+		boolean h = v.dispatchGenericMotionEvent(hover);
+		check("a hover event goes to the OnHoverListener", h && hovered[0] == 1 && generic[0] == 0, hovered[0] + " " + generic[0]);
+		android.view.MotionEvent scroll = android.view.MotionEvent.obtain(0, 0, android.view.MotionEvent.ACTION_SCROLL, 1, 1, 0);
+		scroll.setSource(android.view.InputDevice.SOURCE_MOUSE);
+		boolean g = v.dispatchGenericMotionEvent(scroll);
+		check("a scroll event goes to the OnGenericMotionListener", g && generic[0] == 1, "" + generic[0]);
+		v.setEnabled(false);
+		check("a disabled view skips the hover listener", !v.dispatchGenericMotionEvent(hover) && hovered[0] == 1, "" + hovered[0]);
+		final int[] dragged = { 0 };
+		View d = new View(this);
+		d.setOnDragListener((x, e) -> { dragged[0]++; return true; });
+		check("dispatchDragEvent goes to the OnDragListener", d.dispatchDragEvent(android.view.DragEvent.obtain(android.view.DragEvent.ACTION_DRAG_STARTED, 1, 1, 0, 0, null, null, null, null, null, false)) && dragged[0] == 1, "" + dragged[0]);
+		check("getDisplay of a detached view is null", new View(this).getDisplay() == null && attached.getDisplay() != null, null);
+		final View[] got = { null };
+		attached.addOnUnhandledKeyEventListener((x, e) -> { got[0] = x; return true; });
+		View root = attached.getRootView();
+		boolean taken = root.tlDispatchUnhandledKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_F5));
+		check("an unhandled key reaches the view's OnUnhandledKeyEventListener", taken && got[0] == attached, String.valueOf(got[0]));
+		attached.setOnSystemUiVisibilityChangeListener(vis -> sysUiSeen = vis);
+		attached.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LOW_PROFILE);
+	}
+
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
@@ -299,6 +331,15 @@ public class GfxActivity extends Activity {
 			check("accessibility checks ran", false, t.toString());
 		}
 		rtlRow.postDelayed(() -> {
+			try {
+				listenerChecks(rowA);
+			} catch (Throwable t) {
+				check("listener checks ran", false, t.toString());
+			}
+		}, 300);
+		rtlRow.postDelayed(() -> {
+			check("setSystemUiVisibility tells the window's OnSystemUiVisibilityChangeListeners", sysUiSeen == View.SYSTEM_UI_FLAG_LOW_PROFILE
+			      && rowA.getWindowSystemUiVisibility() == View.SYSTEM_UI_FLAG_LOW_PROFILE, sysUiSeen + " " + rowA.getWindowSystemUiVisibility());
 			check("an RTL LinearLayout lays its first child out on the right", rowA.getLeft() > rowB.getLeft() && rowA.getRight() == rtlRow.getWidth() - 30,
 			      "a " + rowA.getLeft() + "-" + rowA.getRight() + " b " + rowB.getLeft() + " row " + rtlRow.getWidth());
 			check("onRtlPropertiesChanged told the child RTL", rtlChild.rtlCalls > 0 && rtlChild.lastDirection == View.LAYOUT_DIRECTION_RTL, rtlChild.rtlCalls + " " + rtlChild.lastDirection);
