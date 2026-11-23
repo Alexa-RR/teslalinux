@@ -227,8 +227,23 @@
         t.reason = "noAnswer";
         this.tellAppSettings();
       }, APP_SETTINGS_OPEN_MS);
+      // the host first: if this page goes away while they are open (closed, out of the car's
+      // Wi-Fi), the host pops them back to the map itself (ATLCarHost, docs/UPSTREAM-NOTES.md)
+      this.send({ type: "appSettings", state: "open" });
       this.send({ type: "click", cb: action.onClickDelegate.$cb });
       this.tellAppSettings();
+    }
+
+    /**
+     * This page is going away for good (pagehide) with the app's settings open: no back can be
+     * waited for any more, so the host pops them (the same happens when the socket just closes).
+     */
+    abandonAppSettings() {
+      const s = this.appSettings;
+      if (!s) return;
+      clearTimeout(s.timer);
+      this.appSettings = null;
+      this.send({ type: "appSettings", state: "abandon" });
     }
 
     /** The settings page goes back one screen of the app's settings (a sub-screen's back). */
@@ -311,6 +326,7 @@
       if (!s) return;
       clearTimeout(s.timer);
       this.appSettings = null;
+      this.send({ type: "appSettings", state: "closed" });
       if (s.depth && s.template) this.template = s.template;
       this.draw();
     }
@@ -585,6 +601,9 @@
       for (const el of [this.surfaceEl, this.popupsEl]) el.addEventListener("animationend", () => this.movePanelsBelowPageControls());
       this.style = style;
       new ResizeObserver(() => this.fit()).observe(displayRoot);
+      // the page closed or left (not merely hidden: the driver can come back to it) with the app's
+      // settings open
+      global.addEventListener("pagehide", () => this.abandonAppSettings());
       this.connect();
     }
 

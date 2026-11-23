@@ -138,12 +138,22 @@ Page to host:
 - `{"type":"pan","cb":ID,"on":B}`: pan mode on or off (the map action strip's PAN action;
   `PanModeDelegate`).
 - `{"type":"back"}`: back (`AppManager.onBackPressed`; the app's `ScreenManager` pops its top screen).
-  The settings page uses only these messages to show the app's own settings (Settings > Waze >
+  The settings page uses these messages to show the app's own settings (Settings > Waze >
   Waze's settings, `js/carapp/carapp-settings-view.js`): it clicks the action whose icon's
   `resName` names settings (`/(^|_)settings?(_|$)/`), draws the templates whose screen stack lies
   above the one it clicked from in the page instead of over the map, sends `click` / `checked` /
   `selected` for their rows, and when the page stops showing them sends `back`, one at a time
   (each after the template answering the previous), until the stack is the one it started from.
+- `{"type":"appSettings","state":"open"|"closed"|"abandon"}`: where the page is with the app's
+  settings: `open` right before it taps the settings action, `closed` once it stopped showing them
+  (back at the map, or it left the app's own screen where the driver sees it), `abandon` when the
+  page goes away for good (`pagehide`) while they are open. The host remembers which page opened
+  them and, when that page abandons them, its socket closes, or it goes silent (the host pings
+  every page every 10 s and closes one it heard nothing from for 30 s, such as a car browser that
+  left the hotspot's range), pops them back to the map itself with the same backs, one at a time
+  (each after the template answering the previous, at most 12; a back the app does not answer in
+  3 s leaves the app's screen as it is), so they never stay on the car's map. A runtime without
+  this ignores the message.
 - `{"type":"visibleArea","left":L,"top":T,"right":R,"bottom":B}`: the part of the map the panels leave
   free, inside their margins (display pixels), passed to the app as its visible and stable areas
   (the app keeps its car and route in it; the page's speedometer stands at its bottom right, where

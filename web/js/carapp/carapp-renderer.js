@@ -1448,8 +1448,11 @@
       const body = layer.querySelector(":scope > .carapp-content > .carapp-body");
       if (!pager || !body) return;
       const update = () => {
+        // (the column the arrows take only makes the list narrower, so taller: no flip-flop)
         const more = body.scrollHeight > body.clientHeight + 2;
         pager.classList.toggle("shown", more);
+        // the list keeps clear of the arrows' column (on a narrow display it would start under them)
+        layer.classList.toggle("paged", more);
         pager.querySelector(".up").classList.toggle("disabled", body.scrollTop <= 1);
         pager.querySelector(".down").classList.toggle("disabled", body.scrollTop + body.clientHeight >= body.scrollHeight - 1);
       };

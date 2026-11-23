@@ -648,6 +648,11 @@
   z-index: 1;
 }
 .carapp-pager.shown { display: flex; }
+/* the list starts right of the arrows while they are shown (renderer: .paged), in either look */
+.carapp-layer.fullscreen.paged,
+.carapp-graphite .carapp-layer.fullscreen.paged {
+  padding-left: max(var(--pad-6), calc(var(--pad-3) + var(--touch-target) + var(--pad-2)));
+}
 .carapp-page {
   width: var(--touch-target);
   height: var(--touch-target);

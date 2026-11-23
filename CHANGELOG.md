@@ -105,6 +105,11 @@ speed, on a road route.*
   Waze, so they stay right whatever Waze version is installed.
 - Leaving the settings page puts Waze back on its map. If Waze is asking something on the map at
   that moment, the group says so: answer it there first.
+- Closing the car page (or the browser) while Waze's settings are open also puts Waze back on its
+  map, at once; when the car simply drives out of the Wi-Fi's range, within about half a minute.
+  Before, Waze's settings stayed on the car's map.
+- Long lists on the car screen (Waze's settings, search results) no longer start under their page
+  arrows on a narrow screen ("ccount" instead of "Account").
 
 ### The speedometer on the car screen
 
@@ -259,6 +264,13 @@ In ATL (the fork):
   `tools/debian/atl-tests/natives/` checks them.
 - `tools/debian/pi-bench.py --procs NAME,... --gpu --per-second`: each process's CPU and V3D
   share (DRM fdinfo) over the measured seconds, and the frames of every second.
+- `tools/debian/carapp-probe.py`: the car-app channel from a shell: each template's class, screen
+  stack and every action and row with its icon's resource name and callback; click, back, any
+  message, and a socket that vanishes without a close frame.
+- The car-app channel's `appSettings` message (docs/UPSTREAM-NOTES.md): the page says when it
+  opens and closes Waze's settings, and on `pagehide`; the host pops abandoned settings back to the
+  map itself, also when the page's socket closes or stays silent (the host pings every page every
+  10 s and closes one silent for 30 s).
 
 #### Fixed
 
