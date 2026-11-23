@@ -10,6 +10,9 @@
 #   stage      (automotive) a UX restrictions configuration staged for the next start
 #   moving     (automotive) a start while moving: not promoted
 #   idle       (automotive) a start standing still: promoted
+#   uxmode     the car app host's car: the passenger restriction mode of the default map (typing
+#              while moving), applied at once and kept on disk
+#   uxmode2    a new start keeps the mode
 #   network    the default network (transport, metered, bandwidth, roaming, callbacks) against a
 #              mock NetworkManager and ModemManager (mock-nm.c) on a private D-Bus system bus, in
 #              a network namespace whose default route is a dummy interface; GLib's main loop runs
@@ -22,6 +25,8 @@
 #   ATL_PREFIX    the installed ATL (default /opt/teslalinux)
 #   R8_JAR        D8 for dexing (default ~/build/r8-9.5.29.jar)
 #   TEST_USER     the user to run as (default tesla)
+#   API_IMPL_JAR  the api-impl.jar to run (default the installed one): a build directory's, to test a
+#                 Java change without installing it (the natives stay the installed ones)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILDDIR="${1:-${ATL_BUILDDIR:-$HOME/atl-src/builddir}}"
@@ -29,6 +34,7 @@ PREFIX="${ATL_PREFIX:-/opt/teslalinux}"
 R8="${R8_JAR:-$HOME/build/r8-9.5.29.jar}"
 USER_="${TEST_USER:-tesla}"
 DEX="$PREFIX/lib/java/dex/android_translation_layer"
+API_IMPL="${API_IMPL_JAR:-$DEX/api-impl.jar}"
 BOOT="$PREFIX/lib/java"
 
 work="$(mktemp -d /tmp/platform-tests.XXXXXX)"
@@ -65,7 +71,7 @@ phase() { # NAME [VAR=VALUE...]
 		ANDROID_APP_DATA_DIR="$data" ANDROID_LOG_TAGS='*:w' ATL_TEST_APK_PATH="$work/platform-test.apk" "$@" \
 		"$PREFIX/bin/dalvikvm" -Djava.library.path="$DEX/natives" -DBuild.VERSION.SDK_INT=32 \
 		-Datl.app.class.path="$work/platform-test.apk" -Datl.app.library.path="$work/lib" \
-		-cp "$DEX/api-impl.jar:$DEX/framework-res.apk:$work/test.dex" org.teslalinux.platformtest.PlatformTest "$name" 2>&1)"
+		-cp "$API_IMPL:$DEX/framework-res.apk:$work/test.dex" org.teslalinux.platformtest.PlatformTest "$name" 2>&1)"
 	local rc=$?
 	echo "$out" > "/tmp/platform-test-$name.log"
 	echo "$out" | grep -E '^(PASS|FAIL|RESULT)|Exception|Error' | grep -v '^\s*at ' | head -200
@@ -85,6 +91,8 @@ phase keystore2
 phase stage ATL_IS_AUTOMOTIVE=1
 phase moving ATL_IS_AUTOMOTIVE=1
 phase idle ATL_IS_AUTOMOTIVE=1
+phase uxmode ATL_LOCATION_SOURCE=fix:32.0853,34.7818
+phase uxmode2 ATL_LOCATION_SOURCE=fix:32.0853,34.7818
 
 # the network phase: a private system bus with the mock daemons, a network namespace
 net="$work/net"

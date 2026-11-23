@@ -69,7 +69,9 @@ import javax.security.auth.x500.X500Principal;
  * statistics and Choreographer's frame timelines. run.sh builds the test APK (mkapk.py) and runs
  * the phases in separate processes (dalvikvm, the app's uid): "main", then "keystore2" (keys made
  * in "main" keep their authorizations), then the car phases "stage", "moving", "idle" (the staged
- * configuration is promoted at a later start, and only while the vehicle stands).
+ * configuration is promoted at a later start, and only while the vehicle stands), then "uxmode"
+ * and "uxmode2" (the car app host's restriction mode: typing while moving in "passenger", applied
+ * at once, kept for the next start).
  * Prints PASS/FAIL per check and "RESULT passed/total".
  */
 public class PlatformTest {
@@ -754,6 +756,127 @@ public class PlatformTest {
 		check("and its block modes", Arrays.equals(new String[] {KeyProperties.BLOCK_MODE_GCM}, ki.getBlockModes()), Arrays.toString(ki.getBlockModes()));
 	}
 
+	/* ---- 5a. car UX restrictions: the car app host's restriction mode (typing while moving) ---- */
+
+	static final int NO_KEYBOARD = CarUxRestrictions.UX_RESTRICTIONS_NO_KEYBOARD;
+
+	/* the car the car app host projects to (android.atl.carhost.ATLCarVehicle, package-private), with a listener that records what it hears */
+	static Object newVehicle(final List<CarUxRestrictions> heard) throws Exception {
+		Class<?> vc = Class.forName("android.atl.carhost.ATLCarVehicle");
+		Class<?> lc = Class.forName("android.atl.carhost.ATLCarVehicle$Listener");
+		Object listener = java.lang.reflect.Proxy.newProxyInstance(lc.getClassLoader(), new Class<?>[] {lc}, new java.lang.reflect.InvocationHandler() {
+			public Object invoke(Object proxy, Method m, Object[] a) {
+				if (m.getName().equals("onRestrictionsChanged"))
+					heard.add((CarUxRestrictions)a[0]);
+				return null;
+			}
+		});
+		java.lang.reflect.Constructor<?> k = vc.getDeclaredConstructor(Handler.class, lc);
+		k.setAccessible(true);
+		return k.newInstance(main, listener);
+	}
+
+	static Object call(Object o, String name, Class<?>[] types, Object... args) throws Exception {
+		Method m = o.getClass().getDeclaredMethod(name, types);
+		m.setAccessible(true);
+		return m.invoke(o, args);
+	}
+
+	static void drive(Object vehicle, float speed) throws Exception {
+		Location l = new Location("gps");
+		l.setLatitude(32.0853);
+		l.setLongitude(34.7818);
+		l.setSpeed(speed);
+		call(vehicle, "onLocationChanged", new Class<?>[] {Location.class}, l);
+	}
+
+	static CarUxRestrictions current(Object vehicle) throws Exception {
+		return (CarUxRestrictions)call(vehicle, "restrictions", new Class<?>[0]);
+	}
+
+	static String mode(Object vehicle) throws Exception {
+		return (String)call(vehicle, "restrictionMode", new Class<?>[0]);
+	}
+
+	static boolean setMode(Object vehicle, String mode) throws Exception {
+		return (Boolean)call(vehicle, "setRestrictionMode", new Class<?>[] {String.class}, mode);
+	}
+
+	static void uxModeTests() throws Exception {
+		CarUxRestrictionsConfiguration config = android.atl.car.ATLCarService.defaultUxRestrictionsConfiguration();
+		int[] speeds = {2, 30}; /* the map's two speed ranges, below and above 5 m/s */
+		for (int s : speeds) {
+			CarUxRestrictions base = config.getUxRestrictions(CarDrivingStateEvent.DRIVING_STATE_MOVING, s, "baseline");
+			CarUxRestrictions pass = config.getUxRestrictions(CarDrivingStateEvent.DRIVING_STATE_MOVING, s, "passenger");
+			check("the default map, moving at " + s + " m/s: baseline has no keyboard", (base.getActiveRestrictions() & NO_KEYBOARD) != 0, Integer.toHexString(base.getActiveRestrictions()));
+			check("passenger: the keyboard, the other restrictions as the baseline's",
+			    pass.getActiveRestrictions() == (base.getActiveRestrictions() & ~NO_KEYBOARD) && pass.isRequiresDistractionOptimization()
+			        && pass.getMaxCumulativeContentItems() == base.getMaxCumulativeContentItems() && pass.getMaxRestrictedStringLength() == base.getMaxRestrictedStringLength(),
+			    Integer.toHexString(pass.getActiveRestrictions()));
+		}
+		CarUxRestrictions idle = config.getUxRestrictions(CarDrivingStateEvent.DRIVING_STATE_IDLING, 0f, "passenger");
+		check("passenger, idling: the baseline's (no entry of its own)", !idle.isRequiresDistractionOptimization() && idle.getActiveRestrictions() == CarUxRestrictions.UX_RESTRICTIONS_BASELINE, "");
+		CarUxRestrictions other = config.getUxRestrictions(CarDrivingStateEvent.DRIVING_STATE_MOVING, 30f, "nosuchmode");
+		check("an undefined mode falls back to the baseline", (other.getActiveRestrictions() & NO_KEYBOARD) != 0, "");
+		// the map with its passenger mode survives the configuration's JSON (the car service's files)
+		java.io.StringWriter sw = new java.io.StringWriter();
+		android.util.JsonWriter jw = new android.util.JsonWriter(sw);
+		config.writeJson(jw);
+		jw.flush();
+		CarUxRestrictionsConfiguration back = CarUxRestrictionsConfiguration.readJson(new android.util.JsonReader(new java.io.StringReader(sw.toString())), 2);
+		check("the passenger mode is kept in the configuration's JSON", (back.getUxRestrictions(CarDrivingStateEvent.DRIVING_STATE_MOVING, 30f, "passenger").getActiveRestrictions() & NO_KEYBOARD) == 0
+		    && (back.getUxRestrictions(CarDrivingStateEvent.DRIVING_STATE_MOVING, 30f, "baseline").getActiveRestrictions() & NO_KEYBOARD) != 0, sw.toString().length() > 300 ? sw.toString().substring(0, 300) : sw.toString());
+
+		android.atl.car.UxRestrictionsConfigStore store = android.atl.car.UxRestrictionsConfigStore.forSystem();
+		check("no kept mode at first", store.readHostMode() == null, store.readHostMode());
+		check("mode names: \"passenger\" is one", android.atl.car.UxRestrictionsConfigStore.isValidModeName("passenger"), "");
+		check("mode names: empty, a path or a quote are not", !android.atl.car.UxRestrictionsConfigStore.isValidModeName("")
+		    && !android.atl.car.UxRestrictionsConfigStore.isValidModeName("../x") && !android.atl.car.UxRestrictionsConfigStore.isValidModeName("a\"b"), "");
+
+		List<CarUxRestrictions> heard = new ArrayList<>();
+		Object v = newVehicle(heard);
+		check("the host's car starts in the baseline mode", "baseline".equals(mode(v)), mode(v));
+		check("no speed yet: not restricted", !current(v).isRequiresDistractionOptimization(), "");
+		check("a mode change before the first speed is heard, still unrestricted", setMode(v, "passenger") && heard.size() == 1 && !heard.get(0).isRequiresDistractionOptimization(), "heard " + heard.size());
+		check("setting the same mode again changes nothing", setMode(v, "passenger") && heard.size() == 1, "heard " + heard.size());
+		check("the mode is kept on disk", "passenger".equals(store.readHostMode()), store.readHostMode());
+		// the car's own configuration comes first: the "idle" phase promoted one without a passenger mode
+		File prod = store.getFile(android.atl.car.UxRestrictionsConfigStore.CONFIG_FILENAME_PRODUCTION);
+		if (prod.exists()) {
+			drive(v, 13.9f);
+			check("a production configuration without a passenger mode: its baseline applies", current(v).getActiveRestrictions() == CarUxRestrictions.UX_RESTRICTIONS_FULLY_RESTRICTED,
+			    Integer.toHexString(current(v).getActiveRestrictions()));
+			check("(the production file removed for the default map)", prod.delete(), "");
+		}
+		heard.clear();
+		v = newVehicle(heard);
+		check("a car made now starts in the kept mode", "passenger".equals(mode(v)), mode(v));
+		drive(v, 13.9f);
+		CarUxRestrictions r = current(v);
+		check("moving in passenger mode: restricted, with the keyboard", r.isRequiresDistractionOptimization() && (r.getActiveRestrictions() & NO_KEYBOARD) == 0 && r.getMaxCumulativeContentItems() == 21,
+		    Integer.toHexString(r.getActiveRestrictions()));
+		int before = heard.size();
+		check("back to the baseline while moving: no keyboard, at once", setMode(v, "baseline") && heard.size() == before + 1
+		    && (heard.get(heard.size() - 1).getActiveRestrictions() & NO_KEYBOARD) != 0, "heard " + (heard.size() - before));
+		before = heard.size();
+		check("passenger again while moving: the keyboard at once", setMode(v, "passenger") && heard.size() == before + 1
+		    && (heard.get(heard.size() - 1).getActiveRestrictions() & NO_KEYBOARD) == 0, "heard " + (heard.size() - before));
+		check("a name that is not a mode is refused and changes nothing", !setMode(v, "../evil") && "passenger".equals(mode(v)), mode(v));
+		drive(v, 0f);
+		check("standing still in passenger mode: not restricted", !current(v).isRequiresDistractionOptimization(), "");
+	}
+
+	/* a new start: the kept mode holds, and a speed applies it */
+	static void uxModeKeptTests() throws Exception {
+		List<CarUxRestrictions> heard = new ArrayList<>();
+		Object v = newVehicle(heard);
+		check("a new start keeps the passenger mode", "passenger".equals(mode(v)), mode(v));
+		drive(v, 20f);
+		check("and moving has the keyboard", (current(v).getActiveRestrictions() & NO_KEYBOARD) == 0 && current(v).isRequiresDistractionOptimization(), "");
+		check("back to the baseline", setMode(v, "baseline") && (current(v).getActiveRestrictions() & NO_KEYBOARD) != 0, "");
+		check("the baseline is kept too", "baseline".equals(android.atl.car.UxRestrictionsConfigStore.forSystem().readHostMode()), "");
+	}
+
 	/* ---- 5. car UX restrictions: the staged configuration ---- */
 
 	static ICarUxRestrictionsManager uxManager() throws Exception {
@@ -1149,6 +1272,12 @@ public class PlatformTest {
 							break;
 						case "idle":
 							idleTests();
+							break;
+						case "uxmode":
+							uxModeTests();
+							break;
+						case "uxmode2":
+							uxModeKeptTests();
 							break;
 						case "network":
 							networkTests();

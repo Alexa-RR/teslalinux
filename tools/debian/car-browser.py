@@ -81,7 +81,9 @@ async def run(a):
         dport = open(port_file).read().split()[0]
         targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{dport}/json"))
         page = next(t for t in targets if t["type"] == "page")
-        async with websockets.connect(page["webSocketDebuggerUrl"], max_size=64 << 20) as ws:
+        # no keepalive pings: a busy page (a stream decoding) can hold Chrome's answer past the
+        # client's ping timeout, which closed the session in the middle of a long waitfor
+        async with websockets.connect(page["webSocketDebuggerUrl"], max_size=64 << 20, ping_interval=None) as ws:
             cdp = Cdp(ws)
             pump = asyncio.create_task(cdp.pump())
             await cdp.call("Page.enable")
