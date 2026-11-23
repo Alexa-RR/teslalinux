@@ -89,7 +89,7 @@ mkdir -p "$D"
 # ---------------------------------------------------------------- 1. the runtime part of the prefix
 log "1/5 prefix $PREFIX -> $TOP/"
 EXCLUDES=(
-  --exclude=/include --exclude=/tacomp/include --exclude='*.a' --exclude='*.la' --exclude='*.orig'
+  --exclude=/include --exclude=/tacomp/include --exclude='*.a' --exclude='*.la' --exclude='*.orig' --exclude='*-hostdex.jar.dx'
   --exclude=pkgconfig --exclude=/lib/cmake --exclude=/share/doc --exclude=/share/man
   --exclude=/share/aclocal --exclude=/tacomp/share
   --exclude=/bin/dx --exclude=/bin/wolfssl-config --exclude=/tacomp/bin/wayland-scanner

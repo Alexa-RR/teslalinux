@@ -3,7 +3,7 @@
 # build VM, into /opt/teslalinux (out/pios-plan/PLAN.md, section 1). Runs as `atl` in the guest.
 #
 #   build-dist.sh [all]          every step in order, skipping steps already done for the same pins
-#   build-dist.sh STEP...        only these: vixl wolfssl bionic art coreoj wolfjsse opensles atl
+#   build-dist.sh STEP...        only these: vixl wolfssl bionic art libcored8 coreoj wolfjsse opensles atl
 #                                wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay
 #   build-dist.sh --force STEP   redo a step although its stamp says done
 #   build-dist.sh status         which steps are done, for which pins
@@ -125,6 +125,15 @@ fetch_git_commit() {
   [[ "${NOCLEAN:-0}" == 1 ]] || git -C "$d" clean -q -fdx
   log "$name at $(git -C "$d" rev-parse --short=12 HEAD)"
 }
+# the pinned R8 (D8) jar, checksummed: ATL's Java code (-Dr8_jar) and libcore (step libcored8)
+R8="$B/r8-$R8_VERSION.jar"
+fetch_r8() {
+  if [[ ! -f "$R8" ]] || [[ "$(sha256sum "$R8" | cut -d' ' -f1)" != "$R8_SHA256" ]]; then
+    curl -fsSL --retry 3 -o "$R8.tmp" "$R8_URL"
+    [[ "$(sha256sum "$R8.tmp" | cut -d' ' -f1)" == "$R8_SHA256" ]] || die "r8.jar checksum mismatch"
+    mv "$R8.tmp" "$R8"
+  fi
+}
 meson_build() { # srcdir prefix [meson options...]
   local s=$1 p=$2; shift 2
   rm -rf "$s/builddir"
@@ -185,9 +194,36 @@ step_art() {
   local cstd="HOST_GLOBAL_CONLYFLAGS=-std=gnu2x"
   make -j "$JOBS" ____PREFIX="$PREFIX" ____LIBDIR=lib "$cstd"
   make ____PREFIX="$PREFIX" ____INSTALL_ETC="$PREFIX/etc" ____LIBDIR=lib "$cstd" install
-  # a fresh core-oj-hostdex.jar and wolfssljni-hostdex.jar: the coreoj and wolfjsse steps patch them
-  # again (their .orig is the one to start from)
-  rm -f "$PREFIX/lib/java/dex/art/core-oj-hostdex.jar.orig" "$PREFIX/lib/java/dex/art/wolfssljni-hostdex.jar.orig"
+  # fresh dx-dexed core-oj, core-libart and wolfssljni jars: the libcored8, coreoj and wolfjsse steps
+  # rebuild and patch them again (their .dx and .orig copies are the ones to start from)
+  rm -f "$PREFIX"/lib/java/dex/art/core-{oj,libart}-hostdex.jar.dx \
+    "$PREFIX/lib/java/dex/art/core-oj-hostdex.jar.orig" "$PREFIX/lib/java/dex/art/wolfssljni-hostdex.jar.orig"
+}
+# libcore's boot class path jars dexed with D8 instead of art_standalone's dx, as Android's build does:
+# dx leaves libcore's own lambdas and method references as invoke-custom call sites, and ART cannot run
+# the serializable ones (altMetafactory: Comparator.comparing, Map.Entry.comparingByKey, ...) or some
+# plain ones (Collectors.groupingBy); D8 desugars them into classes (patches/libcore-d8.py explains).
+# Each jar's dx original is kept as JAR.dx and every run starts from it; the D8 core-oj jar becomes the
+# unpatched jar (.orig) the coreoj step adds the ALPN API to.
+LIBCORE_D8_JARS=(core-oj-hostdex.jar core-libart-hostdex.jar)
+step_libcored8() {
+  local dex="$PREFIX/lib/java/dex/art" core="$PREFIX/lib/java/core-all_classes.jar" j jars=()
+  [[ -f "$core" ]] || die "no $core (step art first)"
+  fetch_r8
+  for j in "${LIBCORE_D8_JARS[@]}"; do
+    [[ -f "$dex/$j" ]] || die "no $dex/$j (step art first)"
+    # the dx original: for core-oj the unpatched copy when the coreoj step has patched the jar already
+    if [[ ! -f "$dex/$j.dx" ]]; then
+      if [[ -f "$dex/$j.orig" ]]; then cp -p "$dex/$j.orig" "$dex/$j.dx"; else cp -p "$dex/$j" "$dex/$j.dx"; fi
+    fi
+    jars+=("$dex/$j")
+  done
+  python3 "$DEBVM_PATCHES/libcore-d8.py" "$R8" "$core" "$B/libcore-d8" "${jars[@]}"
+  rm -rf "$B/libcore-d8"
+  for j in "${LIBCORE_D8_JARS[@]}"; do chmod --reference="$dex/$j.dx" "$dex/$j"; done
+  # the coreoj step starts again from the D8 jar (its stamp hashes the .orig, so it reruns)
+  rm -f "$dex/core-oj-hostdex.jar.orig"
+  rm -f "$HOME"/.cache/art/*/*boot* "$HOME"/.cache/art/*/*api-impl* 2>/dev/null || true
 }
 # the ALPN API in libcore's core-oj-hostdex.jar: tools/atl-vm/patch-core-oj.sh, which ran on the Mac
 # against the VM, as a build step (same sources, same result: classes.dex = the new classes,
@@ -324,16 +360,11 @@ step_atl() {
   git -C "$d" checkout -q -f "$ATL_COMMIT"
   git -C "$d" clean -q -fdx
   log "ATL at $(git -C "$d" rev-parse --short=12 HEAD)"
-  # D8 for the Java code (the fork's -Dr8_jar), checksummed
-  local r8="$B/r8-$R8_VERSION.jar"
-  if [[ ! -f "$r8" ]] || [[ "$(sha256sum "$r8" | cut -d' ' -f1)" != "$R8_SHA256" ]]; then
-    curl -fsSL --retry 3 -o "$r8.tmp" "$R8_URL"
-    [[ "$(sha256sum "$r8.tmp" | cut -d' ' -f1)" == "$R8_SHA256" ]] || die "r8.jar checksum mismatch"
-    mv "$r8.tmp" "$r8"
-  fi
+  # D8 for the Java code (the fork's -Dr8_jar)
+  fetch_r8
   # upstream's upcall wrapper generator (tools/jni_upcall_gen) reads the jar with ASM; trixie's
   # libasm-java and libgetopt-java (guest-provision.sh) provide the jars, no Maven download
-  BUILDTYPE=debugoptimized meson_build "$d" "$PREFIX" -Dr8_jar="$r8" \
+  BUILDTYPE=debugoptimized meson_build "$d" "$PREFIX" -Dr8_jar="$R8" \
     -Dasm_jar_path=/usr/share/java/asm.jar -Dasm_tree_jar_path=/usr/share/java/asm-tree.jar \
     -Dgetopt_jar_path=/usr/share/java/gnu-getopt.jar
   rm -f "$HOME"/.cache/art/*/*api-impl* 2>/dev/null || true
@@ -400,7 +431,7 @@ step_tlplay() {
   install -m 0755 "$CARGO_TARGET_DIR/release/tlplay" "$PREFIX/bin/tlplay"
 }
 
-ALL=(vixl wolfssl bionic art coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay)
+ALL=(vixl wolfssl bionic art libcored8 coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp tlplay)
 pins_of() { # what a step's stamp records: its pins plus the hash of the patches it applies
   case "$1" in
     vixl) echo "$VIXL_URL $VIXL_MESON_PATCH_SHA256" ;;
@@ -408,7 +439,11 @@ pins_of() { # what a step's stamp records: its pins plus the hash of the patches
     bionic) echo "$BIONIC_COMMIT $(cat "$BIONIC_PATCH" "$BIONIC_SYSCONF_PY" 2>/dev/null | sha256sum | cut -c1-16)" ;;
     # wolfSSL's too: art builds wolfssljni's JNI library against libwolfssl's headers (options.h)
     art) echo "$ART_COMMIT $(cat "$DEBVM_PATCHES"/art_standalone-*.py 2>/dev/null | sha256sum | cut -c1-16) $(printf '%s %s' "$WOLFSSL_TAG" "$WOLFSSL_FLAGS" | sha256sum | cut -c1-16)" ;;
-    # the unpatched jar's hash too: a rebuilt art step installs a new one (and drops the .orig)
+    # the dx originals' hashes too: a rebuilt art step installs new ones (and drops the .dx copies)
+    libcored8) local j h=""
+      for j in "${LIBCORE_D8_JARS[@]}"; do j="$PREFIX/lib/java/dex/art/$j.dx"; h+=" $( [[ -f $j ]] && sha256sum "$j" | cut -c1-16 || echo none)"; done
+      echo "$R8_VERSION $(sha256sum "$DEBVM_PATCHES/libcore-d8.py" 2>/dev/null | cut -c1-16) $( [[ -f $PREFIX/lib/java/core-all_classes.jar ]] && sha256sum "$PREFIX/lib/java/core-all_classes.jar" | cut -c1-16 || echo none)$h" ;;
+    # the unpatched jar's hash too: a rebuilt art or libcored8 step installs a new one (and drops the .orig)
     coreoj) local j="$PREFIX/lib/java/dex/art/core-oj-hostdex.jar.orig"
       echo "$LIBCORE_COMMIT $(find "$BOOTCP" "$DEBVM_PATCHES/core-oj-alpn.py" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum | cut -c1-16) $( [[ -f $j ]] && sha256sum "$j" | cut -c1-16 || echo none)" ;;
     wolfjsse) local j="$PREFIX/lib/java/dex/art/wolfssljni-hostdex.jar.orig"
