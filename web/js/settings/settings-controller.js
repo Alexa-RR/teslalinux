@@ -1595,8 +1595,8 @@
           title: "Update Waze automatically",
           control: UI.toggle(set.autoUpdate !== false, (on) => saveSet(au, { autoUpdate: on }), "Update Waze automatically"),
         });
-        // a version pin: download exactly this version and no newer one (the Map frame rate "Full"
-        // works only on the Waze versions it is verified for)
+        // a version pin: download exactly this version and no newer one (the Map frame rates
+        // "Automatic" and "Full" work only on the Waze versions they are verified for)
         const pinCode = set.pinVersionCode || 0;
         const choices = (info.pinChoices || []).slice();
         if (pinCode && !choices.some((c) => c.versionCode === pinCode)) choices.push({ versionCode: pinCode, versionName: set.pinVersionName, reason: "" });
@@ -1605,7 +1605,7 @@
         const pacingNames = choices.filter((c) => c.reason === "mapPacing" && c.versionName).map((c) => c.versionName);
         const pinName = set.pinVersionName || "versionCode " + pinCode;
         const pinDetail = !pinCode
-          ? "Every new version." + (pacingNames.length ? " Full map frame rate works on " + pacingNames.join(" and ") + " only." : "")
+          ? "Every new version." + (pacingNames.length ? " Automatic and Full map frame rates work on " + pacingNames.join(" and ") + " only." : "")
           : installedCode > pinCode
             ? "The installed " + ver(info.installed) + " is newer than " + pinName + ", so no further updates. Waze is never taken back to an older version."
             : installedCode === pinCode
@@ -2277,19 +2277,19 @@
             { label: "Map text size" },
           ),
         });
-        const pacingSaved = iface.mapPacing === "full" ? "full" : "app";
+        const pacingSaved = ["auto", "app", "full"].includes(iface.mapPacing) ? iface.mapPacing : "auto";
         const support = iface.mapPacingSupport;
-        // (a third choice, "Automatic", can join these two)
         const pc = UI.row({
           id: "waze.pacing",
           title: "Map frame rate",
           chips: [UI.CHIP.restart()],
           stack: true,
-          detail: "Full is smoother, and the Pi works harder",
+          detail: "Automatic is smooth while the map moves and lets the Pi rest while it is still; Full works the Pi hardest",
           after: support && !support.supported ? UI.warnbox(this._pacingUnavailable(support)) : null,
           control: UI.segmented(
             [
-              { value: "app", label: "Waze's own", caption: "30 per second, default" },
+              { value: "auto", label: "Automatic", caption: "60 while moving, default" },
+              { value: "app", label: "Waze's own", caption: "30 per second" },
               { value: "full", label: "Full", caption: "up to 60 per second" },
             ],
             this._staged("pacing", pacingSaved),
@@ -2358,16 +2358,16 @@
       return why + " Waze draws its own on the map.";
     }
 
-    /** the full map frame rate applies only to the Waze versions it was checked with (tools/apps/waze-map-pacing.py) */
+    /** the automatic and full map frame rates apply only to the Waze versions they were checked with (tools/apps/waze-map-pacing.py) */
     _pacingUnavailable(support) {
       const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
       const installed = support.versionCode ? "Waze " + named(support) : "this Waze";
       const checked = (support.verifiedVersions || []).map(named).join(", ");
       const why =
         {
-          "not-installed": "Full is not available: no installed Waze was found.",
-          "no-tool": "Full is not available on this device.",
-        }[support.state] || "Full is not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".";
+          "not-installed": "Automatic and Full are not available: no installed Waze was found.",
+          "no-tool": "Automatic and Full are not available on this device.",
+        }[support.state] || "Automatic and Full are not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".";
       return why + " Waze keeps its own rate.";
     }
 

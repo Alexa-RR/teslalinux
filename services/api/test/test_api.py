@@ -342,15 +342,20 @@ class AppInterface(unittest.TestCase):
             f.write("TESLALINUX_APP_INTERFACE=car\n")
         self.installed(1030750)  # Waze 5.27.5.0, on tools/apps/waze-map-pacing.py's list
         st = self.state()
-        self.assertEqual(st["mapPacing"], "app")  # never chosen: Waze's own
+        self.assertEqual(st["mapPacing"], "auto")  # never chosen: Automatic
         self.assertEqual((st["mapPacingSupport"]["state"], st["mapPacingSupport"]["supported"]), ("verified", True))
+        self.assertEqual(st["mapPacingSupport"]["modes"], ["auto", "full"])
         self.assertIn({"versionCode": 1030750, "versionName": "5.27.5.0"}, st["mapPacingSupport"]["verifiedVersions"])
+        for chosen in ("full", "app", "auto"):
+            with open(os.path.join(TMP, "interface.env"), "w") as f:
+                f.write("TESLALINUX_APP_INTERFACE=car\nTESLALINUX_MAP_PACING=%s\n" % chosen)
+            self.assertEqual(self.state()["mapPacing"], chosen)
         with open(os.path.join(TMP, "interface.env"), "w") as f:
-            f.write("TESLALINUX_APP_INTERFACE=car\nTESLALINUX_MAP_PACING=full\n")
-        self.assertEqual(self.state()["mapPacing"], "full")
+            f.write("TESLALINUX_APP_INTERFACE=car\nTESLALINUX_MAP_PACING=fast\n")
+        self.assertEqual(self.state()["mapPacing"], "auto")  # not a choice: the default
         self.installed(1030800)
         st = self.state()["mapPacingSupport"]
-        self.assertEqual((st["state"], st["supported"]), ("unverified-version", False))
+        self.assertEqual((st["state"], st["supported"], st["modes"]), ("unverified-version", False, []))
         os.unlink(os.path.join(TMP, "apps", "installed.json"))
         self.assertEqual(self.state()["mapPacingSupport"]["state"], "not-installed")
 
@@ -388,15 +393,18 @@ class AppInterface(unittest.TestCase):
     def test_set_map_pacing(self):
         if os.path.exists(IFACE_LOG):
             os.unlink(IFACE_LOG)
-        self.assertEqual(call("appInterface", "POST", json.dumps({"mapPacing": "full"}), "application/json")[0], 200)
-        for bad in ({"mapPacing": "fast"}, {"mapPacing": 60}):
+        for bad in ({"mapPacing": "fast"}, {"mapPacing": 60}, {"mapPacing": "Auto"}):
             self.assertEqual(call("appInterface", "POST", json.dumps(bad), "application/json")[0], 500, bad)
-        for _ in range(50):
+        for chosen in ("full", "auto"):
             if os.path.exists(IFACE_LOG):
-                break
-            time.sleep(0.05)
-        with open(IFACE_LOG) as f:
-            self.assertEqual(f.read().strip(), "pacing full")
+                os.unlink(IFACE_LOG)
+            self.assertEqual(call("appInterface", "POST", json.dumps({"mapPacing": chosen}), "application/json")[0], 200)
+            for _ in range(50):
+                if os.path.exists(IFACE_LOG):
+                    break
+                time.sleep(0.05)
+            with open(IFACE_LOG) as f:
+                self.assertEqual(f.read().strip(), "pacing " + chosen)
 
 
 class GpuSpeed(unittest.TestCase):

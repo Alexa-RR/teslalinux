@@ -133,9 +133,11 @@ APP_INTERFACES = ("phone", "car")
 # the car map's colours: graphite (ATL's file overlay of the app's palette, verified versions only),
 # muted (the car page recolours the stream), app (the app's own)
 MAP_COLOURS = ("graphite", "muted", "app")
-# the car map's frame rate: app (Waze's own, 30 frames/s) or full (the display's 60; the launcher gives the app
-# a class changed by tools/apps/waze-map-pacing.py, verified versions only)
-MAP_PACINGS = ("app", "full")
+# the car map's frame rate: auto (the default: the display's 60 while the map moves, Waze's own 30 while it
+# is still), app (Waze's own, 30 frames/s) or full (the display's 60 all the time); for auto and full the
+# launcher gives the app a class made by tools/apps/waze-map-pacing.py, verified versions only
+MAP_PACINGS = ("auto", "app", "full")
+MAP_PACING_DEFAULT = "auto"
 MAP_PACING_TOOLS = tuple(p for p in (
     os.environ.get("TESLALINUX_MAP_PACING_TOOL"),
     "/usr/local/lib/teslalinux/apps/waze-map-pacing.py",
@@ -775,7 +777,7 @@ def app_interface_state(with_map_skin=False):
     pacing = env.get("TESLALINUX_MAP_PACING")
     out = {"interface": mode if mode in APP_INTERFACES else "phone",
            "mapColours": colours if colours in MAP_COLOURS else None,
-           "mapPacing": pacing if pacing in MAP_PACINGS else "app"}
+           "mapPacing": pacing if pacing in MAP_PACINGS else MAP_PACING_DEFAULT}
     if with_map_skin:
         out["mapSkin"] = map_skin_status()
         out["mapPacingSupport"] = map_pacing_status()
@@ -854,13 +856,14 @@ def map_skin_status():
 
 
 def map_pacing_status():
-    """Whether the "full" map frame rate applies to the app as installed: its versionCode against the
-    versions tools/apps/waze-map-pacing.py knows (VERIFIED; the launcher's run of the tool also checks
-    the code itself and leaves the app alone if it differs). state: "verified", "unverified-version",
-    "no-tool", "not-installed"."""
+    """Whether the "auto" and "full" map frame rates apply to the app as installed: its versionCode
+    against the versions tools/apps/waze-map-pacing.py knows (VERIFIED_AUTO and VERIFIED; the
+    launcher's run of the tool also checks the code itself and leaves the app alone if it differs).
+    state: "verified" (for both), "unverified-version", "no-tool", "not-installed"; "modes" names the
+    choices the installed version is verified for (["auto", "full"], one of them, or none)."""
     inst = _read_json(os.path.join(APP_DIR, "installed.json")) or {}
     vc, vn = inst.get("versionCode"), inst.get("versionName")
-    out = {"supported": False, "versionCode": vc, "versionName": vn, "verifiedVersions": []}
+    out = {"supported": False, "versionCode": vc, "versionName": vn, "verifiedVersions": [], "modes": []}
     verified = None
     for path in MAP_PACING_TOOLS:
         if not os.path.isfile(path):
@@ -869,7 +872,7 @@ def map_pacing_status():
             spec = importlib.util.spec_from_file_location("waze_map_pacing", path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            verified = mod.VERIFIED
+            verified = {"full": set(mod.VERIFIED), "auto": set(getattr(mod, "VERIFIED_AUTO", {}))}
             names = getattr(mod, "VERIFIED_NAMES", {})
             break
         except Exception as e:  # a broken tool: reported as missing, never a failed request
@@ -877,11 +880,13 @@ def map_pacing_status():
     if verified is None:
         out["state"] = "no-tool"
         return out
-    out["verifiedVersions"] = [{"versionCode": v, "versionName": names.get(v)} for v in sorted(verified)]
+    both = verified["full"] & verified["auto"]
+    out["verifiedVersions"] = [{"versionCode": v, "versionName": names.get(v)} for v in sorted(both)]
     if not isinstance(vc, int):
         out["state"] = "not-installed"
         return out
-    out["state"] = "verified" if vc in verified else "unverified-version"
+    out["modes"] = [m for m in ("auto", "full") if vc in verified[m]]
+    out["state"] = "verified" if vc in both else "unverified-version"
     out["supported"] = out["state"] == "verified"
     return out
 

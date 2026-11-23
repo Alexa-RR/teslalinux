@@ -3,6 +3,7 @@
 
   pi-bench.py [--label NAME] [--seconds 60] [--warmup 15] [--speed-kmh 50] [--start LAT,LON]
               [--bearing 0] [--no-drive] [--host 127.0.0.1] [--display-port 9091] [--gps-port 9998]
+              [--procs NAME,...] [--gpu] [--per-second]
 
 Runs on the Pi (python3-websockets, vcgencmd). A simulated car drives in a straight line through the
 GPS WebSocket (gps-drive.py's path, so the map keeps moving), a display client counts tacomp's frames
@@ -15,11 +16,17 @@ A car page (or another display client) must keep Waze's map shown in Car mode; t
 reads the stream. --no-drive leaves the GPS to something else: a straight line leaves the roads, and
 Waze then stops following the car, so for comparable runs drive a real route with gps-route.py
 (a cached --route file, the same stretch every run) and pass --no-drive.
+--procs: the CPU share (% of one core) of the processes with these names (/proc/PID/comm, a prefix
+is enough: android-transla, tacomp) over the measured seconds, as "cpu": {name: %}. --gpu (as root,
+to read other users' DRM fdinfo): each of those processes' share of V3D's engines (bin, render)
+over the measured seconds, as "gpu": {name: {engine: %}} (a job counts from its start to its end,
+so jobs that overlap add up to more than 100%). --per-second: the frames of every measured second.
 """
 import argparse
 import asyncio
 import json
 import math
+import os
 import subprocess
 import time
 
@@ -70,6 +77,71 @@ async def drive(url, start, bearing, kmh, seconds):
             await asyncio.sleep(1)
 
 
+def pids_named(prefixes):
+    """{prefix: [pid, ...]} of the running processes whose comm or program name (argv[0]'s base name)
+    starts with each prefix (ATL's process renames its main thread, so its comm is "main")"""
+    out = {p: [] for p in prefixes}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open("/proc/%s/comm" % d) as f:
+                comm = f.read().strip()
+            with open("/proc/%s/cmdline" % d, "rb") as f:
+                prog = os.path.basename(f.read().split(b"\0", 1)[0].decode("utf-8", "replace"))
+        except OSError:
+            continue
+        for p in prefixes:
+            if comm.startswith(p) or (prog and prog.startswith(p)):
+                out[p].append(int(d))
+    return out
+
+
+def proc_cpu_ticks(pids):
+    total = 0
+    for pid in pids:
+        try:
+            with open("/proc/%d/stat" % pid) as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+            total += int(fields[11]) + int(fields[12])  # utime, stime
+        except (OSError, IndexError, ValueError):
+            pass
+    return total
+
+
+def drm_engine_ns(pids):
+    """{engine: ns busy} summed over the DRM clients (one per context) the processes hold open; a
+    client opened through several fds counts once"""
+    out, seen = {}, set()
+    for pid in pids:
+        try:
+            fds = os.listdir("/proc/%d/fdinfo" % pid)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                with open("/proc/%d/fdinfo/%s" % (pid, fd)) as f:
+                    text = f.read()
+            except OSError:
+                continue
+            if "drm-engine-" not in text:
+                continue
+            client = None
+            engines = {}
+            for line in text.splitlines():
+                if line.startswith("drm-client-id:"):
+                    client = line.split()[1]
+                elif line.startswith("drm-engine-"):
+                    k, v = line.split(":", 1)
+                    engines[k[len("drm-engine-"):]] = int(v.split()[0])
+            if client in seen:
+                continue
+            seen.add(client)
+            for k, v in engines.items():
+                out[k] = out.get(k, 0) + v
+    return out
+
+
 async def count_frames(url, stamps, stop):
     async with websockets.connect(url, max_size=None) as ws:
         while not stop.is_set():
@@ -114,7 +186,11 @@ async def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--display-port", type=int, default=9091)
     ap.add_argument("--gps-port", type=int, default=9998)
+    ap.add_argument("--procs", default="", help="comma-separated process name prefixes: their CPU share")
+    ap.add_argument("--gpu", action="store_true", help="and their V3D share (DRM fdinfo; root)")
+    ap.add_argument("--per-second", action="store_true", help="print every measured second's frames")
     a = ap.parse_args()
+    procs = [p for p in a.procs.split(",") if p]
     start = tuple(float(v) for v in a.start.split(","))
     stamps, samples, stop = [], [], asyncio.Event()
     total = a.warmup + a.seconds
@@ -125,7 +201,21 @@ async def main():
         asyncio.create_task(sample(samples, stop)),
     ]
     t0 = time.monotonic()
-    await asyncio.sleep(total)
+    await asyncio.sleep(a.warmup)
+    # the processes' CPU and GPU time over the measured seconds
+    pids = pids_named(procs)
+    hz = os.sysconf("SC_CLK_TCK")
+    cpu0 = {p: proc_cpu_ticks(v) for p, v in pids.items()}
+    gpu0 = {p: drm_engine_ns(v) for p, v in pids.items()} if a.gpu else {}
+    w0 = time.monotonic()
+    await asyncio.sleep(a.seconds)
+    w1 = time.monotonic()
+    cpu = {p: round(100.0 * (proc_cpu_ticks(v) - cpu0[p]) / hz / (w1 - w0), 1) for p, v in pids.items()}
+    gpu = {}
+    for p, v in pids.items() if a.gpu else ():
+        now = drm_engine_ns(v)
+        gpu[p] = {k: round(100.0 * (now[k] - gpu0[p].get(k, 0)) / 1e9 / (w1 - w0), 1)
+                  for k in now if now[k] - gpu0[p].get(k, 0) > 0}
     stop.set()
     await asyncio.sleep(2.5)
     for t in tasks:
@@ -148,7 +238,7 @@ async def main():
     temps = [s["temp"] for s in window if s["temp"] is not None]
     busy = [s["cpu_busy"] for s in window if s["cpu_busy"] is not None]
     env = display_env()
-    print(json.dumps({
+    out = {
         "label": a.label,
         "display": "%s %s" % (env.get("TACOMP_SIZE", "?"), env.get("TACOMP_ENCODER", "?")),
         "fps": round(sum(per_second) / a.seconds, 1),
@@ -158,7 +248,14 @@ async def main():
         "arm_mhz": low("arm_mhz"),
         "v3d_mhz": low("v3d_mhz"),
         "cpu_busy": round(sum(busy) / len(busy), 1) if busy else None,
-    }))
+    }
+    if procs:
+        out["cpu"] = cpu
+    if a.gpu:
+        out["gpu"] = gpu
+    if a.per_second:
+        out["per_second"] = per_second
+    print(json.dumps(out))
 
 
 if __name__ == "__main__":

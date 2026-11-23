@@ -11,17 +11,21 @@
 #                                        map palette recoloured, for verified app versions only
 #                                        (docs/MAP-COLOURS.md); "muted" recolours the stream in the car
 #                                        page; "app" leaves the app's colours alone
-#   teslalinux-set-app-interface pacing app|full
-#                                        the car map's frame rate: "app" is the app's own (Waze holds its
-#                                        car map at 30 frames/s); "full" has the launcher give the app
-#                                        its map loop on the display's 60 frames/s schedule, for verified
-#                                        app versions only (tools/apps/waze-map-pacing.py)
+#   teslalinux-set-app-interface pacing auto|app|full
+#                                        the car map's frame rate: "auto" (the default) has the launcher
+#                                        give the app's frame limiter the display's 60 frames/s while the
+#                                        map moves (driving, panning, zooming, the car page's input) and
+#                                        its own rate while it is still; "app" is the app's own (Waze
+#                                        holds its car map at 30 frames/s); "full" gives the app its map
+#                                        loop on the display's 60 frames/s schedule all the time. "auto"
+#                                        and "full" are for verified app versions only
+#                                        (tools/apps/waze-map-pacing.py); others keep their own
 # Writes /etc/teslalinux/interface.env (TESLALINUX_APP_INTERFACE, TESLALINUX_MAP_COLOURS and
 # TESLALINUX_MAP_PACING, read by teslalinux-atl.service and the launcher) and restarts only the app,
 # only when what it starts with changed: the interface, or in the car interface the map colours to or
 # from "graphite" ("muted" and "app" are the page's) or the frame rate.
 set -eu
-usage() { echo "usage: teslalinux-set-app-interface phone|car | map graphite|muted|app | pacing app|full" >&2; exit 2; }
+usage() { echo "usage: teslalinux-set-app-interface phone|car | map graphite|muted|app | pacing auto|app|full" >&2; exit 2; }
 F=/etc/teslalinux/interface.env
 MODE=phone
 MAP=
@@ -33,7 +37,7 @@ if [ -r "$F" ]; then
 fi
 case "$MODE" in phone|car) ;; *) MODE=phone ;; esac
 case "$MAP" in graphite|muted|app) ;; *) MAP= ;; esac
-case "$PACING" in app|full) ;; *) PACING= ;; esac
+case "$PACING" in auto|app|full) ;; *) PACING= ;; esac
 OLD_MODE=$MODE OLD_MAP=$MAP OLD_PACING=$PACING
 case "${1:-}" in
 	phone|car) [ $# -eq 1 ] || usage; MODE=$1 ;;
@@ -46,8 +50,8 @@ case "${1:-}" in
 	pacing)
 		[ $# -eq 2 ] || usage
 		case "$2" in
-			app|full) PACING=$2 ;;
-			*) echo "teslalinux-set-app-interface: unknown map frame rate '$2' (app or full)" >&2; exit 2 ;;
+			auto|app|full) PACING=$2 ;;
+			*) echo "teslalinux-set-app-interface: unknown map frame rate '$2' (auto, app or full)" >&2; exit 2 ;;
 		esac ;;
 	*) [ $# -eq 1 ] && echo "teslalinux-set-app-interface: unknown interface '$1' (phone or car)" >&2; usage ;;
 esac
@@ -61,7 +65,7 @@ printf '%s\n' "$NEW" >"$F.tmp" && chmod 0644 "$F.tmp" && mv -f "$F.tmp" "$F"
 restart=no
 [ "$MODE" != "$OLD_MODE" ] && restart=yes
 [ "$MODE" = car ] && [ "$MAP" != "$OLD_MAP" ] && { [ "$MAP" = graphite ] || [ "$OLD_MAP" = graphite ]; } && restart=yes
-[ "$MODE" = car ] && [ "${PACING:-app}" != "${OLD_PACING:-app}" ] && restart=yes
+[ "$MODE" = car ] && [ "${PACING:-auto}" != "${OLD_PACING:-auto}" ] && restart=yes
 [ "$restart" = yes ] || exit 0
 if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
 	systemctl is-active -q teslalinux-atl.service && systemctl restart teslalinux-atl.service

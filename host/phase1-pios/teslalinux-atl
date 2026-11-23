@@ -123,22 +123,33 @@ if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
     fi
   fi
   # the car map's frame rate chosen on the settings page (teslalinux-set-app-interface pacing ...):
-  # Waze holds its car map at 30 frames/s (a phone battery's choice); "full" gives the app its map
-  # loop and frame limiter on the display's 60 frames/s schedule, as a class ATL loads in front of
-  # the app's own (ATL_APP_CLASS_OVERRIDES). tools/apps/waze-map-pacing.py makes it here from the
-  # installed APK, for the Waze versions it lists and only when the code is exactly as expected;
-  # the APK is never changed. Made again when the app is updated.
-  if [[ "${TESLALINUX_MAP_PACING:-app}" == full ]]; then
+  # Waze holds its car map at 30 frames/s (a phone battery's choice). "auto" (the default) replaces
+  # the app's frame limiter with one that extends ATL's ATLFrameRateLimiter: the display's 60
+  # frames/s for 5 s after the map moved (a location fix of a moving car, a touch on the map, the
+  # car page's input, a new car template), the app's own 30 while it is still. "full" gives the
+  # app its map loop and frame limiter on the display's 60 frames/s schedule all the time. Both are
+  # a class ATL loads in front of the app's own (ATL_APP_CLASS_OVERRIDES), made here from the
+  # installed APK by tools/apps/waze-map-pacing.py, for the Waze versions it lists and only when the
+  # code is exactly as expected (auto also only when this ATL has the class it extends); the APK is
+  # never changed. Made again when the app, the tool or (auto) ATL changed.
+  PACING="${TESLALINUX_MAP_PACING:-auto}"
+  if [[ "$PACING" == auto || "$PACING" == full ]]; then
     PACING_TOOL="${TESLALINUX_MAP_PACING_TOOL:-/usr/local/lib/teslalinux/apps/waze-map-pacing.py}"
-    PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-pacing.jar"
-    if [[ -n "$VC" && ( ! -s "$PACING_JAR" || "${APKS[0]}" -nt "$PACING_JAR" ) && -r "$PACING_TOOL" ]]; then
+    if [[ "$PACING" == auto ]]; then
+      PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-auto.jar"
+      PACING_ARGS=(--mode auto --atl "$API_IMPL")
+    else
+      PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-pacing.jar"
+      PACING_ARGS=(--mode full)
+    fi
+    if [[ -n "$VC" && -r "$PACING_TOOL" && ( ! -s "$PACING_JAR" || "${APKS[0]}" -nt "$PACING_JAR" || "$PACING_TOOL" -nt "$PACING_JAR" || ( "$PACING" == auto && "$API_IMPL" -nt "$PACING_JAR" ) ) ]]; then
       mkdir -p "$OVERRIDE_DIR"
-      python3 -I "$PACING_TOOL" "$APP_DIR" "$PACING_JAR" >&2 || rm -f "$PACING_JAR"
+      python3 -I "$PACING_TOOL" "${PACING_ARGS[@]}" "$APP_DIR" "$PACING_JAR" >&2 || rm -f "$PACING_JAR"
     fi
     if [[ -n "$VC" && -s "$PACING_JAR" ]]; then
       OVERRIDES+=("$PACING_JAR")
     else
-      echo "teslalinux-atl: the full map frame rate is not available for this app version; it keeps its own" >&2
+      echo "teslalinux-atl: the $PACING map frame rate is not available for this app version; it keeps its own" >&2
     fi
   fi
   if (( ${#OVERRIDES[@]} )); then

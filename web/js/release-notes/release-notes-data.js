@@ -11,6 +11,11 @@
         "versionName": "Unreleased",
         "changelogItems": [
           {
+            "title": "Map frame rate: Automatic",
+            "shortDescription": "",
+            "descriptionMarkdown": "Car mode. Settings > Waze interface > Map frame rate. Measured on a Raspberry Pi 4 at its standard speed, on a road route.\n\n• New default: Automatic. Waze's map draws up to 60 pictures a second while it moves (while you drive, pan or zoom, or use the car screen's buttons and lists) and Waze's own 30 while it is still. While driving it is as smooth as Full (about 47 pictures a second at the standard size); standing still it needs half the Pi's processor and graphics time that Full does, the same as Waze's own rate. A few seconds after the car stops, the map goes back to 30.\n• Three choices now: Automatic, Waze's own (30 a second) and Full (up to 60 all the time). A Pi that already had Waze's own or Full chosen keeps it. Automatic, like Full, works with the Waze version the device has checked (5.27.5); with another version Waze keeps its own rate, and the setting says so."
+          },
+          {
             "title": "Waze's own settings in Settings",
             "shortDescription": "Car mode. Settings > Waze > Waze's settings.",
             "descriptionMarkdown": "• Waze's car settings now appear in the settings page itself, exactly as Waze offers them and in Waze's language: roads to avoid, toll and HOV passes, vehicle type, sound, privacy, your account and the rest. Switches, choices and sub-pages work as in Waze, and every change goes straight to Waze, so they stay right whatever Waze version is installed.\n• Leaving the settings page puts Waze back on its map. If Waze is asking something on the map at that moment, the group says so: answer it there first."

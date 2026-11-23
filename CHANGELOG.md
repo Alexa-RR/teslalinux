@@ -19,6 +19,21 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### Map frame rate: Automatic
+
+*Car mode. Settings > Waze interface > Map frame rate. Measured on a Raspberry Pi 4 at its standard
+speed, on a road route.*
+
+- New default: **Automatic**. Waze's map draws up to 60 pictures a second while it moves (while
+  you drive, pan or zoom, or use the car screen's buttons and lists) and Waze's own 30 while it is
+  still. While driving it is as smooth as Full (about 47 pictures a second at the standard size);
+  standing still it needs half the Pi's processor and graphics time that Full does, the same as
+  Waze's own rate. A few seconds after the car stops, the map goes back to 30.
+- Three choices now: Automatic, Waze's own (30 a second) and Full (up to 60 all the time). A Pi
+  that already had Waze's own or Full chosen keeps it. Automatic, like Full, works with the Waze
+  version the device has checked (5.27.5); with another version Waze keeps its own rate, and the
+  setting says so.
+
 ### Waze's own settings in Settings
 
 *Car mode. Settings > Waze > Waze's settings.*
@@ -129,6 +144,18 @@ In ATL (the fork):
   verified Waze versions' own reading class a subclass of it (a one-class override generated on
   the device after checking the APK's class and its call site) and turns Waze's map speedometer
   off through its own setting, kept and put back in the phone interface.
+- `ATLFrameRateLimiter`: a frame limiter for an app's own render loop that lets frames come at the
+  display's refresh rate for 5 s (`ATL_FRAME_BOOST_MS`) after ATL saw the content move (a location
+  fix of a moving device, a touch on the car-app host's map, a message from the car renderer, a
+  different car template), the app's own rate and boosts otherwise (`ATL_DEBUG_FRAME_RATE=1` logs
+  the rate in effect). `tools/apps/waze-map-pacing.py --mode auto` makes a verified Waze version's
+  frame limiter class (`com.waze.bq.a`) a one-class override extending it, after checking the
+  class's code instruction by instruction and every reference to it in the APK's dexes;
+  `TESLALINUX_MAP_PACING=auto|app|full` (auto when unset), `/api/appInterface` `mapPacing` and
+  `mapPacingSupport.modes`. The generated override jars keep their dex 4-byte aligned, so ART maps
+  it instead of extracting a copy.
+- `tools/debian/pi-bench.py --procs NAME,... --gpu --per-second`: each process's CPU and V3D
+  share (DRM fdinfo) over the measured seconds, and the frames of every second.
 
 #### Fixed
 

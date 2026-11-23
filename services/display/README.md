@@ -168,10 +168,37 @@ With the car standing still and nothing touched, Waze keeps drawing its map. Mea
   more than Waze's whole map (the linear CMA buffers are re-tiled to be sampled; tacomp went from
   11% to 121% of the render queue and Waze fell to 28 frames/s); an exact CPU hash on the encoder
   thread costs 2 to 3 ms a frame and, once Waze's animations run, finds nothing to skip.
-- What does halve the idle cost is the frame rate itself (the second row). A "Full while the map
-  moves" pacing (Waze's own 60 for a few seconds after each GPS move or gesture, 30 otherwise) is
-  the lever left; it needs Waze's frame limiter boosted from outside (`com.waze.map.opengl.m.a()`,
-  which Waze calls after a touch on a phone's map).
+- What does halve the idle cost is the frame rate itself (the second row): Map frame rate
+  "Automatic" (below) is the display's 60 while the map moves and Waze's own 30 while it is still.
+
+## Map frame rate "Automatic" (Nov 23 2026)
+
+Waze's car render thread (`com.waze.bq.e`, "RenderThread") asks one object before each frame
+whether it may draw: its frame limiter (`com.waze.bq.a`, under `com.waze.map.opengl.m`), 30 frames
+a second, 60 for 5 s after a pan, zoom or tap the car host hands its SurfaceCallback (Waze boosts
+that itself), never for driving. "Automatic", the default, replaces that class
+(`tools/apps/waze-map-pacing.py --mode auto`: a one-class dex made on the device, the original's
+fields, methods and code checked instruction by instruction and every reference to it in the APK's
+ten dexes checked to be one the new class provides) with one that extends ATL's
+`ATLFrameRateLimiter`: Waze's rate and its own boosts as before, and the display's frame interval for
+5 s (`ATL_FRAME_BOOST_MS`) after ATL saw the map move: a location fix at 1 m/s or more (or that far
+since the last fix), a touch on the car map, any message from the car page (its buttons, lists,
+search, panels), a car template that differs from the last. `ATL_DEBUG_FRAME_RATE=1` logs each
+change of the interval in effect with its reason.
+
+Measured on the Pi 4 (stock clocks, Car mode, H.264, one car page, `tools/debian/pi-bench.py
+--procs --gpu` on the bench route, runs 2 and 3 of 3 after a start; idle: 30 s with nothing moving;
+Waze's share of V3D's render queue from its DRM fdinfo):
+
+| 832x608 | moving: delivered / slowest tenth | Waze CPU | Waze V3D render | idle: frames/s | idle Waze CPU | idle Waze V3D | max temp |
+|---|---|---|---|---|---|---|---|
+| Waze's own (30) | 28.2 / 22, 28.3 / 23 | 64% | 41% | 30.2 | 41% | 40% | 66.7 C |
+| Full | 44.7 / 25, 47.8 / 36 | 115% | 70% | 60.0 | 78% | 84% | 70.1 C |
+| **Automatic** | **46.3 / 32, 47.5 / 36** | 112% | 72% | **30.2** | **40%** | **40%** | 69.6 C |
+
+Driving, Automatic is Full; standing still, it costs what Waze's own rate costs (half of Full's
+CPU and V3D time). Per second from still to driving and back (`--per-second`): 30, 30, ... then the
+first fixes of the drive 28, 33, 27, 35, then 53-55; 5 s after the last moving fix, 30 again.
 
 ## Touch path
 
