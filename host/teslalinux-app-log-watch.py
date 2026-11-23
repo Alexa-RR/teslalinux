@@ -63,7 +63,8 @@ def main():
                 out.flush()
             except OSError:
                 out_ok = False  # the journal's stream went away: the milestones still count
-        if state["firstFrame"] is None and line.startswith(FRAME_TAG) and FRAME in line:
+        # (ATL's log lines reach the pipe with a leading space, which the journal strips)
+        if state["firstFrame"] is None and FRAME_TAG in line and FRAME in line:
             state["firstFrame"] = time.time()
             write_state(path, state)
         elif state["mapReady"] is None and MAP_READY in line:
