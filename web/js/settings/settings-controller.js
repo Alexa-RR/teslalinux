@@ -196,8 +196,12 @@
     async _renderKeyboardSection(token) {
       this._appendLoadingState();
       let state;
+      let iface = null;
       try {
-        state = await this.apiClient.fetchKeyboard();
+        [state, iface] = await Promise.all([
+          this.apiClient.fetchKeyboard(),
+          this.apiClient.fetchAppInterface().catch(() => null),
+        ]);
       } catch (_error) {
         this._renderErrorState("Service error");
         return;
@@ -206,6 +210,17 @@
         return;
       }
       this.content.innerHTML = "";
+      // the car interface's fields are this page's own: the car's keyboard always types into them,
+      // so the choice only matters for the phone interface
+      if (iface && iface.interface === "car") {
+        this._appendTile({
+          icon: "keyboard",
+          title: "The car's keyboard",
+          subtitle: "In the car interface you type with the car's own keyboard, and dictate with its microphone. This choice is for the phone interface.",
+          dense: false,
+        });
+        return;
+      }
       const notice = utils.createElement("div", "settings-description", "");
       notice.hidden = true;
       this._appendTile({
@@ -281,13 +296,15 @@
       this._appendDescription(
         "The car interface is the one Waze shows on car screens: the map fills the display, with turn cards, a search screen and large buttons on top. Your saved places and settings are the same in both.",
       );
-      this._renderVoiceTiles();
+      // the car interface's settings (its look, the map, voice search in its search field) only
+      // while it is the chosen interface
       // the car interface's look: kept by this browser (js/carapp/carapp-controller.js), applied
       // at once; the day/night choice also switches Waze's map
       const car = global.TLCarApp;
       if (state.interface !== "car" || !car || !car.getLook) {
         return;
       }
+      this._renderVoiceTiles();
       const look = car.getLook();
       this._appendTile({
         icon: "palette",
