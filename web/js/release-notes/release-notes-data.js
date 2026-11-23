@@ -74,6 +74,11 @@
             "title": "Map text size without a restart, sound on a Pi speaker",
             "shortDescription": "Settings > Waze > Map text size in Car mode, and Settings > Sound.",
             "descriptionMarkdown": "• Changing Map text size no longer makes Waze restart. Waze's map surface was replaced while the picture of its last frame still pointed at a closed buffer, which cut Waze off the display.\n• Waze's voice on a speaker connected to the Pi: Settings > Sound > Where Waze's sound plays (Car, Pi speaker, Both), with its own volume. A USB sound card or speaker is used when plugged in, else the 3.5 mm jack; plugging in or out takes effect at once."
+          },
+          {
+            "title": "Smaller fixes",
+            "shortDescription": "Things that were in the way.",
+            "descriptionMarkdown": "• In the phone interface, the vehicle picker (Car info on the map) drew its car, motorcycle and taxi pictures twice as large as on a phone: their names were missing, the blue frame around the chosen vehicle had no top, and the description bubble sat far below it. Waze's pictures are now drawn at their Android size everywhere, so the picker shows small pictures with their names, as on a phone. The row of vehicles repeating to the sides is Waze's own: it scrolls round endlessly, and the car's wide screen shows more of it than a phone does."
           }
         ]
       },

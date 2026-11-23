@@ -3,7 +3,9 @@
 # with the installed ATL (dalvikvm, api-impl.jar, the api-impl natives) as the `tesla` user. Checks
 # ATL's canvas on Bitmaps (GSK's cairo renderer): blend-mode, lighting and colour-matrix colour filters
 # on solid colours and on bitmaps, stroke styles (FILL_AND_STROKE, hairlines, joins), clipOut,
-# Paint.getFillPath, clip bounds, nine-patch optical/outline insets. screen.sh draws the same cases
+# Paint.getFillPath, clip bounds, nine-patch optical/outline insets, and bitmap resources (drawables,
+# decodeResource, <bitmap>) scaled from their density directory to the display density, the last
+# with the system resources raised to 480 dpi for the phase. screen.sh draws the same cases
 # on screen. Prints PASS/FAIL per check and "RESULT passed/total"; exits non-zero on a failure.
 #
 #   ATL_BUILDDIR  the meson build directory whose src/api-impl/hax.jar the test compiles against

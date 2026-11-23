@@ -22,7 +22,8 @@ import java.util.zip.Deflater;
  * ATL canvas test under a plain dalvikvm (run.sh): the GfxCases drawn into Bitmaps (GSK's cairo
  * renderer) with their probe pixels checked, and the non-pixel behaviour of the same area:
  * Paint.getFillPath, stroke width values, clip bounds after clipOut, nine-patch optical and outline
- * insets (aapt's npLb/npOl chunks). Prints PASS/FAIL per check and "RESULT passed/total".
+ * insets (aapt's npLb/npOl chunks), bitmap resources scaled from their density to the display's.
+ * Prints PASS/FAIL per check and "RESULT passed/total".
  */
 public class GfxTest {
 	static int passed, total;
@@ -662,11 +663,113 @@ public class GfxTest {
 		check("a copy of a drawn bitmap keeps its drawing too", copy2.getPixel(9, 9) == 0xFF00FF00, Integer.toHexString(copy2.getPixel(9, 9)));
 	}
 
+	/**
+	 * Bitmap resources are scaled from their density directory to the display's, as on a device:
+	 * framework PNGs (drawable-mdpi, 160 dpi) through resources made for a 480 dpi display come out
+	 * three times their pixel size. Waze's vehicle pictures (drawable-xxhdpi only) were drawn at their
+	 * pixel size, about twice too large on the car's 245 dpi display: the picker's names and the top
+	 * of its selection frame went missing.
+	 */
+	static void resourceDensity() {
+		/* the device's own resources at the new density, as an app's are: a bitmap made without
+		 * density information gets the device density, so only the resource's density tells the
+		 * decoder to scale (restored afterwards) */
+		final int dpi = 480;
+		android.content.res.Resources r = android.content.res.Resources.getSystem();
+		android.util.DisplayMetrics oldDm = new android.util.DisplayMetrics();
+		oldDm.setTo(r.getDisplayMetrics());
+		android.content.res.Configuration oldCfg = new android.content.res.Configuration(r.getConfiguration());
+		android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+		dm.setTo(oldDm);
+		dm.densityDpi = dpi;
+		dm.density = dm.scaledDensity = dpi / 160f;
+		android.content.res.Configuration cfg = new android.content.res.Configuration(oldCfg);
+		cfg.densityDpi = dpi;
+		r.updateConfiguration(cfg, dm);
+		try {
+			resourceDensityAt(r, dpi);
+		} finally {
+			r.updateConfiguration(oldCfg, oldDm);
+		}
+	}
+
+	static void resourceDensityAt(android.content.res.Resources r, final int dpi) {
+		check("the device density is now " + dpi + " (new bitmaps get it)", Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).getDensity() == dpi,
+		      "" + Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).getDensity());
+		final int id = android.R.drawable.star_big_on;
+		android.util.TypedValue tv = new android.util.TypedValue();
+		r.getValue(id, tv, true);
+		int rawW = -1, rawH = -1;
+		try (java.io.InputStream is = r.openRawResource(id)) {
+			Bitmap raw = android.graphics.BitmapFactory.decodeStream(is);
+			rawW = raw.getWidth();
+			rawH = raw.getHeight();
+		} catch (java.io.IOException e) {
+			check("star_big_on opens", false, e.toString());
+			return;
+		}
+		final int w = Bitmap.scaleFromDensity(rawW, tv.density, dpi), h = Bitmap.scaleFromDensity(rawH, tv.density, dpi);
+		check("star_big_on resolves to a PNG of another density (" + tv.string + ", " + tv.density + " dpi)",
+		      tv.density > 0 && tv.density != dpi && String.valueOf(tv.string).endsWith(".png") && w != rawW, rawW + "x" + rawH + " -> " + w + "x" + h);
+
+		Drawable d = r.getDrawable(id, null);
+		check("Resources.getDrawable: a bitmap resource has its size at the display density (" + w + "x" + h + ")",
+		      d.getIntrinsicWidth() == w && d.getIntrinsicHeight() == h, d + " " + d.getIntrinsicWidth() + "x" + d.getIntrinsicHeight());
+
+		Bitmap b = android.graphics.BitmapFactory.decodeResource(r, id);
+		check("BitmapFactory.decodeResource scales to the display density", b != null && b.getWidth() == w && b.getHeight() == h && b.getDensity() == dpi,
+		      b == null ? "null" : b.getWidth() + "x" + b.getHeight() + " @" + b.getDensity());
+		check("... and is immutable", b != null && !b.isMutable(), null);
+
+		android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+		o.inScaled = false;
+		Bitmap u = android.graphics.BitmapFactory.decodeResource(r, id, o);
+		check("decodeResource with inScaled=false keeps the pixel size and the resource's density",
+		      u != null && u.getWidth() == rawW && u.getHeight() == rawH && u.getDensity() == tv.density,
+		      u == null ? "null" : u.getWidth() + "x" + u.getHeight() + " @" + u.getDensity());
+
+		o = new android.graphics.BitmapFactory.Options();
+		o.inJustDecodeBounds = true;
+		android.graphics.BitmapFactory.decodeResource(r, id, o);
+		check("decodeResource bounds are the scaled size", o.outWidth == w && o.outHeight == h, o.outWidth + "x" + o.outHeight);
+
+		Bitmap reuse = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+		o = new android.graphics.BitmapFactory.Options();
+		o.inBitmap = reuse;
+		o.inMutable = true;
+		Bitmap into = android.graphics.BitmapFactory.decodeResource(r, id, o);
+		check("decodeResource into inBitmap returns it, scaled, with the display density",
+		      into == reuse && !reuse.isRecycled() && reuse.getWidth() == w && reuse.getHeight() == h && reuse.getDensity() == dpi,
+		      into == reuse ? reuse.getWidth() + "x" + reuse.getHeight() + " @" + reuse.getDensity() + (reuse.isRecycled() ? " recycled" : "") : "another bitmap");
+
+		check("decodeResource of a missing resource is null (AOSP catches the error)",
+		      android.graphics.BitmapFactory.decodeResource(r, 0x0108ffff) == null, null);
+
+		/* <bitmap android:src="@drawable/ic_ab_back_holo_light_am"> (drawable-mdpi) */
+		int xmlId = r.getIdentifier("ic_ab_back_holo_light", "drawable", "android");
+		int srcId = r.getIdentifier("ic_ab_back_holo_light_am", "drawable", "android");
+		android.util.TypedValue stv = new android.util.TypedValue();
+		r.getValue(srcId, stv, true);
+		int xw = -1, xh = -1;
+		try (java.io.InputStream is = r.openRawResource(srcId)) {
+			Bitmap raw = android.graphics.BitmapFactory.decodeStream(is);
+			xw = Bitmap.scaleFromDensity(raw.getWidth(), stv.density, dpi);
+			xh = Bitmap.scaleFromDensity(raw.getHeight(), stv.density, dpi);
+		} catch (java.io.IOException e) {
+			check("ic_ab_back_holo_light_am opens", false, e.toString());
+		}
+		Drawable x = xmlId != 0 ? r.getDrawable(xmlId, null) : null;
+		check("an XML <bitmap> scales its src PNG to the display density (" + xw + "x" + xh + ")",
+		      x instanceof android.graphics.drawable.BitmapDrawable && stv.density != dpi && x.getIntrinsicWidth() == xw && x.getIntrinsicHeight() == xh
+		      && ((android.graphics.drawable.BitmapDrawable) x).getBitmap().getWidth() == xw,
+		      x == null ? "no drawable (" + xmlId + ")" : x + " " + x.getIntrinsicWidth() + "x" + x.getIntrinsicHeight() + ", src @" + stv.density);
+	}
+
 	public static void main(String[] args) {
 		System.loadLibrary("translation_layer_main"); /* the executable loads api-impl's natives in an app */
 		for (Runnable r : new Runnable[] { GfxTest::fillPath, GfxTest::pathBounds, GfxTest::matrixCopy, GfxTest::strokeWidth, GfxTest::clipBounds, GfxTest::ninePatch,
 		                                   GfxTest::pixels, GfxTest::legacyClipOps, GfxTest::matrixOps, GfxTest::approximate, GfxTest::animatorValues, GfxTest::glUtils,
-		                                   GfxTest::bitmapReads, GfxTest::runCases }) {
+		                                   GfxTest::bitmapReads, GfxTest::runCases, GfxTest::resourceDensity }) {
 			try {
 				r.run();
 			} catch (Throwable t) {

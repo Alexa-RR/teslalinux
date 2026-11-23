@@ -187,6 +187,17 @@ read; they now keep their own shape and are a little taller than the text.
   Pi speaker, Both), with its own volume. A USB sound card or speaker is used when plugged in, else
   the 3.5 mm jack; plugging in or out takes effect at once.
 
+### Smaller fixes
+
+*Things that were in the way.*
+
+- In the phone interface, the vehicle picker (Car info on the map) drew its car, motorcycle and
+  taxi pictures twice as large as on a phone: their names were missing, the blue
+  frame around the chosen vehicle had no top, and the description bubble sat far below it. Waze's
+  pictures are now drawn at their Android size everywhere, so the picker shows small pictures with
+  their names, as on a phone. The row of vehicles repeating to the sides is Waze's own: it scrolls
+  round endlessly, and the car's wide screen shows more of it than a phone does.
+
 ### Platform
 
 #### Added
@@ -295,6 +306,13 @@ In ATL (the fork):
   lost what was drawn before it. A KHR_debug message callback's global reference leaked when its
   GL context was destroyed. `new EditText(context)` skipped the theme's `editTextStyle`, so it was
   not focusable.
+- ATL drew every bitmap resource (a PNG from an app's `drawable-<density>` directories) at its
+  pixel size, whatever density it was made for: on the car's 245 dpi display, Waze's
+  `drawable-xxhdpi` pictures came out twice as large as on Android. `Drawable.createFromResourceStream`,
+  `BitmapFactory.decodeResource` and `<bitmap>` drawables now scale from the resource's density to
+  the display's, as AOSP does (with a decode into `inBitmap` getting the scaled pixels), and
+  `ImageView.setImageResource` resolves the drawable as AOSP does. `tools/debian/atl-tests/graphics`
+  checks it (`run.sh`, 10 more checks).
 
 ## [0.3.1] - 2026-11-20
 
