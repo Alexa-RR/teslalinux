@@ -172,6 +172,97 @@ public class GfxActivity extends Activity {
 		      pad.getPaddingLeft() + "," + pad.getPaddingRight() + " start " + pad.getPaddingStart());
 	}
 
+	/* accessibility: the delegate gets every call first; with no accessibility service (accessibility
+	 * off, as on a device without one) no event is created */
+	void a11yChecks() {
+		final StringBuilder calls = new StringBuilder();
+		final android.view.accessibility.AccessibilityNodeProvider provider = new android.view.accessibility.AccessibilityNodeProvider() {};
+		View.AccessibilityDelegate d = new View.AccessibilityDelegate() {
+			@Override
+			public void sendAccessibilityEvent(View host, int eventType) {
+				calls.append("send:").append(eventType).append(' ');
+				super.sendAccessibilityEvent(host, eventType);
+			}
+
+			@Override
+			public void sendAccessibilityEventUnchecked(View host, android.view.accessibility.AccessibilityEvent event) {
+				calls.append("unchecked ");
+				super.sendAccessibilityEventUnchecked(host, event);
+			}
+
+			@Override
+			public boolean performAccessibilityAction(View host, int action, Bundle args) {
+				calls.append("action:").append(action).append(' ');
+				return super.performAccessibilityAction(host, action, args);
+			}
+
+			@Override
+			public void onInitializeAccessibilityNodeInfo(View host, android.view.accessibility.AccessibilityNodeInfo info) {
+				calls.append("nodeinfo ");
+				super.onInitializeAccessibilityNodeInfo(host, info);
+				info.setContentDescription("from the delegate");
+			}
+
+			@Override
+			public android.view.accessibility.AccessibilityNodeProvider getAccessibilityNodeProvider(View host) {
+				return host.getTag() != null ? provider : null;
+			}
+		};
+		View v = new View(this);
+		final boolean[] clicked = { false };
+		v.setOnClickListener(x -> clicked[0] = true);
+		v.setAccessibilityDelegate(d);
+		check("setAccessibilityDelegate: getAccessibilityDelegate returns it", v.getAccessibilityDelegate() == d, null);
+		v.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_CLICKED);
+		check("sendAccessibilityEvent goes to the delegate", calls.toString().contains("send:1 "), calls.toString());
+		android.view.accessibility.AccessibilityManager am = (android.view.accessibility.AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
+		check("no accessibility service: accessibility is off, no event is sent", !am.isEnabled() && !calls.toString().contains("unchecked"), am.isEnabled() + " " + calls);
+		check("the accessibility manager is one per process", am == getSystemService(ACCESSIBILITY_SERVICE), null);
+		boolean acted = v.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null);
+		check("performAccessibilityAction goes through the delegate and clicks", acted && clicked[0] && calls.toString().contains("action:16 "), acted + " " + clicked[0] + " " + calls);
+		android.view.accessibility.AccessibilityNodeInfo info = v.createAccessibilityNodeInfo();
+		check("createAccessibilityNodeInfo: the delegate initialises the node", calls.toString().contains("nodeinfo") && "from the delegate".contentEquals(info.getContentDescription()),
+		      calls + " " + info.getContentDescription());
+		check("no provider from the delegate: none", v.getAccessibilityNodeProvider() == null, null);
+		v.setTag("p");
+		check("the delegate's provider is the view's", v.getAccessibilityNodeProvider() == provider, null);
+		v.setAccessibilityDelegate(null);
+		check("without a delegate: the view's own (no provider)", v.getAccessibilityNodeProvider() == null && v.getAccessibilityDelegate() == null, null);
+
+		/* importance */
+		View plain = new View(this);
+		check("a plain view is not important for accessibility", !plain.isImportantForAccessibility(), null);
+		plain.setClickable(true);
+		check("a clickable view is", plain.isImportantForAccessibility(), null);
+		plain.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+		check("IMPORTANT_FOR_ACCESSIBILITY_NO: not", !plain.isImportantForAccessibility(), null);
+		FrameLayout hide = new FrameLayout(this);
+		hide.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+		View under = new View(this);
+		under.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+		hide.addView(under);
+		check("under NO_HIDE_DESCENDANTS even YES is not", !under.isImportantForAccessibility(), null);
+
+		/* a group's delegate can veto an event of its child */
+		FrameLayout g = new FrameLayout(this);
+		final View[] asked = { null };
+		g.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+			@Override
+			public boolean onRequestSendAccessibilityEvent(ViewGroup host, View child, android.view.accessibility.AccessibilityEvent event) {
+				asked[0] = child;
+				return false;
+			}
+		});
+		View gc = new View(this);
+		g.addView(gc);
+		boolean sent = g.requestSendAccessibilityEvent(gc, android.view.accessibility.AccessibilityEvent.obtain(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED));
+		check("ViewGroup.requestSendAccessibilityEvent: a parentless group sends nothing", !sent, null);
+		FrameLayout top = new FrameLayout(this);
+		top.addView(g);
+		sent = g.requestSendAccessibilityEvent(gc, android.view.accessibility.AccessibilityEvent.obtain(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED));
+		check("the group's delegate is asked and its veto stops the event", !sent && asked[0] == gc, sent + " " + asked[0]);
+	}
+
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
@@ -201,6 +292,11 @@ public class GfxActivity extends Activity {
 			stateChecks();
 		} catch (Throwable t) {
 			check("state checks ran", false, t.toString());
+		}
+		try {
+			a11yChecks();
+		} catch (Throwable t) {
+			check("accessibility checks ran", false, t.toString());
 		}
 		rtlRow.postDelayed(() -> {
 			check("an RTL LinearLayout lays its first child out on the right", rowA.getLeft() > rowB.getLeft() && rowA.getRight() == rtlRow.getWidth() - 30,

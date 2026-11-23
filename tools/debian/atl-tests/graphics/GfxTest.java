@@ -326,9 +326,248 @@ public class GfxTest {
 		      plain.getOpticalInsets().equals(Insets.NONE) && po.getRect(pr) && pr.equals(new Rect(0, 0, 40, 40)), plain.getOpticalInsets() + " " + pr);
 	}
 
+	static boolean near(int a, int b, int tol) {
+		for (int s = 0; s < 32; s += 8)
+			if (Math.abs(((a >>> s) & 0xff) - ((b >>> s) & 0xff)) > tol)
+				return false;
+		return true;
+	}
+
+	static String hex(int c) {
+		return String.format("%08x", c);
+	}
+
+	static boolean throwsOf(Class<? extends Throwable> type, Runnable r) {
+		try {
+			r.run();
+		} catch (Throwable t) {
+			return type.isInstance(t);
+		}
+		return false;
+	}
+
+	/* ---- Bitmap pixel access (AOSP: colour ints are un-premultiplied; setPixels replaces) ---- */
+	static void pixels() {
+		Bitmap b = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888);
+		new Canvas(b).drawColor(0x80FF0000);
+		check("getPixel returns un-premultiplied colour", near(b.getPixel(1, 1), 0x80FF0000, 1), hex(b.getPixel(1, 1)));
+		int[] row = new int[4];
+		b.getPixels(row, 0, 4, 0, 2, 4, 1);
+		check("getPixels returns un-premultiplied colour", near(row[3], 0x80FF0000, 1), hex(row[3]));
+
+		Bitmap s = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888);
+		s.setPixel(0, 0, 0xFFFF0000);
+		check("setPixel keeps the channels (red stays red)", s.getPixel(0, 0) == 0xFFFF0000, hex(s.getPixel(0, 0)));
+		s.setPixel(1, 0, 0x80336699);
+		check("setPixel/getPixel round trip of a translucent colour", near(s.getPixel(1, 0), 0x80336699, 2), hex(s.getPixel(1, 0)));
+		s.eraseColor(0xFF0000FF);
+		s.setPixel(2, 2, 0x00000000);
+		check("setPixel replaces the pixel (transparent over blue is transparent)", s.getPixel(2, 2) == 0, hex(s.getPixel(2, 2)));
+		check("setPixel leaves the other pixels", s.getPixel(1, 2) == 0xFF0000FF, hex(s.getPixel(1, 2)));
+		s.setPixel(3, 3, 0x40FFFFFF);
+		check("setPixel of a translucent colour over opaque blue replaces it", near(s.getPixel(3, 3), 0x40FFFFFF, 2), hex(s.getPixel(3, 3)));
+
+		int[] src = { 9, 0xFF010203, 0xFF040506, 9, 0xFF070809, 0xFF0A0B0C };
+		Bitmap r = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888);
+		r.setPixels(src, 1, 3, 1, 1, 2, 2);
+		check("setPixels with offset and stride", r.getPixel(1, 1) == 0xFF010203 && r.getPixel(2, 1) == 0xFF040506 && r.getPixel(1, 2) == 0xFF070809 && r.getPixel(2, 2) == 0xFF0A0B0C
+		      && r.getPixel(0, 0) == 0, hex(r.getPixel(1, 1)) + " " + hex(r.getPixel(2, 2)) + " " + hex(r.getPixel(0, 0)));
+		int[] out = new int[6];
+		r.getPixels(out, 1, 3, 1, 1, 2, 2);
+		check("getPixels with offset and stride", out[1] == 0xFF010203 && out[2] == 0xFF040506 && out[4] == 0xFF070809 && out[5] == 0xFF0A0B0C && out[0] == 0,
+		      hex(out[1]) + " " + hex(out[5]));
+		/* drawn into after a pixel write: the drawing goes over the written pixels */
+		Canvas rc = new Canvas(r);
+		rc.drawRect(0, 0, 1, 1, paint(0xFF00FF00));
+		check("drawing after setPixels keeps the written pixels", r.getPixel(0, 0) == 0xFF00FF00 && r.getPixel(1, 1) == 0xFF010203, hex(r.getPixel(0, 0)) + " " + hex(r.getPixel(1, 1)));
+
+		check("getPixel outside the bitmap: IllegalArgumentException", throwsOf(IllegalArgumentException.class, () -> r.getPixel(4, 0)), null);
+		check("getPixels beyond the bitmap: IllegalArgumentException", throwsOf(IllegalArgumentException.class, () -> r.getPixels(new int[16], 0, 4, 1, 0, 4, 1)), null);
+		check("getPixels into a short array: ArrayIndexOutOfBoundsException", throwsOf(ArrayIndexOutOfBoundsException.class, () -> r.getPixels(new int[3], 0, 4, 0, 0, 4, 1)), null);
+		Bitmap imm = Bitmap.createBitmap(new int[] { 0xFF000000 }, 1, 1, Bitmap.Config.ARGB_8888);
+		check("setPixel on an immutable bitmap: IllegalStateException", throwsOf(IllegalStateException.class, () -> imm.setPixel(0, 0, 0)), null);
+		check("createBitmap(int[]) keeps the colours", imm.getPixel(0, 0) == 0xFF000000, hex(imm.getPixel(0, 0)));
+		Bitmap cb = Bitmap.createBitmap(new int[] { 0xFF102030, 0x80FF8000 }, 2, 1, Bitmap.Config.ARGB_8888);
+		check("createBitmap(int[]) of translucent colours", cb.getPixel(0, 0) == 0xFF102030 && near(cb.getPixel(1, 0), 0x80FF8000, 2), hex(cb.getPixel(0, 0)) + " " + hex(cb.getPixel(1, 0)));
+
+		/* RGB_565: the colour is stored in 5/6/5 bits, read back widened */
+		Bitmap q = Bitmap.createBitmap(2, 1, Bitmap.Config.RGB_565);
+		q.setPixel(0, 0, 0xFF123456);
+		check("RGB_565 setPixel stores 5/6/5 bits", q.getPixel(0, 0) == 0xFF103452, hex(q.getPixel(0, 0)));
+
+		/* raw memory: premultiplied RGBA bytes, copied exactly both ways */
+		Bitmap m = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+		m.setPixel(0, 0, 0x80FF0000);
+		ByteBuffer buf = ByteBuffer.allocate(4);
+		m.copyPixelsToBuffer(buf);
+		byte[] bytes = buf.array();
+		check("copyPixelsToBuffer: premultiplied RGBA bytes", (bytes[0] & 0xff) == 0x80 && bytes[1] == 0 && bytes[2] == 0 && (bytes[3] & 0xff) == 0x80,
+		      (bytes[0] & 0xff) + "," + (bytes[1] & 0xff) + "," + (bytes[2] & 0xff) + "," + (bytes[3] & 0xff));
+		Bitmap m2 = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+		m2.copyPixelsFromBuffer(ByteBuffer.wrap(new byte[] { 0x21, 0x13, 0x05, 0x40 }));
+		ByteBuffer back = ByteBuffer.allocate(4);
+		m2.copyPixelsToBuffer(back);
+		byte[] bb = back.array();
+		check("copyPixelsFromBuffer then copyPixelsToBuffer: the same bytes", bb[0] == 0x21 && bb[1] == 0x13 && bb[2] == 0x05 && bb[3] == 0x40,
+		      (bb[0] & 0xff) + "," + (bb[1] & 0xff) + "," + (bb[2] & 0xff) + "," + (bb[3] & 0xff));
+
+		/* a loop of getPixel/setPixel over a whole bitmap stays fast (the pixel memory is kept) */
+		Bitmap big = Bitmap.createBitmap(200, 200, Bitmap.Config.ARGB_8888);
+		long t0 = System.nanoTime();
+		for (int y = 0; y < 200; y++)
+			for (int x = 0; x < 200; x++)
+				big.setPixel(x, y, 0xFF000000 | (x << 8) | y);
+		int sum = 0;
+		for (int y = 0; y < 200; y++)
+			for (int x = 0; x < 200; x++)
+				sum += big.getPixel(x, y) & 0xff;
+		long ms = (System.nanoTime() - t0) / 1000000;
+		check("40000 setPixel + 40000 getPixel calls in under 3 s", ms < 3000 && sum == 200 * (199 * 200 / 2), ms + " ms, sum " + sum);
+	}
+
+	static Paint paint(int color) {
+		Paint p = new Paint();
+		p.setColor(color);
+		return p;
+	}
+
+	/* ---- the Region.Ops that expand the clip: kept for apps targeting API 27, refused from 28 ---- */
+	static void legacyClipOps() {
+		int saved = Canvas.tlCompatibilityVersion();
+		try {
+			Bitmap b = Bitmap.createBitmap(40, 40, Bitmap.Config.ARGB_8888);
+			Canvas c = new Canvas(b);
+			Canvas.setCompatibilityVersion(28);
+			check("target 28: clipRect with UNION throws IllegalArgumentException",
+			      throwsOf(IllegalArgumentException.class, () -> c.clipRect(0, 0, 10, 10, android.graphics.Region.Op.UNION)), null);
+			check("target 28: clipPath with REPLACE throws IllegalArgumentException",
+			      throwsOf(IllegalArgumentException.class, () -> c.clipPath(new Path(), android.graphics.Region.Op.REPLACE)), null);
+			Canvas.setCompatibilityVersion(27);
+			c.save();
+			c.clipRect(0, 0, 10, 10);
+			boolean ne = c.clipRect(20, 20, 30, 30, android.graphics.Region.Op.UNION);
+			check("target 27: UNION of two rects: non-empty, the bounds of both", ne && c.getClipBounds().equals(new Rect(0, 0, 30, 30)), ne + " " + c.getClipBounds());
+			boolean xr = c.clipRect(0, 0, 10, 10, android.graphics.Region.Op.XOR);
+			check("XOR removes the first rect again", xr && c.getClipBounds().equals(new Rect(20, 20, 30, 30)), xr + " " + c.getClipBounds());
+			c.restore();
+			check("restore: the clip before them", c.getClipBounds().equals(new Rect(0, 0, 40, 40)), "" + c.getClipBounds());
+			c.save();
+			c.clipRect(0, 0, 10, 10);
+			boolean rd = c.clipRect(0, 0, 10, 10, android.graphics.Region.Op.REVERSE_DIFFERENCE);
+			check("REVERSE_DIFFERENCE of the same rect: empty, false", !rd && c.getClipBounds().isEmpty(), rd + " " + c.getClipBounds());
+			boolean rp = c.clipRect(5, 5, 15, 15, android.graphics.Region.Op.REPLACE);
+			check("REPLACE: just the new rect", rp && c.getClipBounds().equals(new Rect(5, 5, 15, 15)), rp + " " + c.getClipBounds());
+			c.restore();
+		} finally {
+			Canvas.setCompatibilityVersion(saved);
+		}
+	}
+
+	static boolean mapsTo(android.graphics.Matrix m, float[] src, float[] dst) {
+		float[] out = new float[src.length];
+		m.mapPoints(out, src);
+		for (int i = 0; i < out.length; i++)
+			if (Math.abs(out[i] - dst[i]) > 1e-3f)
+				return false;
+		return true;
+	}
+
+	/* ---- Matrix operations that were declared without natives (SkMatrix's) ---- */
+	static void matrixOps() {
+		android.graphics.Matrix m = new android.graphics.Matrix();
+		float[] s3 = { 0, 0, 10, 0, 0, 10 }, d3 = { 5, 5, 25, 5, 5, 15 };
+		check("setPolyToPoly with 3 points maps them", m.setPolyToPoly(s3, 0, d3, 0, 3) && mapsTo(m, s3, d3), m.toString());
+		float[] s4 = { 0, 0, 10, 0, 10, 10, 0, 10 }, d4 = { 0, 0, 20, 2, 18, 12, 1, 9 };
+		check("setPolyToPoly with 4 points (perspective) maps them", m.setPolyToPoly(s4, 0, d4, 0, 4) && mapsTo(m, s4, d4), m.toString());
+		float[] s2 = { 0, 0, 10, 0 }, d2 = { 10, 10, 10, 20 };
+		check("setPolyToPoly with 2 points: rotation and scale", m.setPolyToPoly(s2, 0, d2, 0, 2) && mapsTo(m, s2, d2) && mapsTo(m, new float[] { 0, 10 }, new float[] { 0, 10 }), m.toString());
+		check("setPolyToPoly of degenerate points fails", !m.setPolyToPoly(new float[] { 0, 0, 0, 0, 0, 0 }, 0, d3, 0, 3), null);
+		m.setSkew(0.5f, 0);
+		check("setSkew", mapsTo(m, new float[] { 0, 10 }, new float[] { 5, 10 }), m.toString());
+		m.setSkew(0.5f, 0, 0, 10);
+		check("setSkew about a pivot", mapsTo(m, new float[] { 0, 10, 0, 0 }, new float[] { 0, 10, -5, 0 }), m.toString());
+		m.setTranslate(1, 0);
+		m.preSkew(1, 0);
+		check("preSkew: the skew first", mapsTo(m, new float[] { 0, 2 }, new float[] { 3, 2 }), m.toString());
+		m.setTranslate(0, 1);
+		m.postSkew(1, 0);
+		check("postSkew: the skew last", mapsTo(m, new float[] { 0, 0 }, new float[] { 1, 1 }), m.toString());
+		m.setSinCos(1, 0);
+		check("setSinCos(1, 0) rotates 90 degrees", mapsTo(m, new float[] { 1, 0 }, new float[] { 0, 1 }), m.toString());
+		android.graphics.Matrix a = new android.graphics.Matrix(), b = new android.graphics.Matrix();
+		a.setScale(2, 2);
+		b.setTranslate(3, 0);
+		m.setConcat(a, b);
+		check("setConcat(a, b): b first, then a", mapsTo(m, new float[] { 0, 0 }, new float[] { 6, 0 }), m.toString());
+		m.setScale(2, 8);
+		check("mapRadius: the geometric mean of the scales", Math.abs(m.mapRadius(1) - 4) < 1e-4f, "" + m.mapRadius(1));
+	}
+
+	/* ---- Path.approximate and PathInterpolator(Path) (AOSP: Skia's flattening, hwui Path.cpp) ---- */
+	static void approximate() {
+		Path p = new Path();
+		p.moveTo(0, 0);
+		p.lineTo(3, 4);
+		p.lineTo(3, 9);
+		float[] a = p.approximate(0.5f);
+		check("approximate of two lines: (fraction, x, y) of each point", a.length == 9 && a[0] == 0 && a[3] == 0.5f && a[4] == 3 && a[5] == 4 && a[6] == 1 && a[8] == 9,
+		      java.util.Arrays.toString(a));
+		Path jump = new Path();
+		jump.lineTo(0.25f, 0.25f);
+		jump.moveTo(0.25f, 0.5f);
+		jump.lineTo(1, 1);
+		float[] j = jump.approximate(0.002f);
+		check("a move is a point at the same fraction", j.length == 12 && j[3] == j[6] && j[7] == 0.25f && j[8] == 0.5f, java.util.Arrays.toString(j));
+		Path cubic = new Path();
+		cubic.cubicTo(0.4f, 0, 0.2f, 1, 1, 1);
+		float[] c = cubic.approximate(0.002f);
+		boolean close = c.length / 3 > 10;
+		for (int i = 0; close && i + 5 < c.length; i += 3) {
+			// every chord's midpoint lies on the curve within the error (checked against the point at the
+			// matching parameter by a fine search)
+			float mx = (c[i + 1] + c[i + 4]) / 2, my = (c[i + 2] + c[i + 5]) / 2;
+			float best = Float.MAX_VALUE;
+			for (int k = 0; k <= 2000; k++) {
+				float t = k / 2000f, mt = 1 - t;
+				float x = 3 * mt * mt * t * 0.4f + 3 * mt * t * t * 0.2f + t * t * t, y = 3 * mt * t * t + t * t * t;
+				best = Math.min(best, (x - mx) * (x - mx) + (y - my) * (y - my));
+			}
+			close = Math.sqrt(best) < 0.004f && c[i] <= c[i + 3];
+		}
+		check("approximate of a cubic: chords within the error, fractions increasing", close, c.length / 3 + " points");
+		check("approximate of an empty path: (0, 0) twice", java.util.Arrays.equals(new Path().approximate(0.5f), new float[] { 0, 0, 0, 1, 0, 0 }),
+		      java.util.Arrays.toString(new Path().approximate(0.5f)));
+		android.view.animation.PathInterpolator pi = new android.view.animation.PathInterpolator(jump);
+		check("PathInterpolator(Path) follows the path (jump at x 0.25)", Math.abs(pi.getInterpolation(0.1f) - 0.1f) < 1e-3f && Math.abs(pi.getInterpolation(0.5f) - (0.5f + (0.5f - 0.25f) / 0.75f * 0.5f)) < 1e-3f,
+		      pi.getInterpolation(0.1f) + " " + pi.getInterpolation(0.5f));
+		android.view.animation.PathInterpolator fosi = new android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f);
+		check("PathInterpolator cubic (fast_out_slow_in) at 0.5", Math.abs(fosi.getInterpolation(0.5f) - 0.7756f) < 0.003f, "" + fosi.getInterpolation(0.5f));
+		check("PathInterpolator of a path not ending at (1, 1) is refused", throwsOf(IllegalArgumentException.class, () -> {
+			Path bad = new Path();
+			bad.lineTo(1, 0.5f);
+			new android.view.animation.PathInterpolator(bad);
+		}), null);
+		Path parsed = android.util.PathParser.createPathFromPathData("M 0,0 L 0.5,0.2 L 1,1");
+		check("PathParser.createPathFromPathData (pathInterpolator pathData)", Math.abs(new android.view.animation.PathInterpolator(parsed).getInterpolation(0.5f) - 0.2f) < 1e-3f, null);
+	}
+
+	/* ---- GLUtils: the GL format and type of a bitmap's config (AOSP util.cpp) ---- */
+	static void glUtils() {
+		Bitmap a = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888);
+		Bitmap r = Bitmap.createBitmap(2, 2, Bitmap.Config.RGB_565);
+		Bitmap al = Bitmap.createBitmap(2, 2, Bitmap.Config.ALPHA_8);
+		check("GLUtils ARGB_8888: GL_RGBA, GL_UNSIGNED_BYTE", android.opengl.GLUtils.getInternalFormat(a) == 0x1908 && android.opengl.GLUtils.getType(a) == 0x1401,
+		      Integer.toHexString(android.opengl.GLUtils.getInternalFormat(a)) + " " + Integer.toHexString(android.opengl.GLUtils.getType(a)));
+		check("GLUtils RGB_565: GL_RGB, GL_UNSIGNED_SHORT_5_6_5", android.opengl.GLUtils.getInternalFormat(r) == 0x1907 && android.opengl.GLUtils.getType(r) == 0x8363,
+		      Integer.toHexString(android.opengl.GLUtils.getInternalFormat(r)) + " " + Integer.toHexString(android.opengl.GLUtils.getType(r)));
+		check("GLUtils ALPHA_8: GL_ALPHA, GL_UNSIGNED_BYTE", android.opengl.GLUtils.getInternalFormat(al) == 0x1906 && android.opengl.GLUtils.getType(al) == 0x1401, null);
+		check("GLUtils.getEGLErrorString", "EGL_BAD_SURFACE".equals(android.opengl.GLUtils.getEGLErrorString(0x300D)), android.opengl.GLUtils.getEGLErrorString(0x300D));
+	}
+
 	public static void main(String[] args) {
 		System.loadLibrary("translation_layer_main"); /* the executable loads api-impl's natives in an app */
-		for (Runnable r : new Runnable[] { GfxTest::fillPath, GfxTest::pathBounds, GfxTest::matrixCopy, GfxTest::strokeWidth, GfxTest::clipBounds, GfxTest::ninePatch, GfxTest::runCases }) {
+		for (Runnable r : new Runnable[] { GfxTest::fillPath, GfxTest::pathBounds, GfxTest::matrixCopy, GfxTest::strokeWidth, GfxTest::clipBounds, GfxTest::ninePatch,
+		                                   GfxTest::pixels, GfxTest::legacyClipOps, GfxTest::matrixOps, GfxTest::approximate, GfxTest::glUtils, GfxTest::runCases }) {
 			try {
 				r.run();
 			} catch (Throwable t) {

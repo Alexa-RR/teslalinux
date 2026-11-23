@@ -42,8 +42,9 @@ gcc -shared -fPIC -o "$work/gtk-init.so" "$HERE/gtk-init.c" $(pkg-config --cflag
 data="$work/data"
 mkdir -p "$data"
 chmod -R 777 "$data"
-sudo -u "$USER_" env LD_PRELOAD="$work/host-symbols.so $work/gtk-init.so $PREFIX/lib/libdl_bio.so.0" \
-	LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib/art" PATH="$PREFIX/bin:/usr/bin:/bin" \
+# GFX_PRELOAD: more libraries to preload (a crash reporter such as tools/atl-vm/diag/tl_segv.c)
+sudo -u "$USER_" env LD_PRELOAD="$work/host-symbols.so $work/gtk-init.so $PREFIX/lib/libdl_bio.so.0${GFX_PRELOAD:+ $GFX_PRELOAD}" \
+	TL_SEGV_DELAY="${TL_SEGV_DELAY:-15}" LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib/art" PATH="$PREFIX/bin:/usr/bin:/bin" \
 	ANDROID_APP_DATA_DIR="$data" ANDROID_LOG_TAGS='*:w' ATL_TEST_APK_PATH="$DEX/framework-res.apk" \
 	"$PREFIX/bin/dalvikvm" -Djava.library.path="$DEX/natives" \
 	-cp "$DEX/api-impl.jar:$DEX/framework-res.apk:$work/test.dex" org.teslalinux.gfxtest.GfxTest

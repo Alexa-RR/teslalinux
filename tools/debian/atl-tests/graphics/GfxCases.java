@@ -3,7 +3,10 @@ package org.teslalinux.gfxtest;
 import android.graphics.BlendMode;
 import android.graphics.BlendModeColorFilter;
 import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.Region;
+import android.graphics.Shader;
 import android.graphics.ColorFilter;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
@@ -406,6 +409,160 @@ public final class GfxCases {
 				c.restore();
 			}
 		}.probe(20, 20, 0, TOL).probe(2, 2, 0xFF00FF00, TOL).probe(20, 8, 0xFF00FF00, TOL));
+
+		/* ---- the clip ops that expand the clip, for an app targeting API 27 ---- */
+		cases.add(new LegacyClipCase("clip legacy REPLACE") {
+			void clips(Canvas c) {
+				c.clipRect(10, 10, 20, 20);
+				c.clipRect(0, 0, CELL, CELL, Region.Op.REPLACE);
+			}
+		}.probe(5, 5, 0xFF0000FF, TOL).probe(15, 15, 0xFF0000FF, TOL).probe(35, 35, 0xFF0000FF, TOL));
+		cases.add(new LegacyClipCase("clip legacy UNION") {
+			void clips(Canvas c) {
+				c.clipRect(0, 0, 10, CELL);
+				c.clipRect(30, 0, CELL, CELL, Region.Op.UNION);
+			}
+		}.probe(5, 20, 0xFF0000FF, TOL).probe(20, 20, 0, TOL).probe(35, 20, 0xFF0000FF, TOL));
+		cases.add(new LegacyClipCase("clip legacy XOR") {
+			void clips(Canvas c) {
+				c.clipRect(0, 0, 30, CELL);
+				c.clipRect(10, 0, CELL, CELL, Region.Op.XOR);
+			}
+		}.probe(5, 20, 0xFF0000FF, TOL).probe(20, 20, 0, TOL).probe(35, 20, 0xFF0000FF, TOL));
+		cases.add(new LegacyClipCase("clip legacy REVERSE_DIFFERENCE") {
+			void clips(Canvas c) {
+				c.clipRect(0, 0, 30, CELL);
+				c.clipRect(10, 0, CELL, CELL, Region.Op.REVERSE_DIFFERENCE);
+			}
+		}.probe(5, 20, 0, TOL).probe(20, 20, 0, TOL).probe(35, 20, 0xFF0000FF, TOL));
+		cases.add(new LegacyClipCase("clip legacy UNION of paths") {
+			void clips(Canvas c) {
+				Path a = new Path();
+				a.addRect(0, 0, 10, 10, Path.Direction.CW);
+				Path b = new Path();
+				b.addRect(30, 30, 40, 40, Path.Direction.CW);
+				c.clipPath(a);
+				c.clipPath(b, Region.Op.UNION);
+			}
+		}.probe(5, 5, 0xFF0000FF, TOL).probe(35, 35, 0xFF0000FF, TOL).probe(20, 20, 0, TOL).probe(35, 5, 0, TOL));
+		/* restoring the expanded level brings the clip below it back */
+		cases.add(new Case("clip legacy REPLACE then restore") {
+			public void draw(Canvas c) {
+				int saved = Canvas.tlCompatibilityVersion();
+				Canvas.setCompatibilityVersion(27);
+				try {
+					c.save();
+					c.clipRect(0, 0, 20, CELL);
+					c.save();
+					c.clipRect(0, 0, CELL, CELL, Region.Op.REPLACE);
+					c.drawRect(25, 2, 35, 10, fill(0xFFFF0000));
+					c.restore();
+					c.drawColor(0xFF00FF00);
+					c.restore();
+				} finally {
+					Canvas.setCompatibilityVersion(saved);
+				}
+			}
+		}.probe(30, 6, 0xFFFF0000, TOL).probe(10, 20, 0xFF00FF00, TOL).probe(30, 25, 0, TOL));
+
+		/* ---- vertices: colours interpolated across each triangle (Skia's Gouraud), not averaged ---- */
+		cases.add(new Case("drawVertices colours interpolate") {
+			public void draw(Canvas c) {
+				float[] v = { 0, 0, CELL, 0, 0, CELL };
+				int[] col = { 0xFFFF0000, 0xFF00FF00, 0xFF0000FF };
+				c.drawVertices(Canvas.VertexMode.TRIANGLES, 6, v, 0, null, 0, col, 0, null, 0, 0, new Paint());
+			}
+		}.probe(1, 1, gouraud(1.5f, 1.5f), 12 / 255f).probe(37, 1, gouraud(37.5f, 1.5f), 12 / 255f).probe(1, 37, gouraud(1.5f, 37.5f), 12 / 255f)
+		 .probe(13, 13, gouraud(13.5f, 13.5f), 12 / 255f).probe(35, 35, 0, TOL));
+		cases.add(new Case("drawVertices shader modulated by colours") {
+			Bitmap src;
+
+			public void draw(Canvas c) {
+				if (src == null) {
+					src = Bitmap.createBitmap(CELL, CELL, Bitmap.Config.ARGB_8888);
+					new Canvas(src).drawRect(0, 0, CELL / 2, CELL, fill(0xFFFFFFFF)); /* white left, transparent right */
+				}
+				Paint p = new Paint();
+				p.setShader(new BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
+				float[] v = { 0, 0, CELL, 0, CELL, CELL, 0, CELL };
+				int[] col = { 0xFFFF0000, 0xFFFF0000, 0xFF0000FF, 0xFF0000FF }; /* red at the top, blue at the bottom */
+				short[] idx = { 0, 1, 2, 0, 2, 3 };
+				c.drawVertices(Canvas.VertexMode.TRIANGLES, 8, v, 0, v, 0, col, 0, idx, 0, 6, p);
+			}
+		}.probe(10, 2, mix(0xFFFF0000, 0xFF0000FF, 2.5f / CELL), 12 / 255f).probe(10, 37, mix(0xFFFF0000, 0xFF0000FF, 37.5f / CELL), 12 / 255f)
+		 .probe(30, 20, 0, TOL));
+		cases.add(new Case("drawBitmapMesh colours interpolate") {
+			Bitmap src;
+
+			public void draw(Canvas c) {
+				if (src == null) {
+					src = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888);
+					src.eraseColor(0xFFFFFFFF);
+				}
+				float[] v = { 0, 0, CELL, 0, 0, CELL, CELL, CELL };
+				int[] col = { 0xFFFF0000, 0xFFFF0000, 0xFF0000FF, 0xFF0000FF };
+				c.drawBitmapMesh(src, 1, 1, v, 0, col, 0, null);
+			}
+		}.probe(20, 2, mix(0xFFFF0000, 0xFF0000FF, 2.5f / CELL), 12 / 255f).probe(20, 37, mix(0xFFFF0000, 0xFF0000FF, 37.5f / CELL), 12 / 255f));
+		cases.add(new Case("drawBitmapMesh without colours") {
+			Bitmap src;
+
+			public void draw(Canvas c) {
+				if (src == null) {
+					src = Bitmap.createBitmap(2, 1, Bitmap.Config.ARGB_8888);
+					Canvas s = new Canvas(src);
+					s.drawRect(0, 0, 1, 1, fill(0xFFFF0000));
+					s.drawRect(1, 0, 2, 1, fill(0xFF0000FF));
+				}
+				/* the bitmap stretched over the cell, mirrored (right edge at x = 0) */
+				float[] v = { CELL, 0, 0, 0, CELL, CELL, 0, CELL };
+				c.drawBitmapMesh(src, 1, 1, v, 0, null, 0, null);
+			}
+		}.probe(35, 20, 0xFFFF0000, 6 / 255f).probe(5, 20, 0xFF0000FF, 6 / 255f));
+
+		/* ---- saveLayerAlpha: the layer composites at that alpha (what it holds is opaque) ---- */
+		cases.add(new Case("saveLayerAlpha") {
+			public void draw(Canvas c) {
+				c.saveLayerAlpha(0, 0, CELL, CELL, 0x80);
+				c.drawRect(0, 0, 30, 30, fill(0xFFFF0000));
+				c.drawRect(10, 10, 40, 40, fill(0xFF0000FF));
+				c.restore();
+			}
+		}.probe(5, 5, 0x80FF0000, TOL).probe(20, 20, 0x800000FF, TOL).probe(35, 35, 0x800000FF, TOL));
 		return cases;
+	}
+
+	/** A case whose clips use the Region.Ops an app targeting API 27 may use, then fills blue. */
+	abstract static class LegacyClipCase extends Case {
+		LegacyClipCase(String name) {
+			super(name);
+		}
+
+		abstract void clips(Canvas c);
+
+		public void draw(Canvas c) {
+			int saved = Canvas.tlCompatibilityVersion();
+			Canvas.setCompatibilityVersion(27);
+			try {
+				c.save();
+				clips(c);
+				c.drawColor(0xFF0000FF);
+				c.restore();
+			} finally {
+				Canvas.setCompatibilityVersion(saved);
+			}
+		}
+	}
+
+	/** the colour at (x, y) of the triangle (0,0) red, (CELL,0) green, (0,CELL) blue: barycentric weights */
+	static float[] gouraud(float x, float y) {
+		float g = x / CELL, b = y / CELL, r = 1 - g - b;
+		return new float[] { r, g, b, 1 };
+	}
+
+	/** the opaque colour a + (b - a) * t */
+	static float[] mix(int a, int b, float t) {
+		float[] pa = premul(a), pb = premul(b);
+		return new float[] { pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t, 1 };
 	}
 }
