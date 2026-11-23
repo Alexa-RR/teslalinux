@@ -64,7 +64,8 @@ import javax.security.auth.x500.X500Principal;
 /**
  * ATL runtime tests of platform state an app reads: its permissions and app ops (from its
  * manifest), Intent and Location through a Parcel, the AndroidKeyStore (KeyGenParameterSpec and
- * the key's authorizations), the car service's staged UX restrictions configuration, storage
+ * the key's authorizations; RSA and EC key pairs: certificates, Signature, Cipher, ECDH, KeyInfo,
+ * legacy specs, imports, trusted certificates), the car service's staged UX restrictions configuration, storage
  * statistics and Choreographer's frame timelines. run.sh builds the test APK (mkapk.py) and runs
  * the phases in separate processes (dalvikvm, the app's uid): "main", then "keystore2" (keys made
  * in "main" keep their authorizations), then the car phases "stage", "moving", "idle" (the staged
@@ -474,6 +475,269 @@ public class PlatformTest {
 		check("a key with one use is gone after it", refused && !ks.containsAlias("t-once"), "");
 	}
 
+	/* ---- 4b. keystore key pairs ---- */
+
+	static final String WORKAROUND = "AndroidKeyStoreBCWorkaround";
+
+	static java.security.KeyPair keyPair(String algorithm, java.security.spec.AlgorithmParameterSpec spec) throws Exception {
+		java.security.KeyPairGenerator g = java.security.KeyPairGenerator.getInstance(algorithm, "AndroidKeyStore");
+		g.initialize(spec);
+		return g.generateKeyPair();
+	}
+
+	/* the call must throw an exception of class c (or one with such a cause) */
+	static void refused(String name, Class<?> c, Body b) {
+		try {
+			b.run();
+			check(name, false, "no exception");
+		} catch (Throwable t) {
+			boolean ok = c.isInstance(t) || (t.getCause() != null && c.isInstance(t.getCause()));
+			check(name, ok, t.toString());
+		}
+	}
+
+	static boolean verifies(String algorithm, java.security.PublicKey pub, byte[] data, byte[] sig) throws Exception {
+		java.security.Signature v = java.security.Signature.getInstance(algorithm);
+		v.initVerify(pub);
+		v.update(data);
+		return v.verify(sig);
+	}
+
+	static void keyPairTests() throws Exception {
+		final KeyStore ks = keystore();
+		Date nb = new Date(1700000000000L), na = new Date(2000000000000L);
+		final java.security.KeyPair rsa = keyPair("RSA", new KeyGenParameterSpec.Builder("t-rsa",
+		    KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_VERIFY | KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+		    .setKeySize(2048).setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
+		    .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1, KeyProperties.SIGNATURE_PADDING_RSA_PSS)
+		    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP, KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
+		    .setCertificateSubject(new X500Principal("CN=t-rsa, O=teslalinux")).setCertificateSerialNumber(BigInteger.valueOf(4242))
+		    .setCertificateNotBefore(nb).setCertificateNotAfter(na).build());
+		java.security.interfaces.RSAPublicKey pub = (java.security.interfaces.RSAPublicKey) rsa.getPublic();
+		check("RSA KeyPairGenerator: a 2048-bit pair with exponent 65537", pub.getModulus().bitLength() == 2048 && pub.getPublicExponent().intValue() == 65537, "" + pub.getModulus().bitLength());
+		check("the private key is not exportable, gives its modulus (RSAKey)", rsa.getPrivate().getEncoded() == null && rsa.getPrivate().getFormat() == null
+		    && pub.getModulus().equals(((java.security.interfaces.RSAKey) rsa.getPrivate()).getModulus()), "");
+		java.security.cert.X509Certificate cert = (java.security.cert.X509Certificate) ks.getCertificate("t-rsa");
+		check("KeyStore.getCertificate: subject, issuer, serial and dates from the spec", cert != null && cert.getSubjectX500Principal().equals(new X500Principal("CN=t-rsa, O=teslalinux"))
+		    && cert.getIssuerX500Principal().equals(cert.getSubjectX500Principal()) && cert.getSerialNumber().intValue() == 4242
+		    && cert.getNotBefore().equals(nb) && cert.getNotAfter().equals(na) && cert.getVersion() == 3, "" + cert);
+		check("the certificate's public key is the pair's", cert != null && Arrays.equals(cert.getPublicKey().getEncoded(), pub.getEncoded()), "");
+		boolean selfSigned = false;
+		try {
+			cert.verify(pub);
+			selfSigned = true;
+		} catch (Exception e) {
+		}
+		check("self-signed with the key (SHA512withRSA: the largest authorized digest)", selfSigned && "SHA512withRSA".equalsIgnoreCase(cert.getSigAlgName()), cert == null ? "" : cert.getSigAlgName());
+		boolean[] ku = cert.getKeyUsage();
+		check("KeyUsage from the purposes: digitalSignature, keyEncipherment, dataEncipherment (critical)", ku != null && ku[0] && ku[2] && ku[3] && !ku[4]
+		    && cert.getCriticalExtensionOIDs() != null && cert.getCriticalExtensionOIDs().contains("2.5.29.15"), Arrays.toString(ku));
+		java.security.cert.Certificate[] chain = ks.getCertificateChain("t-rsa");
+		check("getCertificateChain: the one self-signed certificate", chain != null && chain.length == 1 && chain[0].equals(cert), "");
+		KeyStore.Entry entry = ks.getEntry("t-rsa", null);
+		check("getEntry: a PrivateKeyEntry with the key and the chain", entry instanceof KeyStore.PrivateKeyEntry && ((KeyStore.PrivateKeyEntry) entry).getCertificate().equals(cert)
+		    && ((KeyStore.PrivateKeyEntry) entry).getPrivateKey().equals(rsa.getPrivate()), "" + entry);
+		check("getKey: the private key; isKeyEntry; getCertificateAlias", rsa.getPrivate().equals(ks.getKey("t-rsa", null)) && ks.isKeyEntry("t-rsa") && !ks.isCertificateEntry("t-rsa")
+		    && "t-rsa".equals(ks.getCertificateAlias(cert)), "");
+
+		byte[] data = "the message".getBytes("UTF-8");
+		java.security.Signature s = java.security.Signature.getInstance("SHA256withRSA");
+		s.initSign(rsa.getPrivate());
+		s.update(data);
+		byte[] sig = s.sign();
+		check("Signature SHA256withRSA with the keystore key (" + s.getProvider().getName() + "), verified by the platform", WORKAROUND.equals(s.getProvider().getName())
+		    && verifies("SHA256withRSA", pub, data, sig), "");
+		s = java.security.Signature.getInstance("SHA512withRSA/PSS");
+		s.initSign(rsa.getPrivate());
+		s.update(data);
+		sig = s.sign();
+		check("SHA512withRSA/PSS", verifies("SHA512withRSA/PSS", pub, data, sig), "");
+		refused("SHA1withRSA: a digest the key is not for is refused", InvalidKeyException.class, () -> {
+			java.security.Signature x = java.security.Signature.getInstance("SHA1withRSA");
+			x.initSign(rsa.getPrivate());
+		});
+
+		Cipher enc = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+		enc.init(Cipher.ENCRYPT_MODE, pub, new javax.crypto.spec.OAEPParameterSpec("SHA-256", "MGF1", java.security.spec.MGF1ParameterSpec.SHA1, javax.crypto.spec.PSource.PSpecified.DEFAULT));
+		byte[] ct = enc.doFinal(data);
+		Cipher dec = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+		dec.init(Cipher.DECRYPT_MODE, rsa.getPrivate());
+		check("RSA OAEP (SHA-256, MGF1 SHA-1): the platform encrypts, the keystore key decrypts (" + dec.getProvider().getName() + ")",
+		    WORKAROUND.equals(dec.getProvider().getName()) && Arrays.equals(data, dec.doFinal(ct)), "");
+		enc = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+		enc.init(Cipher.ENCRYPT_MODE, pub);
+		ct = enc.doFinal(data);
+		dec = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+		dec.init(Cipher.DECRYPT_MODE, rsa.getPrivate());
+		check("RSA PKCS#1 encryption: decrypted with the keystore key", Arrays.equals(data, dec.doFinal(ct)), "");
+		refused("OAEP with SHA-1 (a digest the key is not for) is refused", InvalidKeyException.class, () -> {
+			Cipher.getInstance("RSA/ECB/OAEPWithSHA-1AndMGF1Padding").init(Cipher.DECRYPT_MODE, rsa.getPrivate());
+		});
+		refused("RSA NoPadding (a padding the key is not for) is refused", InvalidKeyException.class, () -> {
+			Cipher.getInstance("RSA/ECB/NoPadding").init(Cipher.DECRYPT_MODE, rsa.getPrivate());
+		});
+
+		java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA", "AndroidKeyStore");
+		KeyInfo ki = kf.getKeySpec(rsa.getPrivate(), KeyInfo.class);
+		check("KeyFactory KeyInfo: 2048 bits, generated, software, its paddings and digests", ki.getKeySize() == 2048 && ki.getOrigin() == KeyProperties.ORIGIN_GENERATED
+		    && !ki.isInsideSecureHardware() && ki.getSecurityLevel() == KeyProperties.SECURITY_LEVEL_SOFTWARE
+		    && Arrays.equals(new String[] {KeyProperties.SIGNATURE_PADDING_RSA_PKCS1, KeyProperties.SIGNATURE_PADDING_RSA_PSS}, ki.getSignaturePaddings())
+		    && Arrays.asList(ki.getDigests()).contains(KeyProperties.DIGEST_SHA512), Arrays.toString(ki.getSignaturePaddings()));
+
+		/* EC: signing, key agreement, the fake signature of a key that cannot sign */
+		final java.security.KeyPair ec = keyPair("EC", new KeyGenParameterSpec.Builder("t-ec", KeyProperties.PURPOSE_SIGN | KeyProperties.PURPOSE_VERIFY)
+		    .setAlgorithmParameterSpec(new java.security.spec.ECGenParameterSpec("secp256r1")).setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384).build());
+		java.security.cert.X509Certificate ecCert = (java.security.cert.X509Certificate) ks.getCertificate("t-ec");
+		boolean ecSigned = false;
+		try {
+			ecCert.verify(ec.getPublic());
+			ecSigned = true;
+		} catch (Exception e) {
+		}
+		check("EC P-256: certificate signed SHA256withECDSA (the digest of the curve's size), default subject CN=fake, serial 1",
+		    ecSigned && "SHA256withECDSA".equalsIgnoreCase(ecCert.getSigAlgName()) && ecCert.getSubjectX500Principal().equals(new X500Principal("CN=fake"))
+		    && ecCert.getSerialNumber().intValue() == 1, ecCert.getSigAlgName());
+		check("the EC private key gives its curve (ECKey)", ((java.security.interfaces.ECKey) ec.getPrivate()).getParams().getCurve().getField().getFieldSize() == 256, "");
+		s = java.security.Signature.getInstance("SHA384withECDSA");
+		s.initSign(ec.getPrivate());
+		s.update(data);
+		sig = s.sign();
+		check("Signature SHA384withECDSA with the keystore key, verified by the platform", verifies("SHA384withECDSA", ec.getPublic(), data, sig), "");
+		refused("NONEwithECDSA: DIGEST_NONE not authorized", InvalidKeyException.class, () -> {
+			java.security.Signature x = java.security.Signature.getInstance("NONEwithECDSA");
+			x.initSign(ec.getPrivate());
+		});
+		final java.security.KeyPair agree = keyPair("EC", new KeyGenParameterSpec.Builder("t-ecdh", KeyProperties.PURPOSE_AGREE_KEY).setKeySize(384).build());
+		java.security.KeyPairGenerator pg = java.security.KeyPairGenerator.getInstance("EC");
+		pg.initialize(new java.security.spec.ECGenParameterSpec("secp384r1"));
+		java.security.KeyPair peer = pg.generateKeyPair();
+		javax.crypto.KeyAgreement mine = javax.crypto.KeyAgreement.getInstance("ECDH", "AndroidKeyStore");
+		mine.init(agree.getPrivate());
+		mine.doPhase(peer.getPublic(), true);
+		javax.crypto.KeyAgreement theirs = javax.crypto.KeyAgreement.getInstance("ECDH");
+		theirs.init(peer.getPrivate());
+		theirs.doPhase(agree.getPublic(), true);
+		check("KeyAgreement ECDH with a keystore key: the same secret as the peer's", Arrays.equals(mine.generateSecret(), theirs.generateSecret()), "");
+		java.security.cert.X509Certificate agreeCert = (java.security.cert.X509Certificate) ks.getCertificate("t-ecdh");
+		boolean fake = false;
+		try {
+			agreeCert.verify(agree.getPublic());
+		} catch (java.security.SignatureException e) {
+			fake = true;
+		}
+		check("a key that cannot sign: AOSP's fake signature (ecdsa-with-SHA256, empty), keyAgreement usage", fake && "SHA256withECDSA".equalsIgnoreCase(agreeCert.getSigAlgName())
+		    && agreeCert.getKeyUsage() != null && agreeCert.getKeyUsage()[4] && !agreeCert.getKeyUsage()[0], agreeCert.getSigAlgName());
+		refused("ECDH with a signing key is refused (purpose)", InvalidKeyException.class, () -> javax.crypto.KeyAgreement.getInstance("ECDH", "AndroidKeyStore").init(ec.getPrivate()));
+
+		/* KeyGenParameterSpec checks and what this device has not */
+		refused("RSA key size 256 is refused", InvalidAlgorithmParameterException.class,
+		    () -> keyPair("RSA", new KeyGenParameterSpec.Builder("t-x", KeyProperties.PURPOSE_SIGN).setKeySize(256).build()));
+		refused("EC curve secp192r1 is refused", InvalidAlgorithmParameterException.class,
+		    () -> keyPair("EC", new KeyGenParameterSpec.Builder("t-x", KeyProperties.PURPOSE_SIGN).setAlgorithmParameterSpec(new java.security.spec.ECGenParameterSpec("secp192r1")).build()));
+		refused("RSA NoPadding encryption with randomized encryption is refused", InvalidAlgorithmParameterException.class,
+		    () -> keyPair("RSA", new KeyGenParameterSpec.Builder("t-x", KeyProperties.PURPOSE_ENCRYPT).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build()));
+		refused("an attestation challenge: no attestation keys on this device (ProviderException)", java.security.ProviderException.class,
+		    () -> keyPair("EC", new KeyGenParameterSpec.Builder("t-att", KeyProperties.PURPOSE_SIGN).setDigests(KeyProperties.DIGEST_SHA256).setAttestationChallenge(new byte[] {1, 2, 3}).build()));
+		check("and no key is left under its alias", !ks.containsAlias("t-att"), "");
+		refused("StrongBox: StrongBoxUnavailableException", StrongBoxUnavailableException.class,
+		    () -> keyPair("EC", new KeyGenParameterSpec.Builder("t-sbp", KeyProperties.PURPOSE_SIGN).setIsStrongBoxBacked(true).build()));
+		refused("user authentication without a secure lock screen", InvalidAlgorithmParameterException.class,
+		    () -> keyPair("EC", new KeyGenParameterSpec.Builder("t-x", KeyProperties.PURPOSE_SIGN).setUserAuthenticationRequired(true).setUserAuthenticationValidityDurationSeconds(10).build()));
+		final java.security.KeyPair once = keyPair("EC", new KeyGenParameterSpec.Builder("t-ec1", KeyProperties.PURPOSE_SIGN).setDigests(KeyProperties.DIGEST_SHA256).setMaxUsageCount(1).build());
+		java.security.Signature.getInstance("SHA256withECDSA").initSign(once.getPrivate());
+		refused("a key pair with one use is gone after it", InvalidKeyException.class, () -> java.security.Signature.getInstance("SHA256withECDSA").initSign(once.getPrivate()));
+		check("(its alias too)", !ks.containsAlias("t-ec1"), "");
+
+		/* the legacy KeyPairGeneratorSpec: every purpose, digest and padding */
+		@SuppressWarnings("deprecation")
+		android.security.KeyPairGeneratorSpec legacy = new android.security.KeyPairGeneratorSpec.Builder(appContext()).setAlias("t-legacy").setKeySize(1024)
+		    .setSubject(new X500Principal("CN=legacy")).setSerialNumber(BigInteger.TEN).setStartDate(nb).setEndDate(na).build();
+		java.security.KeyPairGenerator lg = java.security.KeyPairGenerator.getInstance("RSA", "AndroidKeyStore");
+		lg.initialize(legacy);
+		java.security.KeyPair lp = lg.generateKeyPair();
+		s = java.security.Signature.getInstance("SHA1withRSA");
+		s.initSign(lp.getPrivate());
+		s.update(data);
+		sig = s.sign();
+		Cipher raw = Cipher.getInstance("RSA/ECB/NoPadding");
+		raw.init(Cipher.DECRYPT_MODE, lp.getPrivate());
+		check("KeyPairGeneratorSpec (legacy): SHA1withRSA and raw RSA allowed, CN=legacy", verifies("SHA1withRSA", lp.getPublic(), data, sig)
+		    && ((java.security.cert.X509Certificate) ks.getCertificate("t-legacy")).getSubjectX500Principal().equals(new X500Principal("CN=legacy")), "");
+
+		/* imports */
+		java.security.KeyPairGenerator platformGen = java.security.KeyPairGenerator.getInstance("RSA");
+		platformGen.initialize(1024);
+		java.security.KeyPair plain = platformGen.generateKeyPair();
+		/* the chain goes in as given (AOSP does not check it against the key): any certificate */
+		final java.security.cert.Certificate[] plainChain = {ks.getCertificate("t-legacy")};
+		ks.setEntry("t-imp", new KeyStore.PrivateKeyEntry(plain.getPrivate(), plainChain), null);
+		java.security.PrivateKey imp = (java.security.PrivateKey) ks.getKey("t-imp", null);
+		s = java.security.Signature.getInstance("MD5withRSA");
+		s.initSign(imp);
+		s.update(data);
+		sig = s.sign();
+		check("an imported private key without KeyProtection has AOSP's legacy authorizations (MD5withRSA)", verifies("MD5withRSA", plain.getPublic(), data, sig)
+		    && kf.getKeySpec(imp, KeyInfo.class).getOrigin() == KeyProperties.ORIGIN_IMPORTED, "");
+		ks.setEntry("t-imp2", new KeyStore.PrivateKeyEntry(plain.getPrivate(), plainChain),
+		    new android.security.keystore.KeyProtection.Builder(KeyProperties.PURPOSE_SIGN).setDigests(KeyProperties.DIGEST_SHA256)
+		        .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1).build());
+		final java.security.PrivateKey imp2 = (java.security.PrivateKey) ks.getKey("t-imp2", null);
+		refused("an import with a KeyProtection keeps its restrictions (SHA1withRSA refused)", InvalidKeyException.class, () -> {
+			java.security.Signature x = java.security.Signature.getInstance("SHA1withRSA");
+			x.initSign(imp2);
+		});
+		/* java.security.KeyStore refuses it before the keystore sees it, on Android too */
+		refused("a private key without a certificate chain is refused", IllegalArgumentException.class,
+		    () -> ks.setKeyEntry("t-imp3", plain.getPrivate(), null, null));
+		check("(and nothing is stored)", !ks.containsAlias("t-imp3"), "");
+		final SecretKey rawAes = new javax.crypto.spec.SecretKeySpec(new byte[16], "AES");
+		refused("a secret key import without KeyProtection is refused", java.security.KeyStoreException.class,
+		    () -> ks.setEntry("t-aes-imp", new KeyStore.SecretKeyEntry(rawAes), null));
+		ks.setEntry("t-aes-imp", new KeyStore.SecretKeyEntry(rawAes), new android.security.keystore.KeyProtection.Builder(KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+		    .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());
+		Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
+		gcm.init(Cipher.ENCRYPT_MODE, (SecretKey) ks.getKey("t-aes-imp", null));
+		byte[] gct = gcm.doFinal(data);
+		Cipher ref = Cipher.getInstance("AES/GCM/NoPadding");
+		ref.init(Cipher.DECRYPT_MODE, rawAes, new GCMParameterSpec(128, gcm.getIV()));
+		check("a secret key imported with a KeyProtection encrypts as the same key does", Arrays.equals(data, ref.doFinal(gct)), "");
+
+		/* trusted certificates */
+		ks.setCertificateEntry("t-ca", ecCert);
+		KeyStore.Entry tce = ks.getEntry("t-ca", null);
+		check("setCertificateEntry: a TrustedCertificateEntry, isCertificateEntry, no key", tce instanceof KeyStore.TrustedCertificateEntry
+		    && ((KeyStore.TrustedCertificateEntry) tce).getTrustedCertificate().equals(ecCert) && ks.isCertificateEntry("t-ca") && ks.getKey("t-ca", null) == null, "" + tce);
+		check("getCertificateAlias prefers the key entry with that leaf", "t-ec".equals(ks.getCertificateAlias(ecCert)), ks.getCertificateAlias(ecCert));
+		final java.security.cert.Certificate ecc = ecCert;
+		refused("a certificate entry cannot replace a key entry", java.security.KeyStoreException.class, () -> ks.setCertificateEntry("t-rsa", ecc));
+		java.security.cert.Certificate[] newChain = {cert, ecCert};
+		ks.setKeyEntry("t-rsa", rsa.getPrivate(), null, newChain);
+		check("setKeyEntry of the keystore key replaces its chain only", ks.getCertificateChain("t-rsa").length == 2 && ks.getKey("t-rsa", null).equals(rsa.getPrivate()), "");
+	}
+
+	static void keyPairPersistenceTests() throws Exception {
+		KeyStore ks = keystore();
+		java.security.PrivateKey rsa = (java.security.PrivateKey) ks.getKey("t-rsa", null);
+		java.security.cert.X509Certificate cert = (java.security.cert.X509Certificate) ks.getCertificate("t-rsa");
+		check("a key pair is there in a new process, with its certificate and chain", rsa != null && cert != null && cert.getSerialNumber().intValue() == 4242
+		    && ks.getCertificateChain("t-rsa").length == 2, "");
+		byte[] data = {1, 2, 3};
+		java.security.Signature s = java.security.Signature.getInstance("SHA256withRSA");
+		s.initSign(rsa);
+		s.update(data);
+		byte[] sig = s.sign();
+		check("and signs", verifies("SHA256withRSA", cert.getPublicKey(), data, sig), "");
+		boolean refused = false;
+		try {
+			java.security.Signature.getInstance("SHA1withRSA").initSign(rsa);
+		} catch (InvalidKeyException e) {
+			refused = true;
+		}
+		KeyInfo ki = java.security.KeyFactory.getInstance("RSA", "AndroidKeyStore").getKeySpec(rsa, KeyInfo.class);
+		check("with its digests and signature paddings", refused && ki.getSignaturePaddings().length == 2, "");
+		check("certificate entries persist", ks.isCertificateEntry("t-ca") && ks.getCertificate("t-ca") != null, "");
+	}
+
 	/* a new process: the keys of the main phase keep their authorizations */
 	static void keystorePersistenceTests() throws Exception {
 		KeyStore ks = keystore();
@@ -869,11 +1133,13 @@ public class PlatformTest {
 							permissionTests();
 							parcelTests();
 							keystoreTests();
+							keyPairTests();
 							storageTests();
 							choreographerTests();
 							break;
 						case "keystore2":
 							keystorePersistenceTests();
+							keyPairPersistenceTests();
 							break;
 						case "stage":
 							stageTests();

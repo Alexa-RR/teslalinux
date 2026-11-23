@@ -2,10 +2,13 @@
 # gltest/run.sh [ATL_BUILDDIR]: builds GlTest into a minimal APK (../embed/mkapk.py) and runs it with
 # the installed ATL on a private headless weston (its own Wayland socket: the car display and its
 # app are left alone), as the `tesla` user, with ATL_DEBUG_SURFACE=1. GlTest checks SurfaceTexture
-# (an EGL producer and a GL_TEXTURE_EXTERNAL_OES consumer on two threads and contexts) itself; this
-# script then checks EGL_ANDROID_presentation_time on the SurfaceView from the latch lines: the held
-# frame is latched no earlier than one refresh before its time (and not much later), and of two
-# frames due together the older is dropped. Prints PASS/FAIL lines and "RESULT passed/total".
+# (an EGL producer and a GL_TEXTURE_EXTERNAL_OES consumer on two threads and contexts, and
+# Surface.lockCanvas as a CPU producer) itself, once more with ATL_DIRECT_EGL=1 (SurfaceTexture part
+# only); this script then checks EGL_ANDROID_presentation_time on the SurfaceView from the latch
+# lines: the held frame is latched no earlier than one refresh before its time (and not much
+# later), and of two frames due together the older is dropped. GlesTest (gles-gl-test.apk) checks
+# the GL bindings (GLES10..GLES32, GLImpl, KHR_debug) and calls every native method once.
+# Prints PASS/FAIL lines and "RESULT passed/total".
 #
 #   ATL_BUILDDIR  meson build directory to compile against (default ~/atl-src/builddir)
 #   ATL_PREFIX    installed ATL (default /opt/teslalinux)
@@ -25,12 +28,14 @@ passed=0 total=0
 check() { total=$((total + 1)); if [ "$2" = 0 ]; then passed=$((passed + 1)); echo "PASS $1"; else echo "FAIL $1${3:+ ($3)}"; fi; }
 
 javac -nowarn -source 8 -target 8 -bootclasspath "$BOOT/core-all_classes.jar" -cp "$BUILDDIR/src/api-impl/hax.jar" \
-	-d "$work/classes" "$HERE/GlTest.java" 2>&1 | grep -v '^warning: \[options\]'
+	-d "$work/classes" "$HERE/GlTest.java" "$HERE/GlesTest.java" 2>&1 | grep -v '^warning: \[options\]'
 (cd "$work/classes" && jar cf "$work/test.jar" .)
 java -cp "$R8" com.android.tools.r8.D8 --min-api 24 --lib "$BOOT/core-all_classes.jar" \
 	--classpath "$BUILDDIR/src/api-impl/hax.jar" --output "$work" "$work/test.jar" || exit 1
 python3 "$HERE/../embed/mkapk.py" "$work/gl-test.apk" "$work/classes.dex" org.teslalinux.gltest org.teslalinux.gltest.GlTest
-chmod 644 "$work/gl-test.apk"
+# GlesTest: the GL bindings (GLES10..GLES32, GLImpl) on pbuffers, every native method called once
+python3 "$HERE/../embed/mkapk.py" "$work/gles-gl-test.apk" "$work/classes.dex" org.teslalinux.glestest org.teslalinux.gltest.GlesTest
+chmod 644 "$work/gl-test.apk" "$work/gles-gl-test.apk"
 
 # a private compositor: headless weston on a socket of its own, in a runtime directory of tesla's
 xdg="$work/xdg"
@@ -56,6 +61,37 @@ if [[ -n "$r" ]]; then
 else
 	check "the test app ran to the end" 1 "$(grep -a "Exception\|FATAL\|Error" "$log" | head -5)"
 	tail -20 "$log"
+fi
+
+# SurfaceTexture (EGL and CPU producers) with ATL_DIRECT_EGL: SurfaceView windows go to the driver
+# then, SurfaceTexture windows still to ATL's queue (the presentation-time part is left out)
+dlog="$work/app-direct.log"
+sudo -u tesla env XDG_RUNTIME_DIR="$xdg" WAYLAND_DISPLAY="$sock" GDK_BACKEND=wayland ATL_DIRECT_EGL=1 GLTEST_ONLY=surfacetexture \
+	ATL_FORCE_FULLSCREEN=1 ATL_DISABLE_WINDOW_DECORATIONS=1 ANDROID_LOG_TAGS='*:w' ANDROID_APP_DATA_DIR="$work/data" \
+	PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
+	timeout 120 android-translation-layer "$work/gl-test.apk" > "$dlog" 2>&1
+grep -a "^GLTEST \(PASS\|FAIL\)" "$dlog" | sed 's/^GLTEST /ATL_DIRECT_EGL: /'
+r="$(grep -a "^GLTEST RESULT" "$dlog" | awk '{print $3}')"
+if [[ -n "$r" ]]; then
+	passed=$((passed + ${r%/*})) total=$((total + ${r#*/}))
+else
+	check "the test app ran to the end with ATL_DIRECT_EGL" 1 "$(grep -a "Exception\|FATAL\|Error" "$dlog" | head -5)"
+	tail -20 "$dlog"
+fi
+
+# the GL bindings (GLES_TRACE=1 in the environment prints every call of GlesTest's sweep)
+glog="$work/gles.log"
+sudo -u tesla env XDG_RUNTIME_DIR="$xdg" WAYLAND_DISPLAY="$sock" GDK_BACKEND=wayland GLES_TRACE="${GLES_TRACE:-0}" \
+	ATL_FORCE_FULLSCREEN=1 ATL_DISABLE_WINDOW_DECORATIONS=1 ANDROID_LOG_TAGS='*:w' ANDROID_APP_DATA_DIR="$work/data" \
+	PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
+	timeout 180 android-translation-layer "$work/gles-gl-test.apk" > "$glog" 2>&1
+grep -a "^GLTEST \(PASS\|FAIL\|NOTE\)" "$glog" | sed 's/^GLTEST //'
+r="$(grep -a "^GLTEST RESULT" "$glog" | awk '{print $3}')"
+if [[ -n "$r" ]]; then
+	passed=$((passed + ${r%/*})) total=$((total + ${r#*/}))
+else
+	check "the GL binding test app ran to the end" 1 "$(grep -a "Exception\|FATAL\|Error" "$glog" | head -5)"
+	tail -20 "$glog"
 fi
 
 # EGL_ANDROID_presentation_time: the latch lines of the held frame and of the pair due together

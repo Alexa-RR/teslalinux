@@ -1,6 +1,10 @@
 package org.teslalinux.gltest;
 
 import android.app.Activity;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.opengl.EGL14;
 import android.opengl.EGLConfig;
@@ -25,7 +29,9 @@ import java.util.concurrent.TimeUnit;
  * ATL runtime test of GL streams: SurfaceTexture (an EGL producer on one thread and context, the
  * GL_TEXTURE_EXTERNAL_OES consumer on another: frames, timestamps, FIFO order, the transform
  * matrix, one producer at a time, Surface(SurfaceTexture), detach/attach, releaseTexImage,
- * release) and EGL_ANDROID_presentation_time on a SurfaceView (a frame is held until its time;
+ * release), Surface.lockCanvas on a Surface(SurfaceTexture) (the CPU as the producer: the buffer
+ * size, dirty region and copy-back, the flipped transform matrix, one producer at a time) and
+ * EGL_ANDROID_presentation_time on a SurfaceView (a frame is held until its time;
  * a due frame is dropped for a newer due one: run.sh reads ATL_DEBUG_SURFACE's latch lines).
  * Prints "GLTEST PASS/FAIL ..." and "GLTEST RESULT passed/total", then exits.
  */
@@ -349,6 +355,93 @@ public class GlTest extends Activity implements SurfaceHolder.Callback {
 		check("a released Surface is invalid", !surface.isValid(), "");
 	}
 
+	/* ---- Surface.lockCanvas on a Surface(SurfaceTexture): the CPU as the producer ---- */
+
+	interface Call {
+		void run() throws Exception;
+	}
+
+	static boolean throwsA(Class<?> c, Call call) {
+		try {
+			call.run();
+			return false;
+		} catch (Throwable t) {
+			return c.isInstance(t);
+		}
+	}
+
+	static void lockCanvasTests() throws Exception {
+		int[] t = new int[1];
+		GLES20.glGenTextures(1, t, 0);
+		final SurfaceTexture st = new SurfaceTexture(t[0]);
+		st.setDefaultBufferSize(64, 32);
+		HandlerThread listenerThread = new HandlerThread("st-cpu-listener");
+		listenerThread.start();
+		final Semaphore frames = new Semaphore(0);
+		st.setOnFrameAvailableListener(new SurfaceTexture.OnFrameAvailableListener() {
+			public void onFrameAvailable(SurfaceTexture s) {
+				frames.release();
+			}
+		}, new Handler(listenerThread.getLooper()));
+		final Surface surface = new Surface(st);
+
+		Rect dirty = new Rect(10, 10, 20, 20);
+		Canvas c = surface.lockCanvas(dirty);
+		check("lockCanvas on a Surface(SurfaceTexture): a canvas of the default buffer size", c != null && c.getWidth() == 64 && c.getHeight() == 32,
+		      c == null ? "null" : c.getWidth() + "x" + c.getHeight());
+		check("the first buffer: the dirty region grows to all of it", dirty.equals(new Rect(0, 0, 64, 32)), dirty.toString());
+		check("locking a locked surface throws IllegalArgumentException", throwsA(IllegalArgumentException.class, () -> surface.lockCanvas(null)), "");
+		final Canvas wrong = new Canvas();
+		check("posting another canvas throws IllegalArgumentException", throwsA(IllegalArgumentException.class, () -> surface.unlockCanvasAndPost(wrong)), "");
+		Paint p = new Paint();
+		p.setColor(Color.BLUE);
+		c.drawRect(0, 0, 64, 16, p); /* the top half */
+		p.setColor(Color.RED);
+		c.drawRect(0, 16, 64, 32, p);
+		long before = System.nanoTime();
+		surface.unlockCanvasAndPost(c);
+		check("unlockCanvasAndPost: onFrameAvailable", frames.tryAcquire(5, TimeUnit.SECONDS), "");
+		st.updateTexImage();
+		long ts = st.getTimestamp();
+		check("the frame's timestamp is the time it was posted", ts >= before && ts <= System.nanoTime(), ts + " vs " + before);
+		float[] m = new float[16];
+		st.getTransformMatrix(m);
+		check("the transform matrix flips the CPU buffer (top row first, AOSP's mtxFlipV)", m[0] == 1 && m[5] == -1 && m[10] == 1 && m[13] == 1 && m[15] == 1,
+		      java.util.Arrays.toString(m));
+		int top = sample(t[0], m, 32, 24), bottom = sample(t[0], m, 32, 8);
+		check("with the matrix the canvas is upright (top blue, bottom red)", top == BLUE && bottom == RED, hex(top) + " " + hex(bottom));
+
+		dirty.set(0, 0, 32, 32);
+		c = surface.lockCanvas(dirty);
+		check("a buffer of the same size: the dirty region stays (the rest is the last frame)", dirty.equals(new Rect(0, 0, 32, 32)), dirty.toString());
+		c.drawColor(Color.GREEN); /* clipped to the dirty region: the left half */
+		surface.unlockCanvasAndPost(c);
+		frames.tryAcquire(5, TimeUnit.SECONDS);
+		st.updateTexImage();
+		int left = sample(t[0], m, 16, 8), rightTop = sample(t[0], m, 48, 24), rightBottom = sample(t[0], m, 48, 8);
+		check("the canvas is clipped to the dirty region, the rest is the previous frame", left == GREEN && rightTop == BLUE && rightBottom == RED,
+		      hex(left) + " " + hex(rightTop) + " " + hex(rightBottom));
+
+		check("an EGL surface cannot connect while the CPU is the producer",
+		      noSurface(EGL14.eglCreateWindowSurface(dpy, cfg, new Surface(st), new int[] {EGL14.EGL_NONE}, 0)), "");
+		surface.release();
+		check("lockCanvas on a released Surface throws IllegalStateException", throwsA(IllegalStateException.class, () -> surface.lockCanvas(null)), "");
+		Producer producer = new Producer();
+		EGLSurface ws = producer.connect(st);
+		check("once that Surface is released an EGL producer connects", !noSurface(ws), "");
+		final Surface second = new Surface(st);
+		check("and lockCanvas on another Surface of the queue throws IllegalArgumentException", throwsA(IllegalArgumentException.class, () -> second.lockCanvas(null)), "");
+		producer.frame(1, 1, 0, 0);
+		frames.tryAcquire(5, TimeUnit.SECONDS);
+		st.updateTexImage();
+		st.getTransformMatrix(m);
+		check("the EGL frame follows (yellow, no flip)", sample(t[0], m, 32, 16) == YELLOW && m[5] == 1, hex(sample(t[0], m, 32, 16)));
+		producer.disconnect();
+		second.release();
+		st.release();
+		listenerThread.quitSafely();
+	}
+
 	/* ---- EGL_ANDROID_presentation_time on a SurfaceView ---- */
 
 	static void presentationTests(Surface viewSurface) throws Exception {
@@ -385,7 +478,11 @@ public class GlTest extends Activity implements SurfaceHolder.Callback {
 			public void run() {
 				try {
 					surfaceTextureTests();
-					presentationTests(holder.getSurface());
+					lockCanvasTests();
+					/* ATL_DIRECT_EGL hands the SurfaceView's window to the driver, which holds no
+					 * frames: run.sh runs only the SurfaceTexture part then */
+					if (!"surfacetexture".equals(System.getenv("GLTEST_ONLY")))
+						presentationTests(holder.getSurface());
 				} catch (Throwable t) {
 					t.printStackTrace();
 					check("tests ran to the end", false, t.toString());
