@@ -53,6 +53,76 @@
   const LOOK_SPEEDOMETER_POSITION_KEY = "teslalinux.carSpeedometerPosition";
   const SPEEDOMETER_POSITIONS = ["bottomRight", "topLeft"];
 
+  // The app's own settings in the settings page (Settings > Waze > Waze's settings,
+  // carapp-settings-view.js): the app's settings action is found by its icon's resource name (the
+  // host's "resName", the same in every app version and language), tapped like any action, and
+  // the screens the app pushes for it are drawn in the settings page instead of over the map. The
+  // app's screen stack (TemplateWrapper.templateInfosForScreenStack, top first) tells them apart:
+  // every template whose stack lies above the one the settings were opened from is one of the
+  // settings' screens. Closing pops them with the host's back (AppManager.onBackPressed, which the
+  // app's ScreenManager answers with pop), one at a time, until the stack is the opening one.
+  const APP_SETTINGS_ICON = /(^|_)settings?(_|$)/i;
+  const APP_SETTINGS_OPEN_MS = 5000; // the app's settings screen arrives within this, or it did not open
+  const APP_SETTINGS_STEP_MS = 3000; // one back answered with a template within this
+  const APP_SETTINGS_MAX_BACKS = 12;
+
+  /** the screen ids of a TemplateWrapper's stack, top first ([] when the app sends none) */
+  function stackIds(wrapper) {
+    const infos = (wrapper && wrapper.templateInfosForScreenStack) || [];
+    return infos.map((i) => i && i.templateId).filter(Boolean);
+  }
+
+  /** whether the bottom of the stack ids is exactly base (both top first) */
+  function endsWith(ids, base) {
+    if (ids.length < base.length) return false;
+    const tail = ids.slice(ids.length - base.length);
+    for (let i = 0; i < base.length; i++) if (tail[i] !== base[i]) return false;
+    return true;
+  }
+
+  /**
+   * How many screens the stack has above the base stack (the one under the app's settings
+   * screen), or 0 when it is the base or not above it. The base's top screen keeps its id while
+   * screens lie above it (the library asks only the top screen for templates, and a screen popped
+   * back to reuses its last id), so the whole base is compared.
+   */
+  function depthAbove(ids, base) {
+    if (!base.length || ids.length <= base.length || !endsWith(ids, base)) return 0;
+    return ids.length - base.length;
+  }
+
+  /** whether the host names the template's resource icons (a host from before "resName" does not) */
+  function hasIconNames(o) {
+    if (!o || typeof o !== "object") return false;
+    if (o.$ === "IconCompat" && o.resName) return true;
+    for (const k in o) if (o[k] && typeof o[k] === "object" && hasIconNames(o[k])) return true;
+    return false;
+  }
+
+  /** the app's settings action in a template: an action with a click whose icon is the app's settings drawable */
+  function findSettingsAction(o) {
+    if (!o || typeof o !== "object") return null;
+    if (Array.isArray(o)) {
+      for (const x of o) {
+        const a = findSettingsAction(x);
+        if (a) return a;
+      }
+      return null;
+    }
+    if (o.$ === "Action" && o.onClickDelegate && o.enabled !== false) {
+      const ic = o.icon && o.icon.icon;
+      if (ic && ic.resName && APP_SETTINGS_ICON.test(ic.resName)) return o;
+    }
+    for (const k in o) {
+      const v = o[k];
+      if (v && typeof v === "object") {
+        const a = findSettingsAction(v);
+        if (a) return a;
+      }
+    }
+    return null;
+  }
+
   function readPref(key, allowed, fallback) {
     try {
       const v = global.localStorage.getItem(key);
@@ -96,6 +166,223 @@
       this.speedReading = null; // the latest {"type":"speedometer"} from the host
       this.mapArea = null; // the map area the panels leave free (sendVisibleArea), surface pixels
       this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
+      // the app's own settings while the settings page shows them (openAppSettings), else null
+      this.appSettings = null;
+    }
+
+    // ---- the app's own settings, drawn by the settings page (carapp-settings-view.js) ----------
+
+    /**
+     * Opens the app's own settings for the settings page, or takes over the ones already open:
+     * listener(state) hears {state, template, depth, busy, reason} now and on every change:
+     * "opening" (the settings action tapped, its screen not here yet), "open" (template: the
+     * app's screen on top, depth: how many screens above the map, 1 for the settings screen
+     * itself; busy while a back is on its way), "closed" (the app closed its settings itself) or
+     * "unavailable" (reason: "offline", "noAction" when the current screen has no settings
+     * action, e.g. while the app shows a dialog, "noNames" when the host is too old to name the
+     * icons, "noAnswer").
+     */
+    openAppSettings(listener) {
+      const s = this.appSettings;
+      if (s && (s.state === "open" || s.state === "opening")) {
+        // the page again (a section drawn again, or back before the screens were popped)
+        if (s.target === 0) s.target = null;
+        s.listener = listener;
+        this.tellAppSettings();
+        return;
+      }
+      if (s) this.endAppSettings();
+      const wrapper = this.template;
+      const action = wrapper ? findSettingsAction(wrapper.template || wrapper) : null;
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !wrapper) {
+        listener({ state: "unavailable", reason: "offline", depth: 0 });
+        return;
+      }
+      if (!action) {
+        // "noNames": the car-app host does not name icons yet (an older runtime)
+        listener({ state: "unavailable", reason: hasIconNames(wrapper) ? "noAction" : "noNames", depth: 0 });
+        return;
+      }
+      const t = {
+        listener: listener,
+        base: stackIds(wrapper), // the map's stack; corrected by the settings screen's own
+        state: "opening",
+        template: null,
+        first: null, // the latest template of the settings screen itself (depth 1)
+        depth: 0,
+        target: null, // the depth backs are popping to (0: closing), or null
+        pending: false, // a back sent, its template not here yet
+        timer: null,
+        reason: null,
+      };
+      this.appSettings = t;
+      t.timer = setTimeout(() => {
+        if (this.appSettings !== t || t.state !== "opening") return;
+        if (t.target === 0) {
+          this.endAppSettings();
+          return;
+        }
+        // kept: the screen arriving late still counts as the settings
+        t.state = "unavailable";
+        t.reason = "noAnswer";
+        this.tellAppSettings();
+      }, APP_SETTINGS_OPEN_MS);
+      this.send({ type: "click", cb: action.onClickDelegate.$cb });
+      this.tellAppSettings();
+    }
+
+    /** The settings page goes back one screen of the app's settings (a sub-screen's back). */
+    appSettingsBack() {
+      const s = this.appSettings;
+      if (!s || s.state !== "open" || s.depth <= 1) return;
+      this.popAppSettings(s.depth - 1);
+    }
+
+    /** Back to the app's settings screen itself (a sub-screen closed). */
+    appSettingsToTop() {
+      const s = this.appSettings;
+      if (s && s.state === "open" && s.depth > 1) this.popAppSettings(1);
+    }
+
+    /**
+     * The settings page no longer shows the app's settings (another section, the map): their
+     * screens are popped until the map is the app's screen again, and from then on templates go
+     * over the map as before.
+     */
+    closeAppSettings() {
+      const s = this.appSettings;
+      if (!s) return;
+      s.listener = null;
+      if (s.state === "opening") {
+        // the settings screen is on its way: popped when it arrives (or forgotten at the timeout)
+        s.target = 0;
+        return;
+      }
+      if (!s.depth) {
+        this.endAppSettings();
+        return;
+      }
+      this.popAppSettings(0);
+    }
+
+    popAppSettings(depth) {
+      const s = this.appSettings;
+      s.target = depth;
+      this.tellAppSettings();
+      this.pumpAppSettingsBack();
+    }
+
+    /** One back at a time, each sent after the template answering the one before. */
+    pumpAppSettingsBack() {
+      const s = this.appSettings;
+      if (!s || s.target === null || s.pending) return;
+      if (s.depth <= s.target) {
+        this.reachedAppSettingsTarget();
+        return;
+      }
+      s.pending = true;
+      clearTimeout(s.timer);
+      s.timer = setTimeout(() => {
+        // the app kept its screen (a question of its own, or no answer): the page stays where it is
+        if (this.appSettings !== s) return;
+        s.pending = false;
+        if (s.target === 0) {
+          // closing: what the app shows now goes over the map, where the driver sees it
+          this.endAppSettings();
+          return;
+        }
+        s.target = null;
+        this.tellAppSettings();
+      }, APP_SETTINGS_STEP_MS);
+      this.send({ type: "back" });
+    }
+
+    reachedAppSettingsTarget() {
+      const s = this.appSettings;
+      const closing = s.target === 0;
+      s.target = null;
+      if (closing) this.endAppSettings();
+      else this.tellAppSettings();
+    }
+
+    /** the app's settings forgotten: the latest template goes over the map */
+    endAppSettings() {
+      const s = this.appSettings;
+      if (!s) return;
+      clearTimeout(s.timer);
+      this.appSettings = null;
+      if (s.depth && s.template) this.template = s.template;
+      this.draw();
+    }
+
+    tellAppSettings() {
+      const s = this.appSettings;
+      if (!s || !s.listener) return;
+      s.listener({
+        state: s.state,
+        template: s.template,
+        depth: s.depth,
+        busy: s.target !== null,
+        reason: s.reason,
+        first: s.first,
+      });
+    }
+
+    /**
+     * A template while the app's settings are open: true when it is one of their screens (kept
+     * for the settings page, not drawn over the map), false for the map's own.
+     */
+    routeAppSettings(wrapper) {
+      const s = this.appSettings;
+      const ids = stackIds(wrapper);
+      if (!s.depth && s.state !== "open") {
+        // waiting for the settings screen: one screen above the map's stack, whose own top may
+        // have been refreshed (a new id) between the tap and the push; a refresh of the map
+        // itself moves the base along
+        const n = s.base.length;
+        if (ids.length === n + 1 && endsWith(ids, s.base.slice(1))) {
+          s.base = ids.slice(1);
+        } else {
+          if (ids.length === n && endsWith(ids, s.base.slice(1))) s.base = ids;
+          return false;
+        }
+      }
+      const depth = depthAbove(ids, s.base);
+      const fewer = depth < s.depth;
+      if (fewer || depth === 0) s.pending = false;
+      if (s.pending === false) clearTimeout(s.timer);
+      if (depth === 0) {
+        // back at the map: popped by the page, or the app closed its settings itself
+        s.depth = 0;
+        s.template = null;
+        s.first = null;
+        if (s.target === 0) {
+          this.endAppSettings();
+        } else {
+          s.state = "closed";
+          s.target = null;
+          this.tellAppSettings();
+        }
+        return false;
+      }
+      s.state = "open";
+      s.reason = null;
+      s.depth = depth;
+      s.template = wrapper;
+      if (depth === 1) s.first = wrapper;
+      if (s.target !== null && depth <= s.target) this.reachedAppSettingsTarget();
+      else if (s.target !== null) this.pumpAppSettingsBack();
+      else this.tellAppSettings();
+      return true;
+    }
+
+    /** an icon of the templates for the settings page: its URL and whether it is a single-colour glyph */
+    appIcon(id) {
+      return this.icons.get(id) || null;
+    }
+
+    appIconIsGlyph(id) {
+      return this.mono.get(id) === true;
     }
 
     /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin, mapSize, panelSize, mapSharpness, speedometer, speedometerPosition, speedometerSupport}. */
@@ -321,6 +608,13 @@
       ws.onmessage = (e) => this.onMessage(JSON.parse(e.data));
       ws.onclose = () => {
         if (this.socket === ws) this.socket = null;
+        // the host went (the app restarting): its screens with it
+        const s = this.appSettings;
+        if (s) {
+          clearTimeout(s.timer);
+          this.appSettings = null;
+          if (s.listener) s.listener({ state: "unavailable", reason: "offline", depth: 0 });
+        }
         this.checkModeOnce();
         clearTimeout(this.retry);
         this.retry = setTimeout(() => this.connect(), RETRY_MS);
@@ -366,6 +660,8 @@
           break;
         }
         case "template":
+          // the app's settings screens go to the settings page while it shows them
+          if (this.appSettings && this.routeAppSettings(m.template)) break;
           this.template = m.template;
           this.draw();
           break;
@@ -433,6 +729,8 @@
           }
         }
         this.mono.set(id, mono && n > 0);
+        // the settings page draws glyphs in its own text colour
+        if (mono && n > 0 && this.appSettings && this.appSettings.template) this.tellAppSettings();
         if (mono && n > 0 && this.template && !this.redrawQueued) {
           this.redrawQueued = true;
           requestAnimationFrame(() => {

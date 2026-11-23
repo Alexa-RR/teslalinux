@@ -9,7 +9,10 @@
      Open through a web server (fetch of the JSON files): python3 -m http.server in web/.
      URL parameters: t=TEMPLATE, look=rounded|graphite, night=1, nav=1 (the app navigates),
      alert=1, toast=1, speed=READING (a sample speedometer reading: city, over, noLimit, us,
-     usFast), speedo=both|limit|off, at=bottomRight|topLeft (its position), shot=1 (the display alone at 1:1, for screenshots). -->
+     usFast), speedo=both|limit|off, at=bottomRight|topLeft (its position), shot=1 (the display alone at 1:1, for screenshots),
+     view=settings (a template drawn as the settings page's "Waze's settings" group, carapp-settings-view.js,
+     with a stand-in for the car controller: the settings samples' screen stacks give the depth, a
+     sub-screen opens in a sheet; driving=1 caps the lists as the car's restrictions do). -->
 <style>
   @font-face { font-family: "Roboto"; src: url("../../fonts/Roboto-Regular.ttf"); }
   @font-face { font-family: "Material Icons"; src: url("../../fonts/MaterialIcons-Regular.otf"); }
@@ -43,15 +46,26 @@
   #log { margin: 8px 16px; font-family: monospace; white-space: pre-wrap; max-height: 20vh; overflow: auto; }
   body.shot #bar, body.shot #log { display: none; }
   body.shot #stage { margin: 0; }
+  /* the settings page's view: the page's pane at the car's width */
+  body.settings #stage { display: none; }
+  #page-settings { margin: 0 16px; height: 70vh; border-radius: 18px; overflow: hidden; position: relative; }
+  #page-settings .pane { height: 100%; }
+  body:not(.settings) #page-settings { display: none; }
+  body.shot.settings #page-settings { margin: 0; height: 100vh; border-radius: 0; }
 </style>
 <link rel="stylesheet" href="carapp.css">
+<link rel="stylesheet" href="../../css/settings.css">
 </head>
 <body>
 <div id="bar"></div>
 <div id="stage"><div id="display"><div id="templates"></div><div id="speedo"></div><div id="popups" class="carapp-popups"></div></div></div>
+<section id="page-settings"><main class="pane"><div class="content" id="settings-content"></div></main></section>
 <div id="log"></div>
+<script>window.TAHtml = window.TAHtml || {};</script>
+<script src="../settings/settings-ui.js"></script>
 <script src="carapp-renderer.js"></script>
 <script src="carapp-speedometer.js"></script>
+<script src="carapp-settings-view.js"></script>
 <script>
   "use strict";
   // icons 0-21 of the test templates (0: the app icon): simple shapes drawn here (the real ones
@@ -118,6 +132,7 @@
       t: params.get("t") || Object.keys(data.templates)[0],
       look: params.get("look") === "graphite" ? "graphite" : "rounded",
       night: params.get("night") === "1",
+      view: params.get("view") === "settings" ? "settings" : "car",
       speed: readings[params.get("speed")] ? params.get("speed") : "city",
       speedo: TLCarSpeedometer.MODES.indexOf(params.get("speedo")) >= 0 ? params.get("speedo") : "both",
       at: TLCarSpeedometer.POSITIONS.indexOf(params.get("at")) >= 0 ? params.get("at") : "bottomRight",
@@ -130,6 +145,51 @@
         area: r.visibleArea(1472, 768), width: 1472, height: 768 });
     });
     r.navigating = params.get("nav") === "1";
+    // the settings page's view of the app's settings (view=settings): a stand-in for the car
+    // controller (js/carapp/carapp-controller.js openAppSettings) hands it the chosen sample as the
+    // app's top screen, at the depth its screen stack has above the map's (data.settingsMapStack
+    // screens), and the settings screen's sample under a sub-screen
+    const settingsPage = document.getElementById("page-settings");
+    TAHtml.SettingsUI.mount(settingsPage);
+    const fakeCar = {
+      appSettings: null,
+      restrictions: params.get("driving") === "1" ? { active: true, maxItems: 6 } : null,
+      send: (m) => log(m),
+      appIcon: iconUrl,
+      appIconIsGlyph: (id) => GLYPHS.has(id),
+      openAppSettings(listener) {
+        this.appSettings = { listener: listener };
+        this.tell();
+      },
+      tell() {
+        const w = data.templates[state.t];
+        const depth = Math.max(1, ((w && w.templateInfosForScreenStack) || []).length - (data.settingsMapStack || 0));
+        if (this.appSettings) this.appSettings.listener({ state: "open", template: w, depth: depth, busy: false, first: data.templates.settings || w });
+      },
+      appSettingsBack() {
+        log({ type: "back" });
+      },
+      appSettingsToTop() {
+        log({ type: "back", to: "the settings screen" });
+        if (data.templates.settings) show("settings");
+      },
+      closeAppSettings() {},
+      endAppSettings() {
+        log({ type: "(shown on the map)" });
+      },
+    };
+    let settingsView = null;
+    const drawSettings = () => {
+      document.body.classList.toggle("settings", state.view === "settings");
+      settingsPage.dataset.theme = state.night ? "night" : "day";
+      if (state.view !== "settings") return;
+      if (!settingsView) {
+        settingsView = new TLCarAppSettingsView(fakeCar, { onMap: () => log({ page: "closed to the map" }) });
+        document.getElementById("settings-content").replaceChildren(settingsView.element());
+      } else {
+        fakeCar.tell();
+      }
+    };
     const bar = document.getElementById("bar");
     const button = (label, onclick, pressed) => {
       const b = document.createElement("button");
@@ -144,6 +204,7 @@
       document.getElementById("display").classList.toggle("night", state.night);
       if (r.setLook) r.setLook(state.look, state.night);
       drawSpeedo();
+      drawSettings();
     }
     const show = (name) => {
       state.t = name;
@@ -151,6 +212,7 @@
       if (r.navigating && !/^navigation/.test(name)) r.render(data.templates.navigationLanes);
       r.render(data.templates[name]);
       drawSpeedo();
+      drawSettings();
     };
     for (const name of Object.keys(data.templates)) button(name, () => show(name), () => state.t === name);
     sep();
@@ -158,6 +220,8 @@
     button("Graphite", () => (state.look = "graphite"), () => state.look === "graphite");
     button("Day", () => (state.night = false), () => !state.night);
     button("Night", () => (state.night = true), () => state.night);
+    button("Over the map", () => (state.view = "car"), () => state.view === "car");
+    button("Settings page", () => (state.view = "settings"), () => state.view === "settings");
     sep();
     button("Navigating", () => { r.navigating = !r.navigating; show(state.t); }, () => r.navigating);
     button("Toast", () => r.toast(popups, data.toast, false));

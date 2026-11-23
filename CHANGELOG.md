@@ -19,6 +19,17 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### Waze's own settings in Settings
+
+*Car mode. Settings > Waze > Waze's settings.*
+
+- Waze's car settings now appear in the settings page itself, exactly as Waze offers them and in
+  Waze's language: roads to avoid, toll and HOV passes, vehicle type, sound, privacy, your account
+  and the rest. Switches, choices and sub-pages work as in Waze, and every change goes straight to
+  Waze, so they stay right whatever Waze version is installed.
+- Leaving the settings page puts Waze back on its map. If Waze is asking something on the map at
+  that moment, the group says so: answer it there first.
+
 ### The speedometer on the car screen
 
 *Car mode, both looks, day and night. Settings > Waze interface > Speedometer.*

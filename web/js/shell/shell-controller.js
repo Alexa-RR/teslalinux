@@ -61,6 +61,8 @@
       // (css/settings.css); the other pages keep both
       this.panelShell.classList.toggle("is-settings", pageId === "settings");
       this.displayController.setPaused(!isHome);
+      // teslalinux: what the settings page opened in the app (Waze's own settings) closes with it
+      if (pageId !== "settings" && this.settingsController.onHidden) this.settingsController.onHidden();
 
       this._renderNavSelection(pageId);
 

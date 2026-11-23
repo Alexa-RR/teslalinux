@@ -154,6 +154,7 @@
         ["waze.mapsize", "waze", "Map text size", "map size street names zoom labels symbols", car],
         ["waze.pacing", "waze", "Map frame rate", "map frame rate fps smooth 60 30", car],
         ["waze.sharpness", "waze", "Map sharpness", "map sharpness render scale blurry", car],
+        ["waze.appsettings", "waze", "Waze's settings", "waze own settings voice alerts reports units navigation avoid tolls sound", car],
         ["display.renderer", "display", "Picture format", "renderer h264 mjpeg webcodecs codec stream"],
         ["display.resolution", "display", "Resolution", "resolution native 832p 720p sharp pixels"],
         ["display.quality", "display", "Image quality", "quality compression jpeg"],
@@ -236,6 +237,16 @@
       this._refreshCacheSoon();
     }
 
+    /**
+     * The page is no longer shown (the map, another page) or the Waze section left: Waze's own
+     * settings screens, opened for the "Waze's settings" group, are closed in Waze (back until
+     * its map is its screen again, js/carapp/carapp-controller.js closeAppSettings).
+     */
+    onHidden() {
+      const car = global.TLCarApp;
+      if (car && car.closeAppSettings) car.closeAppSettings();
+    }
+
     /** the section drawn again where it is (after a change), and the rail */
     async _rerender() {
       await this._renderActiveSection(true);
@@ -249,6 +260,8 @@
         this._pollTimer = null;
       }
       const section = this.sections.find((s) => s.id === this.activeSectionId) || this.sections[0];
+      // Waze's own settings screens are open only while the Waze section shows them
+      if (section.id !== "waze") this.onHidden();
       if (this.titleEl) this.titleEl.textContent = section.title;
       const scroll = this.pane ? this.pane.scrollTop : 0;
       if (section.render) {
@@ -2304,6 +2317,12 @@
         });
         const showSkinWarning = unverified && this._staged("mapcolours", savedColours) === "graphite";
         out.push(UI.group("Map", [showSkinWarning ? UI.warnbox(this._skinUnavailable(look)) : null, mr, zr, pc, sh].filter(Boolean)));
+      }
+      // Waze's own car settings, drawn from its settings screens (js/carapp/carapp-settings-view.js):
+      // only while the car interface runs (its channel is there), not while Car is only staged
+      if (isCar && car && car.mode === "car" && car.openAppSettings && global.TLCarAppSettingsView) {
+        const view = new global.TLCarAppSettingsView(car, { onMap: () => this.onClose && this.onClose() });
+        out.push(view.element());
       }
       return out;
     }

@@ -11,6 +11,11 @@
         "versionName": "Unreleased",
         "changelogItems": [
           {
+            "title": "Waze's own settings in Settings",
+            "shortDescription": "Car mode. Settings > Waze > Waze's settings.",
+            "descriptionMarkdown": "• Waze's car settings now appear in the settings page itself, exactly as Waze offers them and in Waze's language: roads to avoid, toll and HOV passes, vehicle type, sound, privacy, your account and the rest. Switches, choices and sub-pages work as in Waze, and every change goes straight to Waze, so they stay right whatever Waze version is installed.\n• Leaving the settings page puts Waze back on its map. If Waze is asking something on the map at that moment, the group says so: answer it there first."
+          },
+          {
             "title": "The speedometer on the car screen",
             "shortDescription": "Car mode, both looks, day and night. Settings > Waze interface > Speedometer.",
             "descriptionMarkdown": "• The speedometer is now drawn by the car screen instead of inside Waze's map: the current speed in a bubble and the road's speed limit as a road sign beside it, at the bottom right next to the map buttons. It follows the look (Rounded or Graphite), day and night, and Panel size. The speed turns red above the limit, as in Waze; speeds are in miles where Waze uses miles, with the US speed limit sign where Waze shows that one.\n• Settings > Waze interface > Speedometer: Speed and limit (the default), Limit only, or Off; and Speedometer position: bottom right (the default) or under the directions at the top left.\n• This needs a Waze version the device has checked (now 5.27.5). With any other version Waze keeps drawing its own, and the setting says so. In the phone interface Waze's own speedometer is back."

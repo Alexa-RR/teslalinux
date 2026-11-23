@@ -2239,3 +2239,113 @@ body:has(#panel-shell.is-settings:not([hidden])) {
     bottom: 8px;
   }
 }
+
+/* ---------- Waze's own settings (js/carapp/carapp-settings-view.js): its screens in our rows ---------- */
+#page-settings .waze-app.is-busy .group-body,
+#page-settings .waze-app-sheet.is-busy .sheet-body {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.2s 0.15s;
+}
+
+#page-settings .waze-app-sub {
+  margin: 18px 0 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-3);
+}
+
+#page-settings .group-body > .waze-app-sub:first-child,
+#page-settings .sheet-body > .waze-app-sub:first-child {
+  margin-top: 4px;
+}
+
+#page-settings .waze-app-sub + .row::before {
+  display: none;
+}
+
+#page-settings .waze-app-row .row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#page-settings .waze-app-row .row-detail {
+  white-space: pre-line;
+}
+
+#page-settings .waze-app-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  background: center / contain no-repeat;
+}
+
+#page-settings .waze-app-icon.glyph {
+  background-color: var(--ink-2);
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+}
+
+#page-settings .btn .waze-app-icon {
+  width: 24px;
+  height: 24px;
+}
+
+#page-settings .waze-app-list .pick {
+  justify-content: flex-start;
+}
+
+#page-settings .waze-app-pick-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+
+#page-settings .waze-app-pick-text small {
+  white-space: pre-line;
+}
+
+#page-settings .waze-app-wait {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 80px;
+  color: var(--ink-3);
+}
+
+#page-settings .waze-app-note {
+  display: grid;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+#page-settings .waze-app-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 0;
+}
+
+#page-settings .waze-app-back {
+  margin: -8px 0 6px;
+}
+
+#page-settings .waze-app-pin {
+  margin: 12px 0;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+#page-settings .waze-app-uri {
+  overflow-wrap: anywhere;
+  color: var(--blue);
+}
+
+#page-settings .waze-app-message {
+  margin: 8px 0;
+  font-size: 17px;
+  line-height: 1.45;
+  white-space: pre-line;
+}

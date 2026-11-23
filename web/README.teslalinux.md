@@ -196,6 +196,21 @@ Changes from upstream:
   sizes the panels drawn here: the renderer lays them out at `surface.dpi` times that factor (both
   looks size everything from that density), redrawn at once, and the map area they leave free goes
   to the app again. Kept by this browser only; the app's map is not affected.
+  "Waze's settings" (Settings > Waze, the last group, while the car interface runs): the app's own
+  car settings drawn by the settings page (`js/carapp/carapp-settings-view.js`, new, one
+  `<script defer>` line). `carapp-controller.js` `openAppSettings` taps the app's settings action,
+  found by its icon's resource name (`resName` from the car-app host), and while the page shows
+  them keeps the app's settings screens off the map: a template whose screen stack
+  (`templateInfosForScreenStack`) lies above the map's is handed to the view. The view draws the
+  settings screen as the group (sections as headings, rows with switches, chevrons for sub-screens)
+  and a sub-screen the app pushes in a sheet (a choice as ticked picker rows, the passes search
+  with its filter, questions with their buttons); switches, choices and taps go to the app as the
+  car panels' `checked` / `selected` / `click`, and what is shown is always the app's newest
+  template, in the app's language. Closing the sheet is back to the settings screen; leaving the
+  Waze section or the page (`SettingsController.onHidden`, also from `shell-controller.js`) pops
+  the app's screens with `back`, one per answered template, until the map is its screen again.
+  Where the app's current screen has no settings action (a question over the map), the group says
+  so instead. `test.html?view=settings` draws the `settings*` samples this way.
 * `fonts/Inter-Regular-car.woff2`, `fonts/Inter-Bold-car.woff2` (new): the Graphite look's text
   face, Inter 4.001 by The Inter Project Authors (SIL Open Font License 1.1, `fonts/Inter-OFL.txt`,
   github.com/rsms/inter), the static Regular and Bold cut to Latin, Latin-1 and Latin Extended-A

@@ -242,8 +242,94 @@
           {"$": "Action", "flags": 1, "type": 1, "enabled": true, "title": "Start new drive", "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1102}}
         ]
       }
+    },
+    "settings": {
+      "$": "TemplateWrapper", "id": "settings-1",
+      "templateInfosForScreenStack": [{"$": "TemplateInfo", "templateId": "settings-1"}, {"$": "TemplateInfo", "templateId": "map-1"}],
+      "template": {
+        "$": "ListTemplate",
+        "headerAction": {"$": "Action", "flags": 0, "type": 65539, "enabled": true, "standard": true},
+        "title": "Settings",
+        "sectionedLists": [
+          {"$": "SectionedItemList", "header": "Driving", "itemList": {"$": "ItemList", "items": [
+            {"$": "Row", "title": "Routes", "browsable": true, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1301}},
+            {"$": "Row", "title": "Road passes", "browsable": true, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1302}},
+            {"$": "Row", "title": "Vehicle", "browsable": true, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1303}}
+          ]}},
+          {"$": "SectionedItemList", "header": "General", "itemList": {"$": "ItemList", "items": [
+            {"$": "Row", "title": "Voice and sound", "browsable": true, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1304}},
+            {"$": "Row", "title": "Privacy", "browsable": true, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1305}},
+            {"$": "Row", "title": "Hidden on the map", "texts": ["Off"], "browsable": true, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1306}},
+            {"$": "Row", "title": "Report a problem", "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1307}},
+            {"$": "Row", "title": "Version 1.2.3", "enabled": true}
+          ]}}
+        ]
+      }
+    },
+    "settingsRoutes": {
+      "$": "TemplateWrapper", "id": "settings-routes-1",
+      "templateInfosForScreenStack": [{"$": "TemplateInfo", "templateId": "settings-routes-1"}, {"$": "TemplateInfo", "templateId": "settings-1"}, {"$": "TemplateInfo", "templateId": "map-1"}],
+      "template": {
+        "$": "ListTemplate",
+        "headerAction": {"$": "Action", "flags": 0, "type": 65539, "enabled": true, "standard": true},
+        "title": "Routes",
+        "singleList": {"$": "ItemList", "items": [
+          {"$": "Row", "title": "Avoid toll roads", "enabled": true, "toggle": {"$": "Toggle", "checked": true, "enabled": true, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 1311}}},
+          {"$": "Row", "title": "Avoid ferries", "enabled": true, "toggle": {"$": "Toggle", "enabled": true, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 1312}}},
+          {"$": "Row", "title": "Avoid motorways", "enabled": true, "toggle": {"$": "Toggle", "enabled": true, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 1313}}},
+          {"$": "Row", "title": "Dirt roads", "browsable": true, "enabled": true, "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1314}},
+          {"$": "Row", "title": "נתיב תחבורה ציבורית", "texts": ["Only when the app allows it"], "enabled": false, "toggle": {"$": "Toggle", "enabled": false, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 1315}}}
+        ]}
+      }
+    },
+    "settingsChoice": {
+      "$": "TemplateWrapper", "id": "settings-choice-1",
+      "templateInfosForScreenStack": [{"$": "TemplateInfo", "templateId": "settings-choice-1"}, {"$": "TemplateInfo", "templateId": "settings-routes-1"}, {"$": "TemplateInfo", "templateId": "settings-1"}, {"$": "TemplateInfo", "templateId": "map-1"}],
+      "template": {
+        "$": "ListTemplate",
+        "headerAction": {"$": "Action", "flags": 0, "type": 65539, "enabled": true, "standard": true},
+        "title": "Dirt roads",
+        "singleList": {"$": "ItemList", "selectedIndex": 1, "onSelectedDelegate": {"$": "OnSelectedDelegateImpl", "$cb": 1321}, "items": [
+          {"$": "Row", "title": "Allow", "enabled": true, "image": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 6, "type": 2}}},
+          {"$": "Row", "title": "Don't allow", "enabled": true, "image": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 17, "type": 2}}},
+          {"$": "Row", "title": "Avoid long ones", "texts": ["Short stretches are fine"], "enabled": true, "image": {"$": "CarIcon", "type": 1, "icon": {"$": "IconCompat", "icon": 14, "type": 2}}}
+        ]}
+      }
+    },
+    "settingsPasses": {
+      "$": "TemplateWrapper", "id": "settings-passes-1",
+      "templateInfosForScreenStack": [{"$": "TemplateInfo", "templateId": "settings-passes-1"}, {"$": "TemplateInfo", "templateId": "settings-1"}, {"$": "TemplateInfo", "templateId": "map-1"}],
+      "template": {
+        "$": "SearchTemplate",
+        "headerAction": {"$": "Action", "flags": 0, "type": 65539, "enabled": true, "standard": true},
+        "searchHint": "Search", "initialSearchText": "",
+        "searchCallbackDelegate": {"$": "SearchCallbackDelegateImpl", "$cb": 1331},
+        "actionStrip": {"$": "ActionStrip", "actions": [{"$": "Action", "flags": 0, "type": 1, "enabled": true, "title": "Passes you have", "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1332}}]},
+        "itemList": {"$": "ItemList", "selectedIndex": 0, "items": [
+          {"$": "Row", "title": "  ", "texts": [{"$": "CarText", "text": "Local passes", "spans": [{"start": 0, "end": 12, "span": {"$": "ForegroundCarColorSpan", "color": {"$": "CarColor", "color": 0, "colorDark": 0, "type": 3}}}]}], "enabled": true},
+          {"$": "Row", "title": "Toll road subscription", "enabled": true, "toggle": {"$": "Toggle", "checked": true, "enabled": true, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 1333}}},
+          {"$": "Row", "title": "Express lane tag", "enabled": true, "toggle": {"$": "Toggle", "enabled": true, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 1334}}},
+          {"$": "Row", "title": "  ", "texts": ["Other passes"], "enabled": true},
+          {"$": "Row", "title": "City centre permit", "enabled": true, "toggle": {"$": "Toggle", "enabled": true, "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 1335}}}
+        ]}
+      }
+    },
+    "settingsQuestion": {
+      "$": "TemplateWrapper", "id": "settings-question-1",
+      "templateInfosForScreenStack": [{"$": "TemplateInfo", "templateId": "settings-question-1"}, {"$": "TemplateInfo", "templateId": "settings-1"}, {"$": "TemplateInfo", "templateId": "map-1"}],
+      "template": {
+        "$": "LongMessageTemplate",
+        "headerAction": {"$": "Action", "flags": 0, "type": 65539, "enabled": true, "standard": true},
+        "title": "Hidden on the map",
+        "message": "Hide yourself on the map?\n\nOther drivers will not see your name or icon.",
+        "actions": [
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "title": "Cancel", "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1341}},
+          {"$": "Action", "flags": 0, "type": 1, "enabled": true, "title": "Hide me", "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": 1342}}
+        ]
+      }
     }
   },
+  "settingsMapStack": 1,
   "alert": {
     "$": "Alert", "id": 7, "durationMillis": 10000,
     "title": "Police reported ahead",

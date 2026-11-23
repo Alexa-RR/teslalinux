@@ -92,9 +92,15 @@ Host to page:
 - `{"type":"template","seq":N,"template":T}`: the current template (`TemplateWrapper`), as the
   library's model objects: `{"$":"ClassName", property: value, ...}` from their public getters;
   text as strings, colours as `CarColor` (`type`, `color`/`colorDark` signed ARGB), icons as
-  `{"$":"IconCompat","icon":N}`, callbacks as `{"$":"OnClickDelegateImpl","$cb":ID}`. Callback ids
-  are valid until the next template. A `CarText` with spans is `{"$":"CarText","text":S,"spans":
+  `{"$":"IconCompat","icon":N}` (one of the app's drawables also with `"resName"`, its resource
+  entry name, e.g. `"settings_outline_24px"`: what it shows, the same across app versions,
+  where `resId` changes with every build), callbacks as `{"$":"OnClickDelegateImpl","$cb":ID}`.
+  Callback ids are valid until the next template. A `CarText` with spans is `{"$":"CarText","text":S,"spans":
   [{"start":A,"end":B,"span":{"$":"ForegroundCarColorSpan"|"CarIconSpan"|"DurationSpan"|"DistanceSpan",...}}]}`.
+  The wrapper's `templateInfosForScreenStack` (`[{"$":"TemplateInfo","templateId":S}]`, top first)
+  is the app's screen stack (its `ScreenManager`): a screen keeps its id while screens lie above it
+  and when it is popped back to, so a page tells a pushed screen from a refreshed one by it (as
+  the AOSP host's `TemplateValidator` does).
 - `{"type":"navigation","active":B}`: whether the app navigates (`NavigationManager.navigationStarted`
   / `navigationEnded`); state, sent to every new page. While it does, the page offers the end-drive
   control and keeps the next step in view as a pill over side panels.
@@ -128,7 +134,13 @@ Page to host:
 - `{"type":"search","cb":ID,"text":T,"submit":B}`: search text typed or submitted (`SearchCallbackDelegate`).
 - `{"type":"pan","cb":ID,"on":B}`: pan mode on or off (the map action strip's PAN action;
   `PanModeDelegate`).
-- `{"type":"back"}`: back (`AppManager.onBackPressed`).
+- `{"type":"back"}`: back (`AppManager.onBackPressed`; the app's `ScreenManager` pops its top screen).
+  The settings page uses only these messages to show the app's own settings (Settings > Waze >
+  Waze's settings, `js/carapp/carapp-settings-view.js`): it clicks the action whose icon's
+  `resName` names settings (`/(^|_)settings?(_|$)/`), draws the templates whose screen stack lies
+  above the one it clicked from in the page instead of over the map, sends `click` / `checked` /
+  `selected` for their rows, and when the page stops showing them sends `back`, one at a time
+  (each after the template answering the previous), until the stack is the one it started from.
 - `{"type":"visibleArea","left":L,"top":T,"right":R,"bottom":B}`: the part of the map the panels leave
   free, inside their margins (display pixels), passed to the app as its visible and stable areas
   (the app keeps its car and route in it; the page's speedometer stands at its bottom right, where
