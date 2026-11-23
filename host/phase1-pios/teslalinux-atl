@@ -80,9 +80,36 @@ fi
 # app service draws only the car map.
 LAUNCH_ARGS=()
 unset ATL_FILE_OVERLAYS ATL_APP_CLASS_OVERRIDES
+# classes ATL loads in front of the app's own (ATL_APP_CLASS_OVERRIDES), each made here from the
+# installed APK by a tool that knows the app versions it was checked with (the APK is never changed)
+OVERRIDES=()
+OVERRIDE_DIR="$HOME/.cache/teslalinux/app-overrides"
+VC="$(sed -n 's/.*"versionCode": *\([0-9]*\).*/\1/p' "$APP_DIR/installed.json" 2>/dev/null | head -1)"
+SPEEDO_TOOL="${TESLALINUX_SPEEDOMETER_TOOL:-/usr/local/lib/teslalinux/apps/waze-speedometer.py}"
 if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
   export ATL_CAR_HOST=1 ATL_CAR_APP_CHANNEL_PORT="${ATL_CAR_APP_CHANNEL_PORT:-9995}"
   LAUNCH_ARGS+=(--background)
+  # the speedometer: Waze draws its own into the car map (speed and the road's speed limit, bottom
+  # right), where the car page can neither place nor style it. For the Waze versions
+  # tools/apps/waze-speedometer.py knows, the app's own speedometer readings go to the car page
+  # instead (a class ATL loads in front of the app's, which hands each reading to ATL's car-app
+  # host: {"type":"speedometer"} on /sockets/carapp), the page draws it (Settings > Waze interface >
+  # Speedometer), and Waze's own is turned off: its "Show speedometer" setting, kept to be put back
+  # in the phone interface. Other versions keep their own. Made again when the app, the tool or ATL
+  # (whose class it extends) changed.
+  SPEEDO_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-speedometer.jar"
+  API_IMPL="$ATL_PREFIX/lib/java/dex/android_translation_layer/api-impl.jar"
+  if [[ -n "$VC" && -r "$SPEEDO_TOOL" && ( ! -s "$SPEEDO_JAR" || "${APKS[0]}" -nt "$SPEEDO_JAR" || "$SPEEDO_TOOL" -nt "$SPEEDO_JAR" || "$API_IMPL" -nt "$SPEEDO_JAR" ) ]]; then
+    mkdir -p "$OVERRIDE_DIR"
+    python3 -I "$SPEEDO_TOOL" jar "$APP_DIR" "$SPEEDO_JAR" --atl "$API_IMPL" >&2 || rm -f "$SPEEDO_JAR"
+  fi
+  if [[ -n "$VC" && -s "$SPEEDO_JAR" ]]; then
+    OVERRIDES+=("$SPEEDO_JAR")
+    python3 -I "$SPEEDO_TOOL" hide "$DATA_DIR" >&2 || true
+  else
+    echo "teslalinux-atl: the car page's speedometer is not available for this app version; it draws its own" >&2
+    if [[ -r "$SPEEDO_TOOL" ]]; then python3 -I "$SPEEDO_TOOL" restore "$DATA_DIR" >&2 || true; fi
+  fi
   # the car map's colours chosen on the settings page (teslalinux-set-app-interface map ...):
   # "graphite" has ATL serve the app its map palette recoloured, in memory, from a file overlay
   # manifest that lists the app versions and original files it was checked against (ATL applies it
@@ -103,19 +130,24 @@ if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
   # the APK is never changed. Made again when the app is updated.
   if [[ "${TESLALINUX_MAP_PACING:-app}" == full ]]; then
     PACING_TOOL="${TESLALINUX_MAP_PACING_TOOL:-/usr/local/lib/teslalinux/apps/waze-map-pacing.py}"
-    PACING_DIR="$HOME/.cache/teslalinux/app-overrides"
-    VC="$(sed -n 's/.*"versionCode": *\([0-9]*\).*/\1/p' "$APP_DIR/installed.json" 2>/dev/null | head -1)"
-    PACING_JAR="$PACING_DIR/com.waze-${VC:-unknown}-map-pacing.jar"
+    PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-pacing.jar"
     if [[ -n "$VC" && ( ! -s "$PACING_JAR" || "${APKS[0]}" -nt "$PACING_JAR" ) && -r "$PACING_TOOL" ]]; then
-      mkdir -p "$PACING_DIR"
+      mkdir -p "$OVERRIDE_DIR"
       python3 -I "$PACING_TOOL" "$APP_DIR" "$PACING_JAR" >&2 || rm -f "$PACING_JAR"
     fi
     if [[ -n "$VC" && -s "$PACING_JAR" ]]; then
-      export ATL_APP_CLASS_OVERRIDES="$PACING_JAR"
+      OVERRIDES+=("$PACING_JAR")
     else
       echo "teslalinux-atl: the full map frame rate is not available for this app version; it keeps its own" >&2
     fi
   fi
+  if (( ${#OVERRIDES[@]} )); then
+    ATL_APP_CLASS_OVERRIDES="$(IFS=:; echo "${OVERRIDES[*]}")"
+    export ATL_APP_CLASS_OVERRIDES
+  fi
+else
+  # the phone interface: Waze draws its own speedometer, as its own setting says
+  if [[ -r "$SPEEDO_TOOL" ]]; then python3 -I "$SPEEDO_TOOL" restore "$DATA_DIR" >&2 || true; fi
 fi
 export ANDROID_LOG_TAGS="${ANDROID_LOG_TAGS:-*:w}"
 export ANDROID_APP_DATA_DIR="$DATA_DIR"

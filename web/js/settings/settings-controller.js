@@ -148,6 +148,8 @@
         ["waze.style", "waze", "Panel style", "look theme rounded graphite style", car],
         ["waze.daynight", "waze", "Day and night", "dark light night day mode theme", car],
         ["waze.panelsize", "waze", "Panel size", "panel buttons size bigger smaller cards", car],
+        ["waze.speedometer", "waze", "Speedometer", "speedometer speed limit sign km/h mph", car],
+        ["waze.speedometerpos", "waze", "Speedometer position", "speedometer position place corner top left bottom right directions", car],
         ["waze.mapcolours", "waze", "Map colours", "map colours colors graphite muted palette", car],
         ["waze.mapsize", "waze", "Map text size", "map size street names zoom labels symbols", car],
         ["waze.pacing", "waze", "Map frame rate", "map frame rate fps smooth 60 30", car],
@@ -2168,7 +2170,40 @@
             { label: "Panel size" },
           ),
         });
-        out.push(UI.group("Car interface look", [sr, dr, pr]));
+        // the speedometer this page draws over the map (carapp-speedometer.js; the device sends the
+        // app's readings for the Waze versions it knows, and Waze's own stays off in all three)
+        const speedSupport = (iface && iface.speedometerSupport) || look.speedometerSupport;
+        const spd = UI.row({
+          id: "waze.speedometer",
+          title: "Speedometer",
+          stack: true,
+          after: speedSupport && !speedSupport.supported ? UI.warnbox(this._speedometerUnavailable(speedSupport)) : null,
+          control: UI.segmented(
+            [
+              { value: "both", label: "Speed and limit", caption: "default" },
+              { value: "limit", label: "Limit only" },
+              { value: "off", label: "Off" },
+            ],
+            look.speedometer || "both",
+            (v) => UI.save(spd, () => car.setLook({ speedometer: v }), "Applied"),
+            { label: "Speedometer" },
+          ),
+        });
+        const spp = UI.row({
+          id: "waze.speedometerpos",
+          title: "Speedometer position",
+          stack: true,
+          control: UI.segmented(
+            [
+              { value: "bottomRight", label: "Bottom right", caption: "beside the map buttons, default" },
+              { value: "topLeft", label: "Under the directions", caption: "top left" },
+            ],
+            look.speedometerPosition || "bottomRight",
+            (v) => UI.save(spp, () => car.setLook({ speedometerPosition: v }), "Applied"),
+            { label: "Speedometer position" },
+          ),
+        });
+        out.push(UI.group("Car interface look", [sr, dr, pr, spd, spp]));
 
         const skin = look.mapSkin;
         const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
@@ -2282,6 +2317,19 @@
           "no-manifest": "Graphite colours are not available on this device (no verified list).",
         }[skin.state] || "Graphite colours are not available for " + installed + ".";
       return why + (look.style === "graphite" ? " Waze's own colours are used, toned down by this screen." : " Waze's own colours are used.");
+    }
+
+    /** the page's speedometer applies only to the Waze versions it was checked with (tools/apps/waze-speedometer.py) */
+    _speedometerUnavailable(support) {
+      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
+      const installed = support.versionCode ? "Waze " + named(support) : "this Waze";
+      const checked = (support.verifiedVersions || []).map(named).join(", ");
+      const why =
+        {
+          "not-installed": "This screen's speedometer is not available: no installed Waze was found.",
+          "no-tool": "This screen's speedometer is not available on this device.",
+        }[support.state] || "This screen's speedometer is not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".";
+      return why + " Waze draws its own on the map.";
     }
 
     /** the full map frame rate applies only to the Waze versions it was checked with (tools/apps/waze-map-pacing.py) */

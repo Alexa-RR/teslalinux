@@ -67,7 +67,11 @@ The app's interface (new routes only):
                           "mapColours": "graphite" | "muted" | "app" | null (not chosen yet), and
                           "mapSkin": whether the graphite map palette applies to the installed app
                           version (map_skin_status: its versionCode and unpacked files against the
-                          verified list of host/appstyle/waze-map-graphite.json, docs/MAP-COLOURS.md)
+                          verified list of host/appstyle/waze-map-graphite.json, docs/MAP-COLOURS.md);
+                          "speedometerSupport": whether the car page draws the speedometer for the
+                          installed app version (speedometer_status: tools/apps/waze-speedometer.py's
+                          verified list) and the speedometer settings the app uses (sign style,
+                          over-the-limit offset)
 * POST /api/appInterface  JSON {"interface": ...} and/or {"mapColours": ...}: `teslalinux-set-app-interface`
                           (one sudoers rule) writes /etc/teslalinux/interface.env and restarts the app
                           if what it starts with changed
@@ -137,8 +141,14 @@ MAP_PACING_TOOLS = tuple(p for p in (
     "/usr/local/lib/teslalinux/apps/waze-map-pacing.py",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "apps", "waze-map-pacing.py"),
 ) if p)
+# the car page's speedometer (the app's readings through ATL's car-app host, verified versions only)
+SPEEDOMETER_TOOLS = tuple(p for p in (
+    os.environ.get("TESLALINUX_SPEEDOMETER_TOOL"),
+    "/usr/local/lib/teslalinux/apps/waze-speedometer.py",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "apps", "waze-speedometer.py"),
+) if p)
 APP_PACKAGE = "com.waze"
-APP_DIR = os.environ.get("TESLALINUX_APP_DIR", "/var/lib/teslalinux/apps/" + APP_PACKAGE)
+APP_DIR =os.environ.get("TESLALINUX_APP_DIR", "/var/lib/teslalinux/apps/" + APP_PACKAGE)
 # ATL's data directory for the app: ANDROID_APP_DATA_DIR/<base APK name>_ (main.c)
 APP_DATA_DIR = os.path.join(os.environ.get("ANDROID_APP_DATA_DIR", "/var/lib/tesla/android/waze"), "base.apk_")
 MAP_SKIN_MANIFESTS = tuple(p for p in (
@@ -769,6 +779,7 @@ def app_interface_state(with_map_skin=False):
     if with_map_skin:
         out["mapSkin"] = map_skin_status()
         out["mapPacingSupport"] = map_pacing_status()
+        out["speedometerSupport"] = speedometer_status()
     return out
 
 
@@ -871,6 +882,51 @@ def map_pacing_status():
         out["state"] = "not-installed"
         return out
     out["state"] = "verified" if vc in verified else "unverified-version"
+    out["supported"] = out["state"] == "verified"
+    return out
+
+
+def _load_tool(paths, name):
+    """the first of PATHS that loads as a module, or None"""
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(name, path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+        except Exception as e:  # a broken tool: reported as missing, never a failed request
+            print("teslalinux-api: %s: %s" % (path, e), flush=True)
+    return None
+
+
+def speedometer_status():
+    """Whether the car page draws the app's speedometer (Settings > Waze interface > Speedometer): the
+    installed versionCode against the versions tools/apps/waze-speedometer.py knows (the launcher's run
+    of the tool also checks the code and ATL, and leaves the app its own speedometer if either
+    differs). state: "verified", "unverified-version", "no-tool", "not-installed". With the app's own
+    speedometer settings, as the app mirrors them (the tool's settings()): "signStyle" ("us": the US
+    rectangle; "world": the round sign), "alertOffset" (when the speed counts as over the limit: above
+    limit + limit * offset / 100 for an offset above 0, else above limit - offset), and "hidden"
+    (whether the launcher has the app's own speedometer turned off)."""
+    inst = _read_json(os.path.join(APP_DIR, "installed.json")) or {}
+    vc, vn = inst.get("versionCode"), inst.get("versionName")
+    out = {"supported": False, "versionCode": vc, "versionName": vn, "verifiedVersions": []}
+    mod = _load_tool(SPEEDOMETER_TOOLS, "waze_speedometer")
+    if mod is None:
+        out["state"] = "no-tool"
+        return out
+    names = getattr(mod, "VERIFIED_NAMES", {})
+    out["verifiedVersions"] = [{"versionCode": v, "versionName": names.get(v)} for v in sorted(mod.VERIFIED)]
+    try:
+        out.update(mod.settings(os.path.dirname(APP_DATA_DIR)))
+    except Exception as e:
+        print("teslalinux-api: speedometer settings: %s" % e, flush=True)
+    if not isinstance(vc, int):
+        out["state"] = "not-installed"
+        return out
+    out["state"] = "verified" if vc in mod.VERIFIED else "unverified-version"
     out["supported"] = out["state"] == "verified"
     return out
 

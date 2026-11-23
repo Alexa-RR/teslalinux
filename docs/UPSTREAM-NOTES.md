@@ -108,6 +108,15 @@ Host to page:
 - `{"type":"mapScale","scale":S,"set":B}`: the map scale, and whether a page has set it since the app
   started; state, sent to every new page and again when it changes. A page with a choice of its own
   sends it while `set` is false, and adopts `scale` once it is true, so all pages agree.
+- `{"type":"speedometer","speed":S,"units":U,"speedLimit":L,"speedKph":K,"miles":B}`: the app's
+  speedometer reading (ATL's `ATLCarSpeedometer`), for the app versions the device knows
+  (`tools/apps/waze-speedometer.py`; there the app's own speedometer is off and the page draws it):
+  the speed the app shows in its unit `U` (as the app names it, e.g. "km/h"; below 0: no speed), the
+  road's speed limit in the same unit (0 or below: none known), the speed in km/h (below 0: none),
+  and whether the unit is miles per hour. State: the latest reading is sent to every new page; a
+  reading equal to the last is not sent again (the app makes one per position, about once a
+  second). The sign style and the over-the-limit offset are the app's settings, in
+  `/api/appInterface` (`speedometerSupport.signStyle`, `.alertOffset`).
 - `{"type":"toast","text":S,"long":B}`: `CarToast` (2 s, or 3.5 s when long).
 - `{"type":"alert","alert":A}`: an `Alert` (car API 5), its callbacks valid until the next alert;
   `{"type":"alertDismiss","id":N}`: the app took it back (`AppManager.dismissAlert`).
@@ -122,7 +131,8 @@ Page to host:
 - `{"type":"back"}`: back (`AppManager.onBackPressed`).
 - `{"type":"visibleArea","left":L,"top":T,"right":R,"bottom":B}`: the part of the map the panels leave
   free, inside their margins (display pixels), passed to the app as its visible and stable areas
-  (the app keeps its car, route and speedometer in it).
+  (the app keeps its car and route in it; the page's speedometer stands at its bottom right, where
+  the app drew its own).
 - `{"type":"stopNavigation"}`: the end-drive control (`NavigationManagerCallback.onStopNavigation`).
 - `{"type":"alertCancel","cb":ID,"reason":R}` / `{"type":"alertDismiss","cb":ID}`: an alert timed out
   (R 1) or was closed (R 2), or went away after one of its actions (`AlertCallback`).

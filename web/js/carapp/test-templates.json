@@ -255,5 +255,15 @@
     ],
     "callbackDelegate": {"$": "AlertCallbackDelegateImpl", "$cb": 1203}
   },
-  "toast": "Route updated, 3 min faster"
+  "toast": "Route updated, 3 min faster",
+  "speedometer": {
+    "note": "Readings as the car-app host sends them ({\"type\":\"speedometer\"}, ATLCarSpeedometer.toJson); 'world' and 'us' are the app's sign styles (/api/appInterface speedometerSupport.signStyle).",
+    "readings": {
+      "city": {"type": "speedometer", "speed": 47, "units": "km/h", "speedLimit": 50, "speedKph": 47.2, "miles": false, "signStyle": "world"},
+      "over": {"type": "speedometer", "speed": 124, "units": "km/h", "speedLimit": 110, "speedKph": 124.4, "miles": false, "signStyle": "world"},
+      "noLimit": {"type": "speedometer", "speed": 88, "units": "km/h", "speedLimit": -1, "speedKph": 88.0, "miles": false, "signStyle": "world"},
+      "us": {"type": "speedometer", "speed": 58, "units": "mph", "speedLimit": 55, "speedKph": 93.3, "miles": true, "signStyle": "us"},
+      "usFast": {"type": "speedometer", "speed": 102, "units": "mph", "speedLimit": 100, "speedKph": 164.2, "miles": true, "signStyle": "us"}
+    }
+  }
 }

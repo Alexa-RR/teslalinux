@@ -19,6 +19,20 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+### The speedometer on the car screen
+
+*Car mode, both looks, day and night. Settings > Waze interface > Speedometer.*
+
+- The speedometer is now drawn by the car screen instead of inside Waze's map: the current speed
+  in a bubble and the road's speed limit as a road sign beside it, at the bottom right next to the
+  map buttons. It follows the look (Rounded or Graphite), day and night, and Panel size. The speed
+  turns red above the limit, as in Waze; speeds are in miles where Waze uses miles, with the US
+  speed limit sign where Waze shows that one.
+- Settings > Waze interface > Speedometer: Speed and limit (the default), Limit only, or Off; and
+  Speedometer position: bottom right (the default) or under the directions at the top left.
+- This needs a Waze version the device has checked (now 5.27.5). With any other version Waze keeps
+  drawing its own, and the setting says so. In the phone interface Waze's own speedometer is back.
+
 ### The car's keyboard by default, voice search off
 
 *Settings > Waze > Keyboard and Settings > Sound > Voice search button.*
@@ -93,6 +107,11 @@ In ATL (the fork):
   Video and GL apps can stream into textures (`SurfaceTexture`), and frames with a presentation
   time (`eglPresentationTimeANDROID`) are shown on time. Storage usage (`StorageStatsManager`) and
   frame timing (`Choreographer` frame data) are now real values.
+- The car-app host passes the app's speedometer to the car page (`ATLCarSpeedometer`, the
+  channel's `speedometer` message, docs/UPSTREAM-NOTES.md). `tools/apps/waze-speedometer.py` makes
+  verified Waze versions' own reading class a subclass of it (a one-class override generated on
+  the device after checking the APK's class and its call site) and turns Waze's map speedometer
+  off through its own setting, kept and put back in the phone interface.
 
 #### Fixed
 

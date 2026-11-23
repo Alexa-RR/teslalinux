@@ -354,6 +354,37 @@ class AppInterface(unittest.TestCase):
         os.unlink(os.path.join(TMP, "apps", "installed.json"))
         self.assertEqual(self.state()["mapPacingSupport"]["state"], "not-installed")
 
+    def test_speedometer(self):
+        prefs = os.path.join(TMP, "appdata", "base.apk_", "shared_prefs")
+        os.makedirs(prefs, exist_ok=True)
+        path = os.path.join(prefs, "com.waze.config.offline.xml")
+        saved = os.path.join(TMP, "appdata", "teslalinux-speedometer.json")
+        self.installed(1030750)  # Waze 5.27.5.0, on tools/apps/waze-speedometer.py's list
+        if os.path.exists(path):
+            os.unlink(path)
+        st = self.state()["speedometerSupport"]
+        self.assertEqual((st["state"], st["supported"], st["hidden"]), ("verified", True, False))
+        self.assertIn({"versionCode": 1030750, "versionName": "5.27.5.0"}, st["verifiedVersions"])
+        self.assertNotIn("signStyle", st)  # the app has not mirrored its settings yet
+        with open(path, "w") as f:
+            f.write("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n"
+                    '    <string name="CONFIG_VALUE_MAP_SPEEDOMETER_STYLE">us</string>\n'
+                    '    <long name="CONFIG_VALUE_MAP_SPEEDOMETER_SPEED_ALERT_OFFSET" value="5" />\n</map>\n')
+        with open(saved, "w") as f:
+            json.dump({"row": ["user", "Map", "Show speedometer V4"], "value": None}, f)
+        st = self.state()["speedometerSupport"]
+        self.assertEqual((st["signStyle"], st["alertOffset"], st["hidden"]), ("us", 5, True))
+        os.unlink(saved)
+        with open(path, "w") as f:
+            f.write('<map><string name="CONFIG_VALUE_MAP_SPEEDOMETER_STYLE">world</string></map>')
+        self.assertEqual(self.state()["speedometerSupport"]["signStyle"], "world")
+        self.installed(1030800)
+        st = self.state()["speedometerSupport"]
+        self.assertEqual((st["state"], st["supported"]), ("unverified-version", False))
+        os.unlink(os.path.join(TMP, "apps", "installed.json"))
+        self.assertEqual(self.state()["speedometerSupport"]["state"], "not-installed")
+        os.unlink(path)
+
     def test_set_map_pacing(self):
         if os.path.exists(IFACE_LOG):
             os.unlink(IFACE_LOG)

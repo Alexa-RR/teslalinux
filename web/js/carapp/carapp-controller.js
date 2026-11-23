@@ -42,6 +42,16 @@
   const LOOK_PANEL_SIZE_KEY = "teslalinux.carPanelSize";
   const PANEL_SIZE_SCALES = { smallest: 0.7, smaller: 0.85, default: 1, larger: 1.15 };
   const PANEL_SIZES = Object.keys(PANEL_SIZE_SCALES);
+  // The speedometer this page draws over the map (carapp-speedometer.js), where the device sends
+  // the app's readings (/api/appInterface "speedometerSupport"): "both" (speed and the road's
+  // limit, the default), "limit" (the limit only) or "off". Kept by this browser, applied at once;
+  // the app's own speedometer stays off on the device in all three.
+  const LOOK_SPEEDOMETER_KEY = "teslalinux.carSpeedometer";
+  const SPEEDOMETERS = ["both", "limit", "off"];
+  // where it stands: "bottomRight" (where the app drew its own, the default) or "topLeft" (under
+  // the directions). Kept by this browser, applied at once.
+  const LOOK_SPEEDOMETER_POSITION_KEY = "teslalinux.carSpeedometerPosition";
+  const SPEEDOMETER_POSITIONS = ["bottomRight", "topLeft"];
 
   function readPref(key, allowed, fallback) {
     try {
@@ -78,10 +88,17 @@
       this.mapSharpness = readPref(LOOK_MAP_SHARPNESS_KEY, MAP_SHARPNESSES, "full");
       // whether the graphite map palette applies to the installed app (/api/appInterface "mapSkin")
       this.mapSkin = null;
+      this.speedometer = readPref(LOOK_SPEEDOMETER_KEY, SPEEDOMETERS, "both");
+      this.speedometerPosition = readPref(LOOK_SPEEDOMETER_POSITION_KEY, SPEEDOMETER_POSITIONS, "bottomRight");
+      // whether the device sends the app's speedometer, and the app's sign style and
+      // over-the-limit offset (/api/appInterface "speedometerSupport")
+      this.speedometerSupport = null;
+      this.speedReading = null; // the latest {"type":"speedometer"} from the host
+      this.mapArea = null; // the map area the panels leave free (sendVisibleArea), surface pixels
       this.hostNight = null; // the car's night mode as the host reports it (null: not reported)
     }
 
-    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin, mapSize, panelSize}. */
+    /** The car interface's look as chosen in the settings: {style, dayNight, mapColours, mapSkin, mapSize, panelSize, mapSharpness, speedometer, speedometerPosition, speedometerSupport}. */
     getLook() {
       return {
         style: this.lookStyle,
@@ -91,6 +108,9 @@
         mapSize: this.mapSize,
         panelSize: this.panelSize,
         mapSharpness: this.mapSharpness,
+        speedometer: this.speedometer,
+        speedometerPosition: this.speedometerPosition,
+        speedometerSupport: this.speedometerSupport,
       };
     }
 
@@ -99,7 +119,31 @@
       if (!state) return;
       if (MAP_COLOURS.indexOf(state.mapColours) >= 0) this.mapColours = state.mapColours;
       if (state.mapSkin) this.mapSkin = state.mapSkin;
+      if (state.speedometerSupport) {
+        this.speedometerSupport = state.speedometerSupport;
+        this.drawSpeedometer();
+      }
       this.applyMapColours();
+    }
+
+    /**
+     * The app's speedometer over the map: the latest reading, at the bottom right of the free map
+     * area, or under the directions (the turn card) when chosen.
+     */
+    drawSpeedometer() {
+      if (!this.speedo) return;
+      const support = this.speedometerSupport || {};
+      const topLeft = this.speedometerPosition === "topLeft";
+      this.speedo.update(support.supported === false ? null : this.speedReading, {
+        mode: this.speedometer,
+        position: this.speedometerPosition,
+        under: topLeft && this.surface.width ? TLCarSpeedometer.underDirections(this.surfaceEl, this.surface.width) : null,
+        signStyle: support.signStyle,
+        alertOffset: support.alertOffset,
+        area: this.mapArea,
+        width: this.surface.width,
+        height: this.surface.height,
+      });
     }
 
     /** "graphite" only applies where the installed app version is on the verified list */
@@ -131,6 +175,16 @@
         this.mapSharpness = look.mapSharpness;
         writePref(LOOK_MAP_SHARPNESS_KEY, look.mapSharpness);
         this.send({ type: "renderScale", scale: MAP_SHARPNESS_SCALES[this.mapSharpness] });
+      }
+      if (look && SPEEDOMETERS.indexOf(look.speedometer) >= 0 && look.speedometer !== this.speedometer) {
+        this.speedometer = look.speedometer;
+        writePref(LOOK_SPEEDOMETER_KEY, look.speedometer);
+        this.drawSpeedometer();
+      }
+      if (look && SPEEDOMETER_POSITIONS.indexOf(look.speedometerPosition) >= 0 && look.speedometerPosition !== this.speedometerPosition) {
+        this.speedometerPosition = look.speedometerPosition;
+        writePref(LOOK_SPEEDOMETER_POSITION_KEY, look.speedometerPosition);
+        this.drawSpeedometer();
       }
       if (look && PANEL_SIZES.indexOf(look.panelSize) >= 0 && look.panelSize !== this.panelSize) {
         this.panelSize = look.panelSize;
@@ -165,6 +219,8 @@
 
     applyLook() {
       if (this.renderer) this.renderer.setLook(this.lookStyle, this.isNight());
+      // the other look's panels have other sizes: the speedometer follows the turn card and the area
+      this.sendVisibleArea();
       // the page's own buttons over the map (#home-controls) follow the look too (carapp.css)
       const graphite = this.mode === "car" && this.lookStyle === "graphite";
       document.body.classList.toggle("carapp-page-graphite", graphite);
@@ -229,6 +285,11 @@
       // toasts and alerts: above the templates, laid out on the same surface
       this.popupsEl = document.createElement("div");
       this.popupsEl.className = "carapp-surface carapp-popups";
+      // the app's speedometer: above the templates, under toasts and alerts
+      this.speedoEl = document.createElement("div");
+      this.speedoEl.className = "carapp-surface carapp-speedo-surface";
+      this.overlay.appendChild(this.speedoEl);
+      this.speedo = new TLCarSpeedometer(this.speedoEl);
       this.overlay.appendChild(this.popupsEl);
       displayRoot.appendChild(this.overlay);
       this.style = style;
@@ -334,6 +395,11 @@
         case "alertDismiss":
           if (this.renderer) this.renderer.removeAlert(this.popupsEl, m.id);
           break;
+        case "speedometer":
+          // the app's speedometer (state): speed, unit and the road's limit, drawn here
+          this.speedReading = m;
+          this.drawSpeedometer();
+          break;
       }
     }
 
@@ -383,7 +449,7 @@
     fit() {
       if (!this.surfaceEl || !this.surface.width) return;
       const box = this.overlay.getBoundingClientRect();
-      for (const el of [this.surfaceEl, this.popupsEl]) {
+      for (const el of [this.surfaceEl, this.speedoEl, this.popupsEl]) {
         const s = el.style;
         s.width = this.surface.width + "px";
         s.height = this.surface.height + "px";
@@ -412,6 +478,10 @@
       requestAnimationFrame(() => {
         if (!this.renderer) return;
         const a = this.renderer.visibleArea(this.surface.width, this.surface.height);
+        // the speedometer stands at the area's bottom right, as the app placed its own; none over
+        // a full-screen panel
+        this.mapArea = a;
+        this.drawSpeedometer();
         if (!a) return;
         const key = JSON.stringify(a);
         if (key === this.lastArea) return;
@@ -439,6 +509,7 @@
           density: this.surface.dpi * PANEL_SIZE_SCALES[this.panelSize],
         });
         this.renderer.listen(this.popupsEl);
+        this.renderer.listen(this.speedoEl);
         this.renderer.setLook(this.lookStyle, this.isNight());
         this.renderer.navigating = !!this.navigating;
         if (this.restrictions) this.renderer.setRestrictions(this.restrictions);

@@ -11,6 +11,11 @@
         "versionName": "Unreleased",
         "changelogItems": [
           {
+            "title": "The speedometer on the car screen",
+            "shortDescription": "Car mode, both looks, day and night. Settings > Waze interface > Speedometer.",
+            "descriptionMarkdown": "• The speedometer is now drawn by the car screen instead of inside Waze's map: the current speed in a bubble and the road's speed limit as a road sign beside it, at the bottom right next to the map buttons. It follows the look (Rounded or Graphite), day and night, and Panel size. The speed turns red above the limit, as in Waze; speeds are in miles where Waze uses miles, with the US speed limit sign where Waze shows that one.\n• Settings > Waze interface > Speedometer: Speed and limit (the default), Limit only, or Off; and Speedometer position: bottom right (the default) or under the directions at the top left.\n• This needs a Waze version the device has checked (now 5.27.5). With any other version Waze keeps drawing its own, and the setting says so. In the phone interface Waze's own speedometer is back."
+          },
+          {
             "title": "The car's keyboard by default, voice search off",
             "shortDescription": "Settings > Waze > Keyboard and Settings > Sound > Voice search button.",
             "descriptionMarkdown": "• Typing into Waze now uses the car's own keyboard by default (also a phone's, when the page is open on one), and the car's keyboard has a microphone for dictating a place. Waze's built-in keyboard is still there: turn \"Use this device's keyboard\" off. A Pi that already has a choice keeps it.\n• The microphone button in the car interface's search is off unless switched on. It uses the browser's speech recognition, which a Tesla's browser does not have, so in the car it did nothing. The setting says so, and the voice language and the microphone test appear only when it is on. With it off, Waze is told that this page cannot recognise speech."

@@ -498,7 +498,7 @@ step_files() {
   install -d -m 0755 "$LIB/appstyle"
   install -m 0644 "$P/host/appstyle/waze-map-graphite.json" "$LIB/appstyle/"
   install -m 0755 "$P/tools/appstyle/mapskin.py" "$LIB/appstyle/"
-  install -m 0755 "$P/tools/apps/install-app.sh" "$P/tools/apps/apk-info.py" "$P/tools/apps/waze-map-pacing.py" "$LIB/apps/"
+  install -m 0755 "$P/tools/apps/install-app.sh" "$P/tools/apps/apk-info.py" "$P/tools/apps/waze-map-pacing.py" "$P/tools/apps/waze-speedometer.py" "$LIB/apps/"
   install -m 0644 "$P/tools/apps/apk_verify.py" "$LIB/apps/"
   install -m 0644 "$P/host/local/check.py" "$P/services/display/test/ws-client.py" "$LIB/check/"
   put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update, /usr/local/bin/teslalinux-set-gpu-speed\n'

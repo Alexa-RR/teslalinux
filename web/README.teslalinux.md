@@ -135,7 +135,7 @@ Changes from upstream:
   elsewhere follows through the `X-Teslalinux-App-Interface` header of its health checks, without
   polling of its own). In Car mode the app runs its Car App Library
   interface through ATL's car-app host: its map is the display stream, and `js/carapp/` (new: one
-  stylesheet and two `<script defer>` lines in `index.html`) draws its templates over it from
+  stylesheet and three `<script defer>` lines in `index.html`) draws its templates over it from
   `/sockets/carapp` (docs/UPSTREAM-NOTES.md, "Car app templates"). `carapp-controller.js` does
   nothing unless the API says "car"; it adds `#carapp-overlay` inside `#display-root`, above the
   touch layer, where only the panels take touches (map touches reach `/sockets/touchscreen` as
@@ -174,6 +174,17 @@ Changes from upstream:
   only to the app versions on the device's verified list (`mapSkin` in the same reply); for any other
   version the page falls back to Muted and Settings shows a warning tile. "Muted" and "Waze's own"
   are also saved on the device; until one is, the browser's earlier `teslalinux.carMapColours` holds.
+  The speedometer (`carapp-speedometer.js`, new): for the app versions the device's
+  `tools/apps/waze-speedometer.py` knows (`speedometerSupport` in `/api/appInterface`), the app's
+  own speedometer is off and its readings arrive on `/sockets/carapp` (`speedometer`); the page draws
+  the current speed in a bubble (red above the limit, by the app's own offset rule) and the road's
+  limit as a red-ringed sign beside it (the US rectangle where the app uses that style), at the bottom
+  right of the map area the panels leave free, in both looks and sized with Panel size. Settings >
+  Waze interface > Speedometer chooses "Speed and limit" (the default), "Limit only" or "Off"
+  (`teslalinux.carSpeedometer`, this browser's); Speedometer position "Bottom right" (the default)
+  or "Under the directions" (below the turn card, or the next-step pill over side panels, else the
+  free map area's top left; `teslalinux.carSpeedometerPosition`). Other app versions keep drawing
+  their own.
   "Map size" (Settings > Waze interface, Car mode only; `teslalinux.carMapSize`: Smaller, Default,
   Larger, Largest = 0.85, 1, 1.25, 1.5) sizes the app's own map text and symbols: the page sends
   `mapScale` to the car-app host, which gives the app the display's density times that factor as the

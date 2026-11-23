@@ -1090,3 +1090,102 @@ body.carapp-page-graphite .home-control-button.update .home-control-icon { color
 .carapp-graphite .carapp-alert .carapp-actions .carapp-action + .carapp-action { border-left: 1px solid var(--gr-divider); }
 .carapp-graphite .carapp-alert-timer { height: calc(var(--g) * 3); background: var(--gr-blue); }
 .carapp-graphite .carapp-progress { border-color: var(--gr-tile-strong); border-top-color: var(--gr-blue); }
+
+/* ---- the app's speedometer (carapp-speedometer.js): its own layer over the templates, at the
+   bottom right of the map area the panels leave free (right and bottom set from that area); the
+   current speed in a bubble, the road's speed limit in a road sign beside it. Sized in the
+   graphite unit, so Panel size scales it in both looks. ---- */
+#carapp-overlay .carapp-speedo-surface { pointer-events: none; }
+.carapp-speedo {
+  --speedo-red: #e5352b;
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--g) * 10);
+  margin: 0 calc(var(--g) * 12) 0 0;
+  transition: opacity 160ms ease;
+  font-variant-numeric: tabular-nums;
+}
+.carapp-speedo.top-left { margin: 0; }
+.carapp-speedo.hidden { opacity: 0; visibility: hidden; transition: opacity 160ms ease, visibility 0s 160ms; }
+.carapp-speedo [hidden] { display: none !important; }
+
+/* the speed: a round bubble (rounded look), the number over its unit */
+.carapp-speed {
+  width: calc(var(--g) * 84);
+  height: calc(var(--g) * 84);
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--lift);
+  color: var(--on-surface);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.carapp-speed .number { font-size: calc(var(--g) * 36); font-weight: 700; letter-spacing: -0.02em; }
+.carapp-speed.wide .number { font-size: calc(var(--g) * 30); }
+.carapp-speed .unit { margin-top: calc(var(--g) * 3); font-size: calc(var(--g) * 13); font-weight: 500; color: var(--on-surface-dim); }
+/* above the limit: the number and a ring in red, as the app marks it */
+.carapp-speed.over { color: #ff6a5f; box-shadow: inset 0 0 0 calc(var(--g) * 4) #ff6a5f, var(--lift); }
+.carapp-speed.over .unit { color: #ff6a5f; }
+
+/* the limit: a white road sign with a red ring (the US rectangle where the app uses it) */
+.carapp-speed-limit {
+  width: calc(var(--g) * 74);
+  height: calc(var(--g) * 74);
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: calc(var(--g) * 8) solid var(--speedo-red);
+  background: #fff;
+  color: #111;
+  box-shadow: 0 0 0 calc(var(--g) * 1.5) #fff, 0 calc(var(--g) * 2) calc(var(--g) * 8) rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font-family: "Roboto", Arial, sans-serif;
+}
+.carapp-speed-limit .number { font-size: calc(var(--g) * 30); font-weight: 700; letter-spacing: -0.03em; }
+.carapp-speed-limit.wide .number { font-size: calc(var(--g) * 24); }
+.carapp-speed-limit .caption { display: block; width: 7ch; text-align: center; font-size: calc(var(--g) * 10.5); font-weight: 700; line-height: 1.05; }
+.carapp-speed-limit.us {
+  width: calc(var(--g) * 60);
+  height: calc(var(--g) * 76);
+  border-radius: calc(var(--g) * 7);
+  border: calc(var(--g) * 3) solid #111;
+  justify-content: space-evenly;
+  padding: calc(var(--g) * 5) 0;
+  box-shadow: 0 0 0 calc(var(--g) * 2.5) #fff, 0 calc(var(--g) * 2) calc(var(--g) * 8) rgba(0, 0, 0, 0.35);
+}
+.carapp-speed-limit.us .number { font-size: calc(var(--g) * 32); }
+.carapp-speed-limit.us.wide .number { font-size: calc(var(--g) * 26); }
+
+/* graphite: the speed on a frosted tile like the map buttons, light by day and dark by night */
+.carapp-graphite .carapp-speedo { --speedo-red: #e5352b; }
+.carapp-graphite .carapp-speed {
+  width: calc(var(--g) * 80);
+  height: calc(var(--g) * 80);
+  border-radius: calc(var(--g) * 12);
+  background: var(--gr-card);
+  box-shadow: var(--gr-shadow);
+  -webkit-backdrop-filter: var(--gr-blur);
+  backdrop-filter: var(--gr-blur);
+  color: var(--gr-text);
+}
+.carapp-graphite .carapp-speed .number { font-size: calc(var(--g) * 34); font-weight: 700; }
+.carapp-graphite .carapp-speed.wide .number { font-size: calc(var(--g) * 28); }
+.carapp-graphite .carapp-speed .unit { color: var(--gr-text-3); font-weight: 600; }
+.carapp-graphite .carapp-speed.over { color: #d92d20; box-shadow: inset 0 0 0 calc(var(--g) * 3) #d92d20, var(--gr-shadow); }
+.carapp-graphite .carapp-speed.over .unit { color: #d92d20; }
+.carapp-graphite.carapp-night .carapp-speed.over { color: #ff6a5f; box-shadow: inset 0 0 0 calc(var(--g) * 3) #ff6a5f, var(--gr-shadow); }
+.carapp-graphite.carapp-night .carapp-speed.over .unit { color: #ff6a5f; }
+/* by night the sign's white is dimmed a little, as a lit sign at night */
+.carapp-graphite.carapp-night .carapp-speed-limit { background: #ececec; box-shadow: 0 0 0 calc(var(--g) * 1.5) #ececec, 0 calc(var(--g) * 2) calc(var(--g) * 8) rgba(0, 0, 0, 0.5); }
+.carapp-graphite.carapp-night .carapp-speed-limit.us { box-shadow: 0 0 0 calc(var(--g) * 2.5) #ececec, 0 calc(var(--g) * 2) calc(var(--g) * 8) rgba(0, 0, 0, 0.5); }
+@media (prefers-reduced-motion: reduce) {
+  .carapp-speedo, .carapp-speedo.hidden { transition: none; }
+}
