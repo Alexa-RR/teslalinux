@@ -102,10 +102,21 @@
             return { wifi: "Backup Wi-Fi", ethernet: "Ethernet", phone: "Phone" }[up.kind] || "Online";
           },
         },
-        // teslalinux: automatic Waze updates from Google Play (GET/POST /api/appUpdate*)
-        { id: "updates", title: "App updates", icon: "system_update" },
-        // teslalinux: the operating system's own updates (GET/POST /api/systemUpdate)
-        { id: "system", title: "System update", icon: "system_security_update" },
+        // teslalinux: Waze's own updates (GET/POST /api/appUpdate*), the operating system's
+        // (GET/POST /api/systemUpdate) and the release notes
+        {
+          id: "updates",
+          title: "Updates",
+          icon: "system_update",
+          render: this._updatesSection,
+          railValue() {
+            const c = this.cache;
+            if (!c.appUpdate && !c.sys) return "";
+            if (c.sys && c.sys.running) return "Installing…";
+            const n = (c.appUpdate && c.appUpdate.pending ? 1 : 0) + (c.sys && Array.isArray(c.sys.available) && c.sys.available.some((p) => !p.held) ? 1 : 0);
+            return n ? n + " waiting" : "Up to date";
+          },
+        },
         { id: "device", title: "Device", icon: "memory" },
       ];
 
@@ -148,6 +159,15 @@
         ["net.backup", "connections", "Backup Wi-Fi", "backup wifi second card garage underground failover"],
         ["net.prefer", "connections", "When to use backup Wi-Fi", "prefer wifi lte save data"],
         ["net.add", "connections", "Add a Wi-Fi network", "add wifi network scan join home phone hotspot"],
+        ["upd.waze", "updates", "Waze updates", "waze update version check"],
+        ["upd.source", "updates", "Update source", "apkpure google play aurora manual source"],
+        ["upd.auto", "updates", "Update Waze automatically", "automatic update auto", () => this._autoUpdates()],
+        ["upd.pin", "updates", "Waze version", "pin version stay latest", () => this._autoUpdates()],
+        ["upd.lte", "updates", "Download over LTE", "metered mobile data download", () => this._autoUpdates()],
+        ["upd.upload", "updates", "Upload an update", "upload apk apkm xapk file manual"],
+        ["upd.play", "updates", "Google Play via a token dispenser", "google play dispenser advanced aurora"],
+        ["upd.system", "updates", "System updates", "debian apt os system packages security kernel"],
+        ["upd.whatsnew", "updates", "What's new", "release notes changelog version new"],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
@@ -228,14 +248,6 @@
       this.content.innerHTML = "";
       this._curBody = null;
 
-      if (this.activeSectionId === "system") {
-        await this._renderSystemUpdateSection(token);
-        return;
-      }
-      if (this.activeSectionId === "updates") {
-        await this._renderAppUpdateSection(token);
-        return;
-      }
       if (this.activeSectionId === "device") {
         await this._renderDeviceSection(token);
       }
@@ -250,170 +262,24 @@
       return pct >= 30 ? "network_wifi" : "signal_wifi_0_bar";
     }
 
-    // teslalinux: updates of the operating system underneath the app (apt on Pi OS, apk on Alpine),
-    // GET/POST /api/systemUpdate, host/teslalinux-system-update. While a run goes on, the section is not
-    // redrawn: a progress bar follows the package manager's own progress and a terminal streams the
-    // run's output line by line (GET /api/systemUpdate?log=OFFSET), then the section is drawn once more
-    // with the result. The output of the last run stays below, folded.
-    async _renderSystemUpdateSection(token, refresh) {
-      if (!refresh) {
-        this._appendLoadingState();
-      }
-      let st;
-      try {
-        st = await this.apiClient.fetchSystemUpdate();
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "system") {
-        return;
-      }
-      const scroll = this.content.scrollTop;
-      this.content.innerHTML = "";
-      const fmt = this._fmt();
-      const available = Array.isArray(st.available) ? st.available : [];
-      const pending = available.filter((p) => !p.held);
-      const held = available.filter((p) => p.held);
-      const busy = st.running === true;
-
-      this._appendTile({
-        icon: "terminal",
-        title: st.os || "Operating system",
-        subtitle: "Kernel " + (st.kernel || "?") + (st.manager ? " · updates through " + st.manager : ""),
-        dense: false,
-      });
-      if (!st.manager) {
-        this._appendDescription("This system has no package manager this page knows (apt or apk), so it cannot update itself.");
-        return;
-      }
-
-      const statusText = busy
-        ? st.phase === "upgrading"
-          ? "Installing updates"
-          : "Looking for updates"
-        : st.message || (st.lastCheck ? "" : "Not checked yet");
-      const check = this._createActionButton(busy ? "Working…" : "Check now");
-      check.disabled = busy;
-      this._appendTile({
-        icon: busy ? "sync" : st.result === "error" ? "error" : pending.length ? "system_update" : "verified",
-        title: statusText,
-        subtitle: "Last check " + fmt.ago(st.lastCheck) + (st.lastUpgrade ? " · last install " + fmt.ago(st.lastUpgrade) : ""),
-        trailing: check,
-        dense: false,
-      });
-      const start = async (action, button) => {
-        button.disabled = true;
-        const r = await this.apiClient.systemUpdateAction(action);
-        if (!r.ok) {
-          button.disabled = false;
-          this._appendDescription("Could not start: " + r.message);
-          return;
-        }
-        this._sysLog = null; // a new run: a new terminal
-        await this._renderSystemUpdateSection(token, true);
-      };
-      check.addEventListener("click", () => start("check", check));
-
-      // progress and terminal
-      const term = this._createTerminal(busy, st.result === "error");
-      if (busy) {
-        const prog = utils.createElement("div", "settings-progress", null);
-        const label = utils.createElement("div", "settings-progress-label", null);
-        const step = utils.createElement("span", "settings-progress-step", "Starting…");
-        const pct = utils.createElement("span", "settings-progress-percent", "");
-        label.appendChild(step);
-        label.appendChild(pct);
-        const track = utils.createElement("div", "settings-progress-track indeterminate", null);
-        const bar = utils.createElement("div", "settings-progress-bar", null);
-        track.appendChild(bar);
-        prog.appendChild(label);
-        prog.appendChild(track);
-        this.content.appendChild(prog);
-        term.progress = { step, pct, track, bar };
-        this._applySystemProgress(term, st.progress);
-      }
-      if (busy || st.started) {
-        this.content.appendChild(term.root);
-      }
-
-      if (pending.length && !busy) {
-        const install = this._createActionButton("Install " + pending.length);
-        this._appendTile({
-          icon: "download",
-          title: pending.length + " update" + (pending.length === 1 ? "" : "s") + " available",
-          subtitle: st.uplink === "lte" ? "Downloads over the LTE modem: this uses mobile data" : "",
-          trailing: install,
-          dense: false,
-        });
-        this._armButton(install, "Install " + pending.length, () => start("upgrade", install));
-        const list = utils.createElement("div", "settings-package-list", null);
-        pending.slice(0, 60).forEach((p) => {
-          const line = utils.createElement("div", "settings-package", null);
-          line.appendChild(utils.createElement("span", "settings-package-name", p.name));
-          line.appendChild(utils.createElement("span", "settings-package-version", (p.from ? p.from + " → " : "") + p.to));
-          list.appendChild(line);
-        });
-        if (pending.length > 60) {
-          list.appendChild(utils.createElement("div", "settings-package", "and " + (pending.length - 60) + " more"));
-        }
-        this.content.appendChild(list);
-        this._appendDescription(
-          "Installing does not stop the app; services pick up the new versions when they restart. The car stays connected.",
-        );
-      }
-      if (held.length) {
-        this._appendDescription(
-          "Held back (listed in /etc/teslalinux/system-update.hold): " + held.map((p) => p.name).join(", "),
-        );
-      }
-      this._appendDivider();
-
-      const restart = this._createActionButton("Restart");
-      this._appendTile({
-        icon: "restart_alt",
-        title: st.rebootRequired ? "Restart needed" : "Restart device",
-        subtitle: st.rebootRequired
-          ? "A new kernel or system library is installed and takes effect after a restart"
-          : "The page reconnects by itself after about half a minute",
-        trailing: restart,
-        dense: false,
-      });
-      this._armButton(restart, "Restart", async () => {
-        restart.disabled = true;
-        restart.textContent = "Restarting…";
-        const r = await this.apiClient.systemUpdateAction("reboot");
-        if (!r.ok) {
-          restart.disabled = false;
-          restart.textContent = "Restart";
-          this._appendDescription("Could not restart: " + r.message);
-        }
-      });
-      this.content.scrollTop = scroll;
-
-      if (busy || st.started) {
-        await this._streamSystemLog(token, term, st, busy);
-      }
+    // the terminal: a <pre> with a blinking cursor while the run goes on; afterwards folded under
+    // "Output of the last run", open when the run failed
+    _createTerminal(live, failed) {
+      const text = global.document.createTextNode("");
+      const cursor = h("span", { class: "term-cursor" });
+      const pre = h("pre", { class: "term" }, text, live ? cursor : null);
+      const root = live ? pre : h("div", null, UI.disclosure("Output of the last run", pre, failed));
+      return { root, pre, text, cursor, queue: [], dripping: false, progress: null };
     }
 
-    // the terminal: a <pre> with a blinking cursor while the run goes on; afterwards folded in a
-    // <details> ("Output of the last run"), open when the run failed
-    _createTerminal(live, failed) {
-      const pre = utils.createElement("pre", "settings-terminal", null);
-      const text = global.document.createTextNode("");
-      pre.appendChild(text);
-      const cursor = utils.createElement("span", "settings-terminal-cursor", null);
-      if (live) {
-        pre.appendChild(cursor);
-      }
-      let root = pre;
-      if (!live) {
-        root = utils.createElement("details", "settings-terminal-details", null);
-        root.appendChild(utils.createElement("summary", null, "Output of the last run"));
-        root.appendChild(pre);
-        root.open = failed;
-      }
-      return { root, pre, text, cursor, queue: [], dripping: false, progress: null };
+    /** the package manager's own progress: a step, a percentage and a bar (a sweep while unknown) */
+    _createProgress(term) {
+      const step = h("span", null, "Starting…");
+      const pct = h("span", { class: "num" });
+      const bar = h("div", { class: "progress-bar" });
+      const track = h("div", { class: "progress-track indeterminate" }, bar);
+      term.progress = { step, pct, track, bar };
+      return h("div", { class: "progress" }, h("div", { class: "progress-label" }, step, pct), track);
     }
 
     _applySystemProgress(term, p) {
@@ -487,7 +353,7 @@
         term.text.appendData(this._sysLog.text); // drawn again: what we already have, at once
         term.pre.scrollTop = term.pre.scrollHeight;
       }
-      const stillHere = () => token === this._renderToken && this.activeSectionId === "system" && term.pre.isConnected;
+      const stillHere = () => token === this._renderToken && this.activeSectionId === "updates" && term.pre.isConnected;
       // catch up without animation (a long log, or the page opened mid-run)
       for (let i = 0; i < 40; i += 1) {
         let s;
@@ -548,7 +414,7 @@
             this._pollTimer = global.setTimeout(settle, 100);
             return;
           }
-          this._renderSystemUpdateSection(token, true);
+          this._rerender();
         };
         if (term.progress) {
           term.progress.track.classList.remove("indeterminate");
@@ -557,50 +423,6 @@
         this._pollTimer = global.setTimeout(settle, 400);
       };
       this._pollTimer = global.setTimeout(tick, 700);
-    }
-
-    // a button that needs a second tap within 4 s: a stray touch while driving must not act
-    _armButton(button, label, action) {
-      let armed = false;
-      let timer = null;
-      button.addEventListener("click", async () => {
-        if (!armed) {
-          armed = true;
-          button.textContent = "Tap again";
-          button.classList.add("armed");
-          timer = global.setTimeout(() => {
-            armed = false;
-            button.textContent = label;
-            button.classList.remove("armed");
-          }, 4000);
-          return;
-        }
-        global.clearTimeout(timer);
-        armed = false;
-        button.classList.remove("armed");
-        await action();
-      });
-    }
-
-    _createTextInput(value, options) {
-      const opts = options || {};
-      const input = utils.createElement("input", "settings-text-input", null);
-      input.type = opts.type || "text";
-      input.value = value;
-      input.spellcheck = false;
-      input.setAttribute("autocapitalize", "off");
-      input.setAttribute("autocorrect", "off");
-      input.setAttribute("autocomplete", opts.autocomplete || "off");
-      if (opts.maxLength) {
-        input.maxLength = opts.maxLength;
-      }
-      if (opts.placeholder) {
-        input.placeholder = opts.placeholder;
-      }
-      if (opts.width) {
-        input.style.width = opts.width;
-      }
-      return input;
     }
 
     _fmt() {
@@ -784,320 +606,6 @@
         };
         global.setTimeout(poll, 1500);
       });
-    }
-
-    // teslalinux: the Pi updates Waze from Google Play by itself (tools/appupdate/teslalinux-appupdate,
-    // docs/APP-UPDATES.md). GET /api/appUpdate, POST /api/appUpdateSettings and /api/appUpdateCheck
-    // (services/api/api.py).
-    async _renderAppUpdateSection(token) {
-      this._appendLoadingState();
-      let info;
-      try {
-        info = await this.apiClient.fetchAppUpdate();
-      } catch (_error) {
-        this._renderErrorState("Service error");
-        return;
-      }
-      if (token !== this._renderToken || this.activeSectionId !== "updates") {
-        return;
-      }
-      this.content.innerHTML = "";
-      const settings = info.settings || {};
-      const ago = (unix) => {
-        if (!unix) {
-          return "never";
-        }
-        const s = Math.max(0, Date.now() / 1000 - unix);
-        if (s < 90) {
-          return "just now";
-        }
-        if (s < 5400) {
-          return Math.round(s / 60) + " min ago";
-        }
-        if (s < 129600) {
-          return Math.round(s / 3600) + " h ago";
-        }
-        return Math.round(s / 86400) + " days ago";
-      };
-      const when = (unix) => new Date(unix * 1000).toLocaleString();
-      const ver = (v) => (v && v.versionName ? v.versionName : "unknown");
-      const save = async (changes) => {
-        try {
-          await this.apiClient.setAppUpdateSettings(changes);
-        } catch (_error) {
-          this._renderErrorState("Service error");
-          return;
-        }
-        await this._renderActiveSection();
-      };
-      const source = settings.source || "apkpure";
-      const playUsable = settings.playEnabled === true;
-
-      // --- source
-      const sourceNote = utils.createElement("p", "settings-description", "");
-      this._appendTile({
-        icon: "system_update",
-        title: "Update source",
-        subtitle: "Waze " + ver(info.installed) + " installed",
-        trailing: this._createSelect(
-          [
-            { value: "apkpure", label: "APKPure (automatic)" },
-            { value: "manual", label: "Manual uploads only" },
-            { value: "play", label: playUsable ? "Google Play via Aurora" : "Google Play via Aurora (unavailable)" },
-          ],
-          source,
-          async (value) => {
-            if (value === "play" && !playUsable) {
-              // the dropdown re-renders the section after this; the note says why nothing changed
-              this._appUpdateNote = "Google Play via Aurora is off: Aurora's login service refuses other clients. It can be enabled under Advanced.";
-              return;
-            }
-            this._appUpdateNote = "";
-            await this.apiClient.setAppUpdateSettings({ source: value });
-          },
-        ),
-        dense: false,
-      });
-      sourceNote.textContent =
-        this._appUpdateNote ||
-        (source === "manual" || (source === "play" && !playUsable)
-          ? "No automatic checks. Upload a Waze bundle below (from APKMirror: .apkm; also .xapk, .apks or a zip of APKs)."
-          : "The Pi checks once a day (a few hundred KB), downloads a newer Waze, verifies its signature against the installed one and installs it when the car is not connected.");
-      this._appUpdateNote = "";
-      this.content.appendChild(sourceNote);
-
-      if (source !== "manual" && !(source === "play" && !playUsable)) {
-        let subtitle = "Waze " + ver(info.installed);
-        if (info.latest && info.latest.versionName) {
-          subtitle += " · latest " + info.latest.versionName;
-        }
-        subtitle += " · checked " + ago(info.lastCheckOk);
-        this._appendTile({
-          icon: "update",
-          title: "Update Waze automatically",
-          subtitle: subtitle,
-          trailing: this._createSwitch(settings.autoUpdate !== false, (checked) => save({ autoUpdate: checked })),
-          dense: false,
-        });
-        // teslalinux: a version pin: download exactly this version and no newer one (the Map frame
-        // rate "Full" works only on the Waze versions it is verified for)
-        const pinCode = settings.pinVersionCode || 0;
-        const pinOptions = [{ value: "0", label: "Latest" }];
-        const choices = (info.pinChoices || []).slice();
-        if (pinCode && !choices.some((c) => c.versionCode === pinCode)) {
-          choices.push({ versionCode: pinCode, versionName: settings.pinVersionName, reason: "" });
-        }
-        for (let index = 0; index < choices.length; index += 1) {
-          const c = choices[index];
-          pinOptions.push({ value: String(c.versionCode), label: "Stay on " + (c.versionName || "versionCode " + c.versionCode) });
-        }
-        // the versions the Map frame rate "Full" works on, named in the subtitle
-        const pacingNames = choices.filter((c) => c.reason === "mapPacing" && c.versionName).map((c) => c.versionName);
-        const pacingNote = pacingNames.length ? " Map frame rate Full works on " + pacingNames.join(", ") + " only." : "";
-        let pinSubtitle;
-        if (!pinCode) {
-          pinSubtitle = "Updates to each new Waze version." + pacingNote;
-        } else {
-          const pinName = settings.pinVersionName || "versionCode " + pinCode;
-          const installedCode = (info.installed && info.installed.versionCode) || 0;
-          pinSubtitle =
-            installedCode > pinCode
-              ? "Pinned to " + pinName + ": the installed " + ver(info.installed) + " is newer, so no further updates (never back to an older version)"
-              : installedCode === pinCode
-                ? "Pinned to " + pinName + ": installed, no newer version is downloaded"
-                : "Pinned to " + pinName + ": downloaded and installed like an update, then no newer one";
-        }
-        this._appendTile({
-          icon: "push_pin",
-          title: "Waze version",
-          subtitle: pinSubtitle,
-          trailing: this._createSelect(pinOptions, String(pinCode), async (value) => {
-            const code = parseInt(value, 10) || 0;
-            const chosen = choices.find((c) => c.versionCode === code);
-            await this.apiClient.setAppUpdateSettings({
-              pinVersionCode: code,
-              pinVersionName: chosen && chosen.versionName ? chosen.versionName : "",
-            });
-          }),
-          dense: false,
-        });
-        this._appendTile({
-          icon: "cell_tower",
-          title: "Allow updates over LTE",
-          subtitle: "Off: downloads (about 200 MB) wait for Wi-Fi or Ethernet",
-          trailing: this._createSwitch(settings.allowMetered === true, (checked) => save({ allowMetered: checked })),
-          dense: false,
-        });
-      }
-
-      // --- status
-      const lines = [];
-      if (info.serverUnavailableSince) {
-        lines.push("Update server unavailable since " + when(info.serverUnavailableSince) + ". Waze keeps running; the Pi retries by itself.");
-      }
-      if (info.pending && info.pending.versionName) {
-        lines.push("Waze " + info.pending.versionName + " is verified and ready. It installs when the car is not connected, or at the next start.");
-      }
-      if (info.health && info.health.versionName) {
-        lines.push("Checking that Waze " + info.health.versionName + " starts correctly…");
-      }
-      if (info.lastMessage) {
-        lines.push("Last result (" + ago(info.lastCheck) + "): " + info.lastMessage);
-      }
-      const notices = info.notices || [];
-      if (notices.length) {
-        const last = notices[notices.length - 1];
-        lines.push(when(last.at) + ": " + last.text);
-      }
-      if (lines.length) {
-        this._appendDivider();
-      }
-      for (let index = 0; index < lines.length; index += 1) {
-        this._appendDescription(lines[index]);
-      }
-
-      // --- check now (automatic sources)
-      if (source !== "manual" && !(source === "play" && !playUsable)) {
-        const checkTile = this._appendTile({
-          icon: "sync",
-          title: "Check for an update now",
-          trailing: this._createActionButton("Check"),
-          dense: false,
-        });
-        const checkButton = checkTile.querySelector(".settings-action-button");
-        checkButton.addEventListener("click", async () => {
-          checkButton.disabled = true;
-          checkButton.textContent = "Checking…";
-          try {
-            await this.apiClient.checkAppUpdateNow();
-          } catch (_error) {
-            checkButton.textContent = "Failed";
-            return;
-          }
-          // the check runs on the Pi; show its result when the state changes (or after a minute)
-          const started = Date.now();
-          const before = info.lastCheck || 0;
-          const poll = async () => {
-            if (!checkTile.isConnected) {
-              return;
-            }
-            let now = null;
-            try {
-              now = await this.apiClient.fetchAppUpdate();
-            } catch (_error) {
-              // keep polling
-            }
-            if ((now && (now.lastCheck || 0) > before) || Date.now() - started > 60000) {
-              await this._renderActiveSection();
-              return;
-            }
-            global.setTimeout(poll, 2000);
-          };
-          global.setTimeout(poll, 2000);
-        });
-      }
-
-      // --- manual upload (every source): an APKMirror .apkm, .xapk, .apks, zip of APKs or one APK
-      this._appendDivider();
-      const fileInput = document.createElement("input");
-      fileInput.type = "file";
-      fileInput.accept = ".apkm,.xapk,.apks,.zip,.apk";
-      fileInput.style.display = "none";
-      const uploadButton = this._createActionButton("Choose file");
-      this._appendTile({
-        icon: "upload_file",
-        title: "Upload an update",
-        subtitle: "Waze bundle: .apkm, .xapk, .apks, .zip or .apk (up to " + Math.round((info.maxUpload || 419430400) / 1048576) + " MB)",
-        trailing: uploadButton,
-        dense: false,
-      });
-      this.content.appendChild(fileInput);
-      const uploadNote = utils.createElement("p", "settings-description", "");
-      const lastUpload = info.upload;
-      if (lastUpload && lastUpload.message) {
-        uploadNote.textContent = "Last upload (" + ago(lastUpload.at) + "): " + lastUpload.message;
-      } else {
-        uploadNote.textContent =
-          "The same checks as an automatic update: the signature must be Waze's own (the installed one's), the version newer, and the splits for this Pi present. Nothing else is installed.";
-      }
-      this.content.appendChild(uploadNote);
-      uploadButton.addEventListener("click", () => fileInput.click());
-      fileInput.addEventListener("change", async () => {
-        const file = fileInput.files && fileInput.files[0];
-        if (!file) {
-          return;
-        }
-        const max = info.maxUpload || 419430400;
-        if (file.size > max) {
-          uploadNote.textContent = file.name + " is " + Math.round(file.size / 1048576) + " MB, over the limit of " + Math.round(max / 1048576) + " MB.";
-          return;
-        }
-        uploadButton.disabled = true;
-        uploadButton.textContent = "Uploading…";
-        let result;
-        try {
-          result = await this.apiClient.uploadAppBundle(file, (sent, total) => {
-            const pct = total ? Math.floor((sent * 100) / total) : 0;
-            uploadNote.textContent =
-              sent < total
-                ? "Uploading " + file.name + ": " + pct + " % (" + Math.round(sent / 1048576) + " of " + Math.round(total / 1048576) + " MB)"
-                : "Verifying " + file.name + " (signature, version, splits)…";
-          });
-        } catch (error) {
-          uploadNote.textContent = "Upload failed: " + (error && error.message ? error.message : "service error");
-          uploadButton.disabled = false;
-          uploadButton.textContent = "Choose file";
-          return;
-        }
-        uploadButton.disabled = false;
-        uploadButton.textContent = "Choose file";
-        fileInput.value = "";
-        if (uploadNote.isConnected) {
-          await this._renderActiveSection();
-        }
-        return result;
-      });
-
-      // --- advanced: Google Play through a token dispenser (off by default)
-      this._appendDivider();
-      this._appendTile({
-        icon: "dns",
-        title: "Advanced: Google Play via a token dispenser",
-        subtitle: playUsable ? "Enabled" : "Off",
-        trailing: this._createSwitch(playUsable, (checked) => save({ playEnabled: checked })),
-        dense: false,
-      });
-      this._appendDescription(
-        "An anonymous Google Play login from a token dispenser (no Google account). Aurora Store's public dispenser refuses clients other than Aurora Store, so this stays off unless you point it at a dispenser that accepts this Pi.",
-      );
-      if (playUsable) {
-        const input = document.createElement("input");
-        input.type = "url";
-        input.className = "settings-text-input";
-        input.placeholder = info.defaultDispenser || "https://auroraoss.com/api/auth";
-        input.value = settings.dispenserUrl || "";
-        input.spellcheck = false;
-        const saveButton = this._createActionButton("Save");
-        const field = utils.createElement("div", "settings-inline-field", null);
-        field.appendChild(input);
-        field.appendChild(saveButton);
-        this._appendTile({
-          icon: "link",
-          title: "Dispenser address",
-          trailing: field,
-          dense: false,
-        });
-        this._appendDescription("Empty: Aurora Store's dispenser. Otherwise an https:// address (a mirror or your own).");
-        saveButton.addEventListener("click", async () => {
-          const value = input.value.trim();
-          if (value !== "" && !/^https:\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?(\/[A-Za-z0-9._~%!$&'()*+,;=:@\/-]*)?$/.test(value)) {
-            input.classList.add("invalid");
-            return;
-          }
-          input.classList.remove("invalid");
-          await save({ dispenserUrl: value });
-        });
-      }
     }
 
     _createActionButton(text) {
@@ -2123,6 +1631,340 @@
         p.finish(true);
       });
       return p;
+    }
+
+    // ------------------------------------------------------------------ Updates
+
+    /**
+     * Waze's own updates (tools/appupdate/teslalinux-appupdate, docs/APP-UPDATES.md: GET
+     * /api/appUpdate, POST /api/appUpdateSettings, /api/appUpdateCheck, /api/appUpdateUpload), the
+     * operating system underneath (apt on Pi OS, apk on Alpine: GET/POST /api/systemUpdate; while a
+     * run goes on a progress bar follows the package manager and a terminal streams its output),
+     * and the release notes.
+     */
+    async _updatesSection(token) {
+      const api = this.apiClient;
+      const [info, su] = await Promise.all([api.fetchAppUpdate().catch(() => null), api.fetchSystemUpdate().catch(() => null)]);
+      if (!info && !su) throw new Error("no answer");
+      if (info) this.cache.appUpdate = info;
+      if (su) this.cache.sys = su;
+      const out = [];
+      if (info) out.push(...this._wazeUpdateGroups(token, info));
+      if (su) out.push(this._systemUpdateGroup(token, su));
+      const notes = TAHtml.releaseNotesData && TAHtml.releaseNotesData.versions;
+      if (this.onOpenPage && notes && notes.length) {
+        const released = notes.find((v) => v.versionName !== "Unreleased") || notes[0];
+        const wn = UI.row({
+          id: "upd.whatsnew",
+          title: "What's new",
+          control: UI.tapValue("Teslalinux " + String(released.versionName).split(" · ")[0].replace(/^v/, ""), () => this.onOpenPage("releaseNotes")),
+        });
+        out.push(UI.group("Release notes", [wn]));
+      }
+      return out;
+    }
+
+    /** the Waze updates check by themselves (not uploads only, not Google Play while it is off) */
+    _autoUpdates() {
+      const set = (this.cache.appUpdate && this.cache.appUpdate.settings) || {};
+      const source = set.source || "apkpure";
+      return source !== "manual" && !(source === "play" && set.playEnabled !== true);
+    }
+
+    _wazeUpdateGroups(token, info) {
+      const api = this.apiClient;
+      const fmt = UI.fmt;
+      const set = info.settings || {};
+      const source = set.source || "apkpure";
+      const playUsable = set.playEnabled === true;
+      const automatic = source !== "manual" && !(source === "play" && !playUsable);
+      const ver = (v) => (v && v.versionName ? v.versionName : "unknown");
+      const when = (unix) => new Date(unix * 1000).toLocaleString();
+      const saveSet = (r, change, text) =>
+        UI.save(r, () => api.setAppUpdateSettings(change), text).then((ok) => {
+          if (ok) global.setTimeout(() => token === this._renderToken && this._rerender(), 300);
+          return ok;
+        });
+
+      // the state in one line first
+      const line = info.serverUnavailableSince
+        ? "The update server is unavailable since " + when(info.serverUnavailableSince) + ". Waze keeps running; the Pi retries by itself."
+        : info.health && info.health.versionName
+          ? "Checking that Waze " + info.health.versionName + " starts correctly…"
+          : info.pending && info.pending.versionName
+            ? info.pending.versionName + " is verified. It installs when the car is not connected, or at the next start."
+            : automatic
+              ? "Checked " + fmt.ago(info.lastCheckOk) + (info.latest && info.latest.versionName ? ", latest is " + info.latest.versionName : "")
+              : "Automatic checks are off: upload a bundle below";
+      const checkBtn = UI.button("Check now", null, null, "sync");
+      const wr = UI.row({ id: "upd.waze", title: info.installed && info.installed.versionName ? "Waze " + info.installed.versionName : "Waze", detail: line, control: automatic ? checkBtn : null });
+      const notices = info.notices || [];
+      const last = notices.length ? notices[notices.length - 1] : null;
+      if (info.lastMessage && (!last || last.at <= (info.lastCheck || 0))) UI.status(wr).info("Last result, " + fmt.ago(info.lastCheck) + ": " + info.lastMessage);
+      else if (last) UI.status(wr).info(when(last.at) + ": " + last.text);
+      checkBtn.addEventListener("click", async () => {
+        checkBtn.disabled = true;
+        const st = UI.status(wr);
+        st.pending("Checking for a newer Waze…");
+        try {
+          await api.checkAppUpdateNow();
+        } catch (_e) {
+          st.err("The check did not start: the device did not answer.");
+          checkBtn.disabled = false;
+          return;
+        }
+        // the check runs on the Pi; its result shows when the state changes (or after a minute)
+        const before = info.lastCheck || 0;
+        for (let i = 0; i < 30; i += 1) {
+          await UI.wait(2000);
+          if (token !== this._renderToken) return;
+          try {
+            if (((await api.fetchAppUpdate()).lastCheck || 0) > before) break;
+          } catch (_e) {
+            // keep waiting
+          }
+        }
+        if (token === this._renderToken) await this._rerender();
+      });
+
+      const src = UI.row({
+        id: "upd.source",
+        title: "Update source",
+        stack: true,
+        more: [
+          "Automatic: the Pi checks APKPure once a day (a few hundred KB), downloads a newer Waze, verifies its signature against the installed one and installs it when the car is not connected.",
+          "Uploads only: no automatic checks; upload a bundle below (from APKMirror: .apkm; also .xapk, .apks or a zip of APKs).",
+          "Google Play goes through a token dispenser and is off unless enabled under Advanced.",
+        ],
+        control: UI.segmented(
+          [
+            { value: "apkpure", label: "Automatic", caption: "APKPure, default" },
+            { value: "manual", label: "Uploads only" },
+            { value: "play", label: "Google Play", caption: playUsable ? "Aurora dispenser" : "turn on in Advanced", disabled: !playUsable, why: playUsable ? null : "Turn on Google Play under Advanced first" },
+          ],
+          source === "play" && !playUsable ? "manual" : source,
+          (v) => saveSet(src, { source: v }),
+          { label: "Update source" },
+        ),
+      });
+      const rows = [wr, src];
+      if (automatic) {
+        const au = UI.row({
+          id: "upd.auto",
+          title: "Update Waze automatically",
+          control: UI.toggle(set.autoUpdate !== false, (on) => saveSet(au, { autoUpdate: on }), "Update Waze automatically"),
+        });
+        // a version pin: download exactly this version and no newer one (the Map frame rate "Full"
+        // works only on the Waze versions it is verified for)
+        const pinCode = set.pinVersionCode || 0;
+        const choices = (info.pinChoices || []).slice();
+        if (pinCode && !choices.some((c) => c.versionCode === pinCode)) choices.push({ versionCode: pinCode, versionName: set.pinVersionName, reason: "" });
+        const installedCode = (info.installed && info.installed.versionCode) || 0;
+        const named = (c) => c.versionName || "versionCode " + c.versionCode;
+        const pacingNames = choices.filter((c) => c.reason === "mapPacing" && c.versionName).map((c) => c.versionName);
+        const pinName = set.pinVersionName || "versionCode " + pinCode;
+        const pinDetail = !pinCode
+          ? "Every new version." + (pacingNames.length ? " Full map frame rate works on " + pacingNames.join(" and ") + " only." : "")
+          : installedCode > pinCode
+            ? "The installed " + ver(info.installed) + " is newer than " + pinName + ", so no further updates. Waze is never taken back to an older version."
+            : installedCode === pinCode
+              ? "Stays on " + pinName + ": no newer version is downloaded."
+              : pinName + " is downloaded and installed like an update, then no newer one.";
+        const pinOpts = [{ value: 0, label: "Latest", caption: "default" }].concat(
+          choices.map((c) => ({ value: c.versionCode, label: named(c), caption: c.versionCode === installedCode ? "stay, installed" : "stay on it" })),
+        );
+        const pinSave = (v) => {
+          const c = choices.find((x) => x.versionCode === Number(v));
+          return saveSet(pin, { pinVersionCode: Number(v), pinVersionName: c && c.versionName ? c.versionName : "" }, Number(v) ? "Saved. Checking for that version" : "Saved");
+        };
+        const pin = UI.row({
+          id: "upd.pin",
+          title: "Waze version",
+          stack: pinOpts.length > 1 && pinOpts.length <= 6,
+          detail: pinDetail,
+          control:
+            pinOpts.length === 1 ? UI.value("Latest") : pinOpts.length <= 6
+              ? UI.segmented(pinOpts, pinCode, pinSave, { label: "Waze version" })
+              : UI.tapValue(pinCode ? named({ versionCode: pinCode, versionName: set.pinVersionName }) : "Latest", async () => {
+                  const v = await UI.pickFrom({ title: "Waze version", value: pinCode, options: pinOpts.map((o) => ({ value: o.value, label: o.label, small: o.caption })) });
+                  if (v != null && Number(v) !== pinCode) pinSave(v);
+                }),
+        });
+        const lte = UI.row({
+          id: "upd.lte",
+          title: "Download over LTE",
+          detail: "About 200 MB. Off: waits for Wi-Fi or Ethernet",
+          control: UI.toggle(set.allowMetered === true, (on) => saveSet(lte, { allowMetered: on }), "Download over LTE"),
+        });
+        rows.push(au, pin, lte);
+      }
+
+      // a manual upload (every source): an APKMirror .apkm, .xapk, .apks, zip of APKs or one APK
+      const max = info.maxUpload || 419430400;
+      const fileInput = h("input", { type: "file", accept: ".apkm,.xapk,.apks,.zip,.apk", hidden: true });
+      const upBtn = UI.button("Choose file", () => fileInput.click(), null, "upload_file");
+      const up = UI.row({
+        id: "upd.upload",
+        title: "Upload an update",
+        detail: "A Waze bundle: .apkm, .xapk, .apks, .zip or .apk, up to " + Math.round(max / 1048576) + " MB",
+        more: "The same checks as an automatic update: the signature must be Waze's own (the installed one's), the version newer, and the parts for this Pi present. Nothing else is installed.",
+        control: [upBtn, fileInput],
+      });
+      if (info.upload && info.upload.message) UI.status(up).info("Last upload " + fmt.ago(info.upload.at) + ": " + info.upload.message);
+      fileInput.addEventListener("change", async () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        const st = UI.status(up);
+        if (f.size > max) {
+          st.err(f.name + " is " + Math.round(f.size / 1048576) + " MB, over the " + Math.round(max / 1048576) + " MB limit.");
+          fileInput.value = "";
+          return;
+        }
+        upBtn.disabled = true;
+        UI.busy(1);
+        let r;
+        try {
+          r = await api.uploadAppBundle(f, (sent, total) =>
+            st.pending(sent < total ? "Uploading " + f.name + ": " + Math.floor((sent * 100) / (total || 1)) + " % (" + Math.round(sent / 1048576) + " of " + Math.round(total / 1048576) + " MB)" : "Checking " + f.name + " (signature, version, parts)…"),
+          );
+        } catch (e) {
+          r = { ok: false, message: "Upload failed: " + (e && e.message ? e.message : "the device did not answer") };
+        } finally {
+          UI.busy(-1);
+          upBtn.disabled = false;
+          fileInput.value = "";
+        }
+        if (r && r.ok !== false) {
+          st.ok((r && r.message) || "Verified. It installs when the car is not connected.", true);
+          this._refreshCacheSoon();
+        } else st.err((r && r.message) || "Not accepted.");
+      });
+      rows.push(up);
+
+      // advanced: Google Play through a token dispenser (off by default)
+      const play = UI.row({
+        id: "upd.play",
+        title: "Google Play via a token dispenser",
+        more: "An anonymous Google Play login from a token dispenser (no Google account). Aurora Store's public dispenser refuses clients other than Aurora Store, so this stays off unless you point it at a dispenser that accepts this Pi.",
+        control: UI.toggle(playUsable, (on) => saveSet(play, { playEnabled: on }), "Google Play via a token dispenser"),
+      });
+      const adv = [play];
+      if (playUsable) {
+        const disp = UI.row({
+          id: "upd.dispenser",
+          title: "Dispenser address",
+          control: UI.tapValue(set.dispenserUrl || "Aurora Store's", async () => {
+            const v = await UI.editText({
+              title: "Dispenser address",
+              type: "url",
+              value: set.dispenserUrl || "",
+              placeholder: info.defaultDispenser || "https://auroraoss.com/api/auth",
+              help: "Empty: Aurora Store's dispenser. Otherwise an https:// address (a mirror or your own).",
+              validate: (x) => (x.trim() === "" || /^https:\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?(\/[A-Za-z0-9._~%!$&'()*+,;=:@/-]*)?$/.test(x.trim()) ? "" : "Use an https:// address."),
+            });
+            if (v != null) saveSet(disp, { dispenserUrl: v.trim() });
+          }),
+        });
+        adv.push(disp);
+      }
+      const [advBtn, advBody] = UI.disclosure("Advanced", h("div", { class: "group-body" }, adv), playUsable);
+      return [UI.group("Waze", rows), h("section", { class: "group" }, advBtn, advBody)];
+    }
+
+    _systemUpdateGroup(token, su) {
+      const fmt = UI.fmt;
+      const available = Array.isArray(su.available) ? su.available : [];
+      const pending = available.filter((p) => !p.held);
+      const held = available.filter((p) => p.held);
+      const busy = su.running === true;
+      const note = su.manager ? "Kernel " + (su.kernel || "?") + ", updated with " + su.manager + "." : null;
+      const checkBtn = UI.button(busy ? "Working…" : "Check now", null, null, busy ? null : "sync");
+      if (busy) checkBtn.prepend(h("span", { class: "spin" }));
+      checkBtn.disabled = busy;
+      const sysRow = UI.row({
+        id: "upd.system",
+        title: su.os || "Operating system",
+        detail: !su.manager
+          ? "This system has no package manager this page knows (apt or apk), so it cannot update itself"
+          : busy
+            ? su.phase === "upgrading" ? "Installing updates" : "Looking for updates"
+            : su.lastCheck ? "Checked " + fmt.ago(su.lastCheck) + (su.lastUpgrade ? ", last install " + fmt.ago(su.lastUpgrade) : "") : "Not checked yet",
+        control: su.manager ? checkBtn : null,
+      });
+      if (!su.manager) return UI.group("System", [sysRow]);
+      // a failure in the row's status line; any other message is the calm line below (or the install row)
+      if (!busy && su.message && su.result === "error") UI.status(sysRow).err(su.message);
+      const start = async (action, btn) => {
+        btn.disabled = true;
+        let r;
+        try {
+          r = await this.apiClient.systemUpdateAction(action);
+        } catch (_e) {
+          r = { ok: false, message: "the device did not answer" };
+        }
+        if (!r.ok) {
+          UI.status(sysRow).err("Could not start: " + r.message);
+          btn.disabled = false;
+          return;
+        }
+        this._sysLog = null; // a new run: a new terminal
+        await this._rerender();
+      };
+      checkBtn.addEventListener("click", () => start("check", checkBtn));
+      const rows = [sysRow];
+
+      const term = this._createTerminal(busy, su.result === "error");
+      if (busy) {
+        rows.push(h("div", null, this._createProgress(term), term.root));
+        this._applySystemProgress(term, su.progress);
+      } else if (pending.length) {
+        const install = UI.armed("Install " + pending.length, "Tap again to install", (b) => start("upgrade", b), "btn--primary");
+        const ir = UI.row({
+          id: "upd.install",
+          title: pending.length + (pending.length === 1 ? " update available" : " updates available"),
+          detail: su.uplink === "lte" ? "Downloads over LTE: this uses mobile data" : "Waze keeps running. The car stays connected.",
+          chips: su.uplink === "lte" ? [UI.CHIP.plain("Mobile data")] : null,
+          control: install,
+        });
+        const list = pending.slice(0, 60).map((p) => h("div", { class: "pkg" }, h("span", null, p.name), h("span", null, (p.from ? p.from + " → " : "") + p.to)));
+        if (pending.length > 60) list.push(h("div", { class: "pkg" }, h("span", null, "and " + (pending.length - 60) + " more"), h("span")));
+        rows.push(ir, h("div", null, UI.disclosure("Show the list", h("div", { class: "pkgs" }, list))));
+      } else if (su.lastCheck) {
+        rows.push(UI.calm(su.result === "error" ? "The last check did not finish." : su.message || "The system is up to date."));
+      }
+      if (held.length) rows.push(h("p", { class: "group-note" }, "Held back on purpose (/etc/teslalinux/system-update.hold): " + held.map((p) => p.name).join(", ") + "."));
+      if (!busy && su.started) rows.push(term.root);
+      if (su.rebootRequired) rows.push(this._restartDeviceRow(true));
+      // the output from where this page left off, once the section is on the page
+      if (busy || su.started) global.setTimeout(() => this._streamSystemLog(token, term, su, busy), 0);
+      return UI.group("System", rows, note);
+    }
+
+    /** the device restart (POST /api/systemUpdate {"action":"reboot"}), two taps */
+    _restartDeviceRow(needed) {
+      const r = UI.row({
+        id: "dev.restart",
+        title: needed ? "Restart needed" : "Restart the device",
+        detail: needed ? "New system files take effect after a restart. The page reconnects by itself." : "About half a minute. The page reconnects by itself.",
+        chips: needed ? [UI.CHIP.plain("Waiting")] : null,
+      });
+      UI.setControl(
+        r,
+        UI.armed("Restart", "Tap again to restart", async (b) => {
+          b.disabled = true;
+          let x;
+          try {
+            x = await this.apiClient.systemUpdateAction("reboot");
+          } catch (_e) {
+            x = { ok: false, message: "the device did not answer" };
+          }
+          if (!x.ok) {
+            UI.status(r).err("Could not restart: " + x.message);
+            b.disabled = false;
+          } else UI.status(r).pending("Restarting… this page reconnects by itself");
+        }),
+      );
+      return r;
     }
 
     // ------------------------------------------------------------------ Waze
