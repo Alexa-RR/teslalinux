@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Car app renderer test</title>
 <!-- teslalinux: renders test-templates.json with carapp-renderer.js over a stand-in map, at the
-     car display's size (1472x768) scaled to the window. Clicks are listed below the display.
+     car display's size (1472x768, or size=WxH with dpi=N) scaled to the window. Clicks are listed below the display.
      Open through a web server (fetch of the JSON files): python3 -m http.server in web/.
      URL parameters: t=TEMPLATE, look=rounded|graphite, night=1, nav=1 (the app navigates),
      alert=1, toast=1, speed=READING (a sample speedometer reading: city, over, noLimit, us,
@@ -110,17 +110,25 @@
   const params = new URLSearchParams(location.search);
   const shot = params.get("shot") === "1";
   document.body.classList.toggle("shot", shot);
+  // size=WxH: another car display (a Pi's 1088x832 or 832x608), dpi=N its density
+  const sizeMatch = /^(\d+)x(\d+)$/.exec(params.get("size") || "");
+  const DW = sizeMatch ? Number(sizeMatch[1]) : 1472;
+  const DH = sizeMatch ? Number(sizeMatch[2]) : 768;
+  for (const e of [document.getElementById("display"), ...document.querySelectorAll("#display > div")]) {
+    e.style.width = DW + "px";
+    e.style.height = DH + "px";
+  }
   function fit() {
     const d = document.getElementById("display");
-    const scale = shot ? 1 : Math.min((window.innerWidth - 32) / 1472, (window.innerHeight * 0.75) / 768);
+    const scale = shot ? 1 : Math.min((window.innerWidth - 32) / DW, (window.innerHeight * 0.75) / DH);
     d.style.transform = "scale(" + scale + ")";
-    document.getElementById("stage").style.height = 768 * scale + "px";
+    document.getElementById("stage").style.height = DH * scale + "px";
   }
   window.addEventListener("resize", fit);
   Promise.all([fetch("host-style.json").then((r) => r.json()), fetch("test-templates.json").then((r) => r.json())]).then(([style, data]) => {
     const popups = document.getElementById("popups");
     const r = new TLCarAppRenderer(document.getElementById("templates"), style,
-      { send: log, icon: iconUrl, iconIsGlyph: (id) => GLYPHS.has(id), density: data.density });
+      { send: log, icon: iconUrl, iconIsGlyph: (id) => GLYPHS.has(id), density: Number(params.get("dpi")) || data.density });
     r.listen(popups);
     // the app's speedometer (carapp-speedometer.js) on its own layer, at the bottom right of the
     // map area the panels leave free, as the car page's controller places it
@@ -141,8 +149,8 @@
       const reading = readings[state.speed];
       const templates = document.getElementById("templates");
       speedo.update(reading, { mode: state.speedo, signStyle: reading.signStyle, alertOffset: 0,
-        position: state.at, under: TLCarSpeedometer.underDirections(templates, 1472),
-        area: r.visibleArea(1472, 768), width: 1472, height: 768 });
+        position: state.at, under: TLCarSpeedometer.underDirections(templates, DW),
+        area: r.visibleArea(DW, DH), width: DW, height: DH });
     });
     r.navigating = params.get("nav") === "1";
     // the settings page's view of the app's settings (view=settings): a stand-in for the car
