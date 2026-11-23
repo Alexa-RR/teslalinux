@@ -200,6 +200,72 @@ Driving, Automatic is Full; standing still, it costs what Waze's own rate costs 
 CPU and V3D time). Per second from still to driving and back (`--per-second`): 30, 30, ... then the
 first fixes of the drive 28, 33, 27, 35, then 53-55; 5 s after the last moving fix, 30 again.
 
+At Native (1184x928, dist 20261123-5944352d) the GPU decides, whatever the choice: moving, Full
+26.3 / 22, 26.5 / 22, Waze's own 26.1 / 20, 26.0 / 21, Automatic 25.6 / 22, 26.1 / 23; still, about
+29 frames/s at 88% of V3D's render queue for all three (Waze's own 30 already nearly fills the GPU
+there), Waze's CPU 49-50%.
+
+## What else Waze's map costs (Nov 23 2026)
+
+Measured as above (Full unless named; Native = 1184x928).
+
+- **Stores nobody reads.** Waze's frame at Native (`tools/debian/glpasses.c`) is a 128x128 pass, the
+  location arrow's viewport (colour t17 and a DEPTH24 *texture* t18, cleared, 2 draws with depth
+  testing), an empty transparent viewport (left out already), the map (colour t21 RGB10_A2 and a
+  DEPTH24 texture t22, 290 draws, 137 with depth testing) and a flipped blit of t21 into the
+  window. The arrow's and the map's depth are cleared at the start of every use and never sampled
+  or blitted, but they are written by depth-tested draws, so they hold no known value, and whether
+  they are read before their next clear depends on what the app does next: nothing in GL's state
+  proves it at the moment V3D stores them (when the map pass samples the arrow's colour, the arrow
+  job is flushed). So ATL does not invalidate them. What it would gain, measured with an
+  experiment that invalidates every framebuffer's depth and stencil when the app binds another
+  (wrong for any app that reads them later): moving 27.8 / 22, 28.1 / 22 against 26.3, 26.5
+  (+6%), still 31.3 against 29.0. The window's load before Godot's full-window blit (the old back
+  buffer read into the tile buffer, though the blit overwrites all of it) is provably useless; a
+  clear of the window first (so the tiler clears instead of loading) changes nothing here (26.3,
+  26.6): the clear lands in a separate job, because the window has a depth buffer and the blit's
+  job has none.
+- **The CPU at 832x608.** Waze's render thread is the limit (one core: Waze's process 112-115%,
+  the thread 79-82% of its samples). `perf` (cpu-clock, 20 s on the route): Godot/Waze (libwaze)
+  37% of the thread, Mesa (libgallium) 29%, libc 11% (malloc/free, memcpy), the kernel 9% (ioctls,
+  dma-resv waits), glvnd's dispatch 3%, ATL's libandroid (gl_passes, egl.c) 1%. Half the thread is
+  driver work; ATL's own wrappers are not where the time goes. Mesa's GL threading (`mesa_glthread`)
+  would move the driver half to another core, but Mesa enables it only for drivers with
+  thread-safe unsynchronized maps, and v3d has neither cap (`map_unsynchronized_thread_safe`,
+  `allow_mapped_buffers_during_execution`): with `mesa_glthread=true` nothing changes (48.4 / 40,
+  47.2 / 36; no GL worker thread, Mesa's share the same).
+- **Waze's own map options.** Waze's car library reads none of the map display settings (3D/2D,
+  north up; `com.waze.car_lib` has no reference to them), and its 3D extras (3D tile insights,
+  3D realtime alerts, rotated labels in 3D) are off in Waze's remote configuration. What Car mode
+  offers is the render scale (Map sharpness, above) and Waze's MSAA
+  (`preferences/Waze map/Waze map anti aliasing value` in waze_config.db): 4 samples cost nothing
+  measurable (832x608: 47.4 / 36, 48.1 / 38; Native: 25.6 / 22, 26.1 / 23; still 57.4 and 28.7),
+  V3D's tile buffer does the multisampling and the resolve.
+- **Mesa.** Pi OS has Mesa 26.2.7 (Raspberry Pi's backport); the newest release is 26.3.1, whose v3d
+  changes are fixes, not speed: plain 26.3.1 as the app's Mesa gives the same (Native: 26.1 / 22,
+  26.5 / 22). What V3D loses with Waze is in Mesa's v3d itself, and two patches
+  (`tools/debvm/patches/mesa-*.patch`) fix it:
+  - The binner waited for every render. A draw whose vertex shader samples a texture made its bin
+    job wait for the context's last render, whatever wrote the texture (Godot's vertex shaders
+    sample textures no GPU job writes), so V3D's render engine stood still during every bin job:
+    Waze's bin jobs waited 3.5 s per second for its own renders (`tools/debian/gpu-trace.sh`).
+    `mesa-v3d-vs-texture-bin-sync.patch` waits only when the last GPU job writing a sampled vertex
+    texture may still run (each resource remembers it): the waits are gone (31.8 ms -> 0.7 ms a bin
+    job), the render engine busy 81% -> 91%: 26.8 / 21, 27.4 / 22.
+  - The window was loaded before Godot's full-window copy overwrote it. `mesa-v3d-blit-no-load.patch`
+    invalidates the destination of a blit that writes all of it: 26.8 / 22, 27.2 / 23.
+  - Both: **27.6 / 23, 28.0 / 22** (+5-6%), still 30.3 (29.1). The V3D is then full (render 85-91%
+    plus tacomp's 7%), so overlapping bin and render jobs makes each render a little longer.
+  `tools/debian/v3d-mesa-test.c` checks both against the GL's results on the Pi's V3D (vertex
+  shaders reading what a slow draw, a clear and the TFU's glGenerateMipmap just wrote, and a CPU
+  upload; full and partial blits over a destination drawn into just before): every build passes
+  900/900; a control build that never makes the binner wait fails 272 of 900, so the test catches a
+  missing wait. A private Mesa has to offer GLES 1 configs too: GTK's eglChooseConfig sets no
+  EGL_RENDERABLE_TYPE, whose default is EGL_OPENGL_ES_BIT, and without it GTK found no config, could
+  not import Waze's frames and the car got none while Waze kept drawing. It is built as
+  `build-dist.sh` step mesa into /opt/teslalinux/mesa (v3d and vc4, 22 MB, 3.8 MB in the dist) and
+  the launcher puts it first on the app's library path (`TESLALINUX_APP_MESA=system` keeps Pi OS's).
+
 ## Touch path
 
 A second WebSocket server on `TACOMP_TOUCH_PORT` (9999) accepts the upstream text protocol
