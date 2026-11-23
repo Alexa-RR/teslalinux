@@ -133,10 +133,21 @@ Settings > App updates > **Upload an update** takes a `.apkm` (APKMirror), `.xap
    backoff has expired, or on "Check now". With the manual source, or Google Play while it is not
    enabled, nothing is asked.
 2. **Download policy.** If the source has a newer version that is not marked bad, the download (about
-   190 MB) starts only when NetworkManager calls the uplink unmetered (`Metered` = no or guess-no:
-   Wi-Fi, Ethernet). An LTE modem is guess-yes, and unknown counts as metered. "Allow updates over LTE"
-   lifts that. Otherwise the run records "waiting for Wi-Fi or Ethernet", and the next Wi-Fi uplink
-   (the dispatcher hook) continues.
+   190 MB) starts only when the uplink is unmetered. The uplink is the interface of the kernel's default
+   route (the lowest metric in `/proc/net/route`, so teslalinux-uplink's own metric-5 route when it
+   runs), and its metered state is NetworkManager's for that device (`GetDeviceByIpIface`, the
+   device's `Metered`; the global `Metered` when NetworkManager does not manage it). `no` is
+   unmetered; `guess-no` (NetworkManager's guess for Wi-Fi and Ethernet) is unmetered only when the
+   link is not cellular. Cellular is a ModemManager modem (NetworkManager device type modem), a USB
+   modem or tethering driver (`cdc_ether`, `cdc_ncm`, `huawei_cdc_ncm`, `rndis_host`, `qmi_wwan`,
+   `cdc_mbim`, `ipheth`: NetworkManager's `Driver`, else `/sys/class/net/<if>/device/driver`; the same
+   set teslalinux-uplink and ATL's ConnectivityManager use) or a `wwan*`/`rmnet*`/`ppp*`/`qmi*`
+   interface. So a HiLink stick, which NetworkManager sees as an Ethernet device and guesses
+   unmetered, counts as metered until its connection is set unmetered explicitly
+   (`nmcli connection modify <name> connection.metered no`), as Android keeps mobile data metered
+   unless the carrier configures it otherwise. `yes`, `guess-yes` (a modem) and unknown are metered.
+   "Allow updates over LTE" lifts all of that. Otherwise the run records "waiting for Wi-Fi or
+   Ethernet", and the next Wi-Fi uplink (the dispatcher hook) continues.
 3. **Download** into `/var/lib/teslalinux/appupdate/staging/<versionCode>/`, resumable across runs.
    Limits: 600 MB per file, 1 GB in total, a 90-minute deadline, and 2 minutes without data counts as a
    stall. Splits: `config.arm64_v8a`, the density (xhdpi, else the nearest), and the device language
@@ -310,7 +321,9 @@ default is APKPure, automatic, Wi-Fi only.
     a throwaway RSA key (valid v2, wrong signer), one foreign split, a flipped byte, a truncated split,
     each missing split, the wrong ABI, a misnamed split, minSdk above 32, or another package; the
     density fallback and the language rules;
-  * decisions: metered, backoff, the daily-check rule, the `/proc/net/tcp` parser, the dispenser URL
+  * decisions: metered (a cellular uplink guessed unmetered stays metered), the default route's interface
+    from `/proc/net/route`, the cellular classification (drivers, device type, names), backoff, the
+    daily-check rule, the `/proc/net/tcp` parser, the dispenser URL
     rule, the health verdict, the device locale;
   * the state machine (fake tlplay, fake systemctl, the real install-app.sh): source down -> backoff ->
     recovery, LTE waits, verification failure -> marked bad, car connected waits, idle install ->

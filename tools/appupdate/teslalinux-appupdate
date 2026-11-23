@@ -157,6 +157,15 @@ MAX_UPLOAD = int(E("APPUPDATE_MAX_UPLOAD", str(400 << 20)))
 
 # NetworkManager's NMMetered (libnm nm-dbus-interface.h)
 NM_METERED = {0: "unknown", 1: "yes", 2: "no", 3: "guess-yes", 4: "guess-no"}
+# NetworkManager's NMDeviceType values that are a mobile data link: NM_DEVICE_TYPE_MODEM (ModemManager)
+NM_DEVICE_TYPE_MODEM = 8
+# the kernel drivers of USB modems and phone tethering, as host/teslalinux-uplink (MODEM_DRIVERS, ipheth)
+# and ATL's ConnectivityManager classify them: a HiLink or other ECM/NCM/RNDIS LTE stick, which
+# NetworkManager sees as an Ethernet device and guesses unmetered, QMI/MBIM modems, an iPhone's USB tethering
+CELLULAR_DRIVERS = {"cdc_ether", "cdc_ncm", "huawei_cdc_ncm", "rndis_host", "qmi_wwan", "cdc_mbim", "ipheth"}
+CELLULAR_NAME_PREFIXES = ("wwan", "rmnet", "ppp", "qmi")
+PROC_ROUTE = E("APPUPDATE_PROC_ROUTE", "/proc/net/route")
+SYSFS_NET = E("APPUPDATE_SYSFS_NET", "/sys/class/net")
 
 
 def log(msg):
@@ -318,14 +327,112 @@ def nm_metered():
     return {"yes": 1, "no": 2}.get(word, {"yes (guessed)": 3, "no (guessed)": 4}.get(out.stdout.strip()))
 
 
-def download_allowed(metered, allow_metered):
-    """(allowed, why). Only a connection NetworkManager calls unmetered (no / guess-no: Wi-Fi, Ethernet) is
-    used unless "allow updates over LTE" is on; an LTE modem is guess-yes, and unknown counts as metered."""
+def default_route_iface(route_text=None):
+    """The interface of the IPv4 default route the kernel uses (the lowest metric; teslalinux-uplink's own
+    metric-5 route when it runs), from /proc/net/route contents, or None without one."""
+    if route_text is None:
+        try:
+            with open(PROC_ROUTE) as f:
+                route_text = f.read()
+        except OSError:
+            return None
+    best = None
+    for line in route_text.splitlines()[1:]:
+        c = line.split()
+        # Iface Destination Gateway Flags RefCnt Use Metric Mask ...: a default route that is up (RTF_UP)
+        if len(c) < 8 or c[1] != "00000000" or c[7] != "00000000":
+            continue
+        try:
+            if not int(c[3], 16) & 1:
+                continue
+            metric = int(c[6])
+        except ValueError:
+            continue
+        if best is None or metric < best[1]:
+            best = (c[0], metric)
+    return best[0] if best else None
+
+
+def sysfs_driver(iface):
+    """The kernel driver of an interface (/sys/class/net/IFACE/device/driver), or None for a virtual one."""
+    link = os.path.join(SYSFS_NET, iface, "device", "driver")
+    return os.path.basename(os.path.realpath(link)) if os.path.exists(link) else None
+
+
+def busctl_value(out):
+    """The value of one `busctl get-property` line: u 4 -> 4, s "cdc_ether" -> cdc_ether, o "/x" -> /x."""
+    m = re.fullmatch(r'\s*([a-z])\s+(.*?)\s*', out or "")
+    if not m:
+        return None
+    sig, val = m.groups()
+    if sig in "uiyqnxt":
+        try:
+            return int(val)
+        except ValueError:
+            return None
+    if sig in "so" and len(val) >= 2 and val[0] == val[-1] == '"':
+        return val[1:-1]
+    return None
+
+
+def nm_device(iface):
+    """NetworkManager's device for iface: {"type": NMDeviceType, "metered": NMMetered, "driver": str}, or None
+    without NetworkManager or when it does not manage the interface."""
+    def busctl(*args):
+        try:
+            out = subprocess.run(["busctl", "--system"] + list(args), capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout if out.returncode == 0 else None
+    path = busctl_value(busctl("call", "org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager",
+                               "org.freedesktop.NetworkManager", "GetDeviceByIpIface", "s", iface))
+    if not path:
+        return None
+    dev = {}
+    for key, prop in (("type", "DeviceType"), ("metered", "Metered"), ("driver", "Driver")):
+        dev[key] = busctl_value(busctl("get-property", "org.freedesktop.NetworkManager", path,
+                                       "org.freedesktop.NetworkManager.Device", prop))
+    return dev
+
+
+def is_cellular(iface, nm_type, driver):
+    """A mobile data link: a ModemManager modem in NetworkManager, a USB modem or tethering driver (the
+    driver NetworkManager reports, else the kernel's), or a conventional modem interface name."""
+    if nm_type == NM_DEVICE_TYPE_MODEM:
+        return True
+    if driver in CELLULAR_DRIVERS:
+        return True
+    return bool(iface) and iface.startswith(CELLULAR_NAME_PREFIXES)
+
+
+def uplink_metered():
+    """(NMMetered or None, cellular, iface) of the default route's interface: NetworkManager's metered state of
+    that device (else its global Metered property, the primary connection's) and whether it is cellular."""
+    iface = default_route_iface()
+    if not iface:
+        return nm_metered(), False, None
+    dev = nm_device(iface) or {}
+    metered = dev.get("metered")
+    if metered is None:
+        metered = nm_metered()
+    driver = dev.get("driver") or sysfs_driver(iface)
+    return metered, is_cellular(iface, dev.get("type"), driver), iface
+
+
+def download_allowed(metered, allow_metered, cellular=False):
+    """(allowed, why). Unless "allow updates over LTE" is on, only an uplink NetworkManager calls unmetered is
+    used: "no" (set on the connection), or "guess-no" (its guess for Wi-Fi and Ethernet) when the link is not
+    cellular. A cellular link (an LTE stick NetworkManager sees as Ethernet and guesses "no", a modem, which
+    is guess-yes) counts as metered unless the connection says "no" explicitly, as Android's telephony keeps
+    mobile data metered unless the carrier configures it unmetered; unknown counts as metered."""
     if allow_metered:
         return True, "allowed on any uplink (setting)"
-    if metered in (2, 4):
+    if metered == 2 or (metered == 4 and not cellular):
         return True, "unmetered uplink (%s)" % NM_METERED[metered]
-    return False, "uplink is metered (%s); waiting for Wi-Fi or Ethernet" % NM_METERED.get(metered, "unknown")
+    if cellular and metered == 4:
+        return False, "uplink is cellular (NetworkManager guesses unmetered); waiting for Wi-Fi or Ethernet"
+    return False, "uplink is metered (%s%s); waiting for Wi-Fi or Ethernet" % (NM_METERED.get(metered, "unknown"),
+                                                                                 ", cellular" if cellular else "")
 
 
 # ---------------------------------------------------------------------------- car connected?
@@ -839,7 +946,8 @@ def cycle(force=False):
     elif now < int(st.get("nextTryAt") or 0):
         return st
     if st.get("wanted") and not st.get("pending"):
-        allowed, why = download_allowed(nm_metered(), settings["allowMetered"])
+        metered, cellular, _iface = uplink_metered()
+        allowed, why = download_allowed(metered, settings["allowMetered"], cellular)
         if not allowed:
             event(st, "waiting-unmetered", "Waze %s is available; %s" % (st["wanted"]["versionName"], why), now)
             return st

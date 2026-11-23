@@ -303,6 +303,74 @@ class Decisions(unittest.TestCase):
         self.assertEqual([au.download_allowed(m, False)[0] for m in (0, 1, 2, 3, 4, None)], [False, False, True, False, True, False])
         self.assertTrue(all(au.download_allowed(m, True)[0] for m in (0, 1, 2, 3, 4, None)))
         self.assertIn("waiting for Wi-Fi", au.download_allowed(3, False)[1])
+        # a cellular uplink (an LTE stick NetworkManager sees as Ethernet: guess-no) is metered unless "no" is set
+        self.assertEqual([au.download_allowed(m, False, True)[0] for m in (0, 1, 2, 3, 4, None)], [False, False, True, False, False, False])
+        self.assertIn("cellular", au.download_allowed(4, False, True)[1])
+        self.assertTrue(au.download_allowed(4, True, True)[0])
+
+    def test_default_route_iface(self):
+        hdr = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+        row = lambda i, dest, gw, flags, metric, mask: "%s\t%s\t%s\t%s\t0\t0\t%d\t%s\t0\t0\t0\n" % (i, dest, gw, flags, metric, mask)
+        text = hdr + row("eth1", "00000000", "0108A8C0", "0003", 100, "00000000") \
+            + row("wlan1", "00000000", "0101A8C0", "0003", 600, "00000000") \
+            + row("eth1", "0008A8C0", "00000000", "0001", 100, "00FFFFFF") \
+            + row("usb0", "00000000", "0101A8C0", "0003", 5, "00000000")
+        self.assertEqual(au.default_route_iface(text), "usb0")  # teslalinux-uplink's metric-5 route wins
+        self.assertEqual(au.default_route_iface(hdr + row("eth1", "00000000", "01", "0002", 1, "00000000")), None)  # not RTF_UP
+        self.assertEqual(au.default_route_iface(hdr), None)
+
+    def test_busctl_value(self):
+        self.assertEqual(au.busctl_value("u 4\n"), 4)
+        self.assertEqual(au.busctl_value('s "cdc_ether"\n'), "cdc_ether")
+        self.assertEqual(au.busctl_value('o "/org/freedesktop/NetworkManager/Devices/3"\n'), "/org/freedesktop/NetworkManager/Devices/3")
+        self.assertEqual(au.busctl_value(None), None)
+        self.assertEqual(au.busctl_value(""), None)
+
+    def test_cellular(self):
+        self.assertTrue(au.is_cellular("eth1", 1, "cdc_ether"))      # HiLink stick: NetworkManager's Ethernet device
+        self.assertTrue(au.is_cellular("usb0", None, "rndis_host"))
+        self.assertTrue(au.is_cellular("eth2", 1, "huawei_cdc_ncm"))
+        self.assertTrue(au.is_cellular("wwan0", 8, "qmi_wwan"))      # ModemManager modem
+        self.assertTrue(au.is_cellular("cdc-wdm0", 8, None))
+        self.assertTrue(au.is_cellular("ppp0", None, None))
+        self.assertFalse(au.is_cellular("eth0", 1, "bcmgenet"))      # the Pi's own Ethernet
+        self.assertFalse(au.is_cellular("wlan1", 2, "brcmfmac"))
+        self.assertFalse(au.is_cellular(None, None, None))
+
+    def test_uplink_metered(self):
+        saved = {k: getattr(au, k) for k in ("default_route_iface", "nm_device", "nm_metered", "sysfs_driver")}
+        try:
+            au.nm_metered = lambda: 1
+            au.default_route_iface = lambda: "eth1"
+            au.nm_device = lambda iface: {"type": 1, "metered": 4, "driver": "cdc_ether"}
+            au.sysfs_driver = lambda iface: "bcmgenet"
+            self.assertEqual(au.uplink_metered(), (4, True, "eth1"))    # the route's device, NetworkManager's driver
+            au.nm_device = lambda iface: None                           # no NetworkManager device: global state, sysfs driver
+            au.sysfs_driver = lambda iface: "cdc_ncm"
+            self.assertEqual(au.uplink_metered(), (1, True, "eth1"))
+            au.sysfs_driver = lambda iface: "bcmgenet"
+            au.nm_device = lambda iface: {"type": 1, "metered": None, "driver": None}
+            self.assertEqual(au.uplink_metered(), (1, False, "eth1"))
+            au.default_route_iface = lambda: None
+            self.assertEqual(au.uplink_metered(), (1, False, None))
+        finally:
+            for k, v in saved.items():
+                setattr(au, k, v)
+
+    def test_sysfs_driver(self):
+        d = tempfile.mkdtemp()
+        saved = au.SYSFS_NET
+        try:
+            os.makedirs(os.path.join(d, "drivers", "cdc_ether"))
+            os.makedirs(os.path.join(d, "net", "eth1", "device"))
+            os.symlink(os.path.join(d, "drivers", "cdc_ether"), os.path.join(d, "net", "eth1", "device", "driver"))
+            os.makedirs(os.path.join(d, "net", "lo"))
+            au.SYSFS_NET = os.path.join(d, "net")
+            self.assertEqual(au.sysfs_driver("eth1"), "cdc_ether")
+            self.assertEqual(au.sysfs_driver("lo"), None)
+        finally:
+            au.SYSFS_NET = saved
+            shutil.rmtree(d)
 
     def test_backoff(self):
         mid = lambda: 0.5
@@ -404,15 +472,16 @@ class StateMachine(unittest.TestCase):
         os.environ.update(FAKE_TLPLAY_MODE=t("mode.json"), FAKE_TLPLAY_LOG=t("tlplay.log"), APPUPDATE_FAKE_APPCTL=t("appctl"),
                           APPUPDATE_IDLE_RECHECK="0")
         self.saved = {k: getattr(au, k) for k in ("APPS_DIR", "STATE_DIR", "SETTINGS_FILE", "AUTH_FILE", "TLPLAY", "APP_DATA_DIR",
-                                                   "ART_CACHE", "HEALTH_ENV", "APP_USER", "nm_metered", "car_state", "marker_logged",
+                                                   "ART_CACHE", "HEALTH_ENV", "APP_USER", "uplink_metered", "car_state", "marker_logged",
                                                    "unit_restarts", "boot_time")}
         au.APPS_DIR, au.STATE_DIR, au.SETTINGS_FILE = t("apps"), t("state"), t("settings.json")
         au.AUTH_FILE, au.TLPLAY, au.APP_DATA_DIR = t("play", "auth.json"), t("tlplay"), t("data", "waze")
         au.ART_CACHE, au.HEALTH_ENV, au.APP_USER = t("art"), t("run", "health.env"), ""
         self.metered = 4
+        self.cellular = False
         self.connected = False
         self.marker = True
-        au.nm_metered = lambda: self.metered
+        au.uplink_metered = lambda: (self.metered, self.cellular, "test0")
         au.car_state = lambda: (self.connected, "test")
         au.marker_logged = lambda since: self.marker
         au.unit_restarts = lambda: 0
@@ -492,6 +561,18 @@ class StateMachine(unittest.TestCase):
         for s in ("config.arm64_v8a", "config.xhdpi", "config.en"):
             self.assertIn("--split " + s, dl)
         self.assertEqual(self.calls("appctl.log"), [])  # car connected: nothing installed
+
+    def test_lte_stick_guessed_unmetered_waits(self):
+        self.metered, self.cellular = 4, True  # a HiLink stick: NetworkManager's Ethernet device, guess-no
+        self.connected = True
+        au.cmd_run(False)
+        st = self.state()
+        self.assertEqual(st["lastResult"], "waiting-unmetered")
+        self.assertIn("cellular", st["lastMessage"])
+        self.assertFalse(any("download" in c for c in self.calls("tlplay.log")))
+        self.metered = 2  # the connection set unmetered explicitly (nmcli connection modify ... connection.metered no)
+        au.cmd_run(False)
+        self.assertEqual(self.state()["pending"]["versionCode"], VC, self.state()["lastMessage"])
 
     def test_allow_over_lte_setting(self):
         self.metered = 3
