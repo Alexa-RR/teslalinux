@@ -85,7 +85,11 @@ os.environ.update({
     "TESLALINUX_APPLY_DISPLAY": os.path.join(TMP, "apply"),
     "TESLALINUX_APPLY_SUDO": "0",
     "TESLALINUX_CERT_STATE": os.path.join(TMP, "tls.json"),
+    "TESLALINUX_BOOTTIME_STATE": os.path.join(TMP, "boottime.json"),
+    "TESLALINUX_BOOT_ID": os.path.join(TMP, "boot_id"),
 })
+with open(os.path.join(TMP, "boot_id"), "w") as f:
+    f.write("b2\n")
 sys.path.insert(0, os.path.join(REPO, "services", "api"))
 import api  # noqa: E402
 from http.server import ThreadingHTTPServer  # noqa: E402
@@ -432,6 +436,77 @@ class AudioOutput(unittest.TestCase):
             self.assertEqual(self.post(bad)[0], 500, bad)
         with open(settings) as f:
             self.assertEqual(json.load(f), {"output": "car", "volume": 35})
+
+
+class BootTime(unittest.TestCase):
+    """status.system.boot from host/teslalinux-boottime's file, and how that file is made"""
+
+    def setUp(self):
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+        loader = SourceFileLoader("boottime", os.path.join(REPO, "host", "teslalinux-boottime"))
+        self.bt = importlib.util.module_from_spec(importlib.util.spec_from_loader("boottime", loader))
+        loader.exec_module(self.bt)
+        self.path = os.environ["TESLALINUX_BOOTTIME_STATE"]
+        if os.path.exists(self.path):
+            os.remove(self.path)
+
+    def boot(self):
+        return json.loads(call("status")[2])["system"]["boot"]
+
+    def test_journal_lines(self):
+        found = {"appFrameSeconds": None, "appMapSeconds": None}
+        for line in ["[    3.100000] pi systemd[1]: Started teslalinux-atl.service",
+                     "[   27.612345] pi teslalinux-atl[812]: SurfaceView: surfaceChanged 1216x928",
+                     "[   28.000000] pi teslalinux-atl[812]: SurfaceView: surfaceChanged 1216x928",
+                     "[   41.349000] pi teslalinux-atl[812]: WAZE: Map shown and ready",
+                     "garbage without a time"]:
+            self.bt.app_line(line, found, 180)
+        self.assertEqual(found, {"appFrameSeconds": 27.61, "appMapSeconds": 41.35})
+        # a later start of the app (after the cap) is not the boot's
+        late = {"appFrameSeconds": None, "appMapSeconds": None}
+        self.assertTrue(self.bt.app_line("[   12.000000] pi teslalinux-atl[999]: starting", late, 180))
+        self.assertFalse(self.bt.app_line("[  400.000000] pi teslalinux-atl[999]: Map shown and ready", late, 180))
+        self.assertEqual(late["appMapSeconds"], None)
+        self.assertEqual((self.bt.secs(2208208), self.bt.secs(0), self.bt.secs(None)), (2.21, None, None))
+
+    def test_history_one_per_boot_newest_first(self):
+        state = {}
+        for i in range(12):
+            state = self.bt.merge(state, {"bootId": "b%d" % i, "at": 1000 + i, "pageSeconds": 11.0 + i, "final": True})
+        # the same boot again (values arriving) replaces its entry instead of adding one
+        state = self.bt.merge(state, {"bootId": "b11", "at": 1011, "pageSeconds": 11.4, "appMapSeconds": 41.3})
+        self.assertEqual(len(state["history"]), 10)
+        self.assertEqual([h["bootId"] for h in state["history"][:3]], ["b11", "b10", "b9"])
+        self.assertEqual((state["history"][0]["pageSeconds"], state["history"][0]["appMapSeconds"]), (11.4, 41.3))
+        self.assertEqual(state["current"]["bootId"], "b11")
+
+    def test_status_field(self):
+        self.assertIsNone(self.boot())  # never measured: the page leaves the group out
+        rec = {"bootId": "b2", "at": 1795000000, "kernelSeconds": 2.21, "userspaceSeconds": 25.47, "hotspotSeconds": 7.81,
+               "pageSeconds": 8.36, "appFrameSeconds": 27.61, "appMapSeconds": None, "firmwareCounted": False, "final": False}
+        state = self.bt.merge({"history": [{"bootId": "b1", "at": 1794990000, "pageSeconds": 8.5, "appMapSeconds": 40.1}]}, rec)
+        with open(self.path, "w") as f:
+            json.dump(state, f)
+        b = self.boot()
+        self.assertEqual((b["kernelSeconds"], b["hotspotSeconds"], b["pageSeconds"], b["appFrameSeconds"], b["appMapSeconds"]),
+                         (2.21, 7.81, 8.36, 27.61, None))
+        self.assertEqual((b["final"], b["firmwareCounted"], b["at"]), (False, False, 1795000000))
+        self.assertEqual([h["pageSeconds"] for h in b["history"]], [8.36, 8.5])
+        self.assertNotIn("bootId", b["history"][0])
+        # after a restart the file still holds the last boot: history only until it is measured again
+        with open(os.environ["TESLALINUX_BOOT_ID"], "w") as f:
+            f.write("b3\n")
+        try:
+            b = self.boot()
+            self.assertEqual((b["pageSeconds"], b["final"], len(b["history"])), (None, False, 2))
+        finally:
+            with open(os.environ["TESLALINUX_BOOT_ID"], "w") as f:
+                f.write("b2\n")
+        # a broken file is no field, not an error
+        with open(self.path, "w") as f:
+            f.write("{nope")
+        self.assertIsNone(self.boot())
 
 
 class Settings(unittest.TestCase):

@@ -1,0 +1,17 @@
+[Unit]
+Description=teslalinux: how long this start took, for the settings page (teslalinux-boottime)
+# measures in the background and ends within about 3 minutes; Type=simple, so the boot does not wait for it
+After=local-fs.target
+
+[Service]
+Type=simple
+User=tesla
+Group=tesla
+# the app's lines ("Map shown and ready") are in the system journal
+SupplementaryGroups=systemd-journal
+ExecStart=/usr/bin/python3 /usr/local/bin/teslalinux-boottime
+Nice=10
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

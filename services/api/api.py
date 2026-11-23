@@ -78,7 +78,8 @@ The settings page's Status, Network and System update sections (new routes only)
                           Wi-Fi / Ethernet, address, bytes since boot, reachability), the LTE modem
                           (HiLink web API or ModemManager: operator, technology, signal), open car pages,
                           the last GPS fix, the app, and the system (OS, kernel, uptime, load, memory,
-                          disk, CPU temperature, Pi throttling)
+                          disk, CPU temperature, Pi throttling, and system.boot: how long this start
+                          took, from host/teslalinux-boottime's file, with the last starts)
 * GET  /api/network       hotspot name and country (the password never leaves the device), LTE settings
                           (APN, user, roaming, enabled; no password) from `teslalinux-network lte-state`
 * POST /api/network       JSON {when: "now"|"boot", hotspot: {ssid, psk, country}, lte: {apn, user,
@@ -158,6 +159,9 @@ AUDIO_STATUS = os.environ.get("TESLALINUX_AUDIO_STATUS",
                               os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/tesla"), "teslalinux-audio.json"))
 AUDIO_OUTPUTS = ("car", "pi", "both")
 AUDIO_DEFAULTS = {"output": "car", "volume": 80}
+# how long the device took to start (host/teslalinux-boottime writes it once per boot)
+BOOTTIME_STATE = os.environ.get("TESLALINUX_BOOTTIME_STATE", "/var/lib/teslalinux/state/boottime.json")
+BOOT_ID_FILE = os.environ.get("TESLALINUX_BOOT_ID", "/proc/sys/kernel/random/boot_id")
 
 ENV = tp.load_env()
 _lock = threading.Lock()
@@ -1248,7 +1252,40 @@ def system_status():
             "model": _read("/sys/firmware/devicetree/base/model") or os.uname().machine,
             "uptimeSeconds": uptime, "load": load, "cpuTemperature": cpu_temperature(), "cpus": os.cpu_count(),
             "memory": {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable")}, "disk": disk,
-            "throttled": throttled}
+            "throttled": throttled, "boot": boot_status()}
+
+
+BOOT_KEYS = ("kernelSeconds", "userspaceSeconds", "hotspotSeconds", "pageSeconds", "appFrameSeconds", "appMapSeconds")
+
+
+def boot_status():
+    """status.system.boot: this start's milestones in seconds since the kernel's start (null: not
+    reached, or not measured yet), whether they are final, and the last starts, newest first
+    (host/teslalinux-boottime's file). None without a file (the measurement never ran)."""
+    try:
+        with open(BOOTTIME_STATE) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    def num(v):
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
+
+    cur = data.get("current") if isinstance(data.get("current"), dict) else {}
+    # a record from an earlier boot is history only: this boot is not measured yet
+    if cur.get("bootId") != (_read(BOOT_ID_FILE) or "").strip():
+        cur = {}
+    out = {"at": num(cur.get("at"))}
+    out.update({k: num(cur.get(k)) for k in BOOT_KEYS})
+    out["final"] = cur.get("final") is True
+    out["firmwareCounted"] = cur.get("firmwareCounted") is True
+    hist = data.get("history") if isinstance(data.get("history"), list) else []
+    out["history"] = [{"at": num(h.get("at")), "pageSeconds": num(h.get("pageSeconds")),
+                       "hotspotSeconds": num(h.get("hotspotSeconds")), "appMapSeconds": num(h.get("appMapSeconds"))}
+                      for h in hist[:10] if isinstance(h, dict)]
+    return out
 
 
 def os_name():

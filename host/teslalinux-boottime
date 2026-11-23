@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""teslalinux: how long this device took to start, for the settings page (This device > Start-up).
+
+    teslalinux-boottime [--cap SECONDS]   measure this boot; the state file is written as values arrive
+    teslalinux-boottime --print           the state file
+
+Runs once per boot (teslalinux-boottime.service, Type=simple, so it does not hold the boot up) as the
+API's user with the journal's group; GET /api/status hands the file to the page as system.boot. Every
+value is in seconds since the kernel started: the Pi's firmware runs before that, and Linux cannot
+see it. The sources are the ones systemd-analyze and tools/debian/app-starttime.sh use:
+
+  kernelSeconds     the kernel, until systemd (or an initrd) started   manager InitRD/UserspaceTimestampMonotonic
+  userspaceSeconds  systemd, until the boot finished                   manager FinishTimestampMonotonic
+  hotspotSeconds    hostapd running: the car can join                  hostapd's ActiveEnterTimestampMonotonic
+  pageSeconds       nginx running: this page is served                 nginx's ActiveEnterTimestampMonotonic
+  appFrameSeconds   the app's first picture                            first "surfaceChanged" in teslalinux-atl's journal
+  appMapSeconds     Waze's map ready                                   its "Map shown and ready" line
+
+A value that does not exist (yet) is null. The app's lines count only within the cap (3 minutes by
+default) after the kernel's start, so a later restart of the app is not taken for the boot's. The
+file keeps the last starts (history, newest first), one per boot id.
+"""
+import json
+import os
+import re
+import select
+import subprocess
+import sys
+import time
+
+STATE = os.environ.get("TESLALINUX_BOOTTIME_STATE", "/var/lib/teslalinux/state/boottime.json")
+APP_UNIT = os.environ.get("TESLALINUX_APP_UNIT", "teslalinux-atl.service")
+HOTSPOT_UNIT = os.environ.get("TESLALINUX_HOTSPOT_UNIT", "hostapd.service")
+PAGE_UNIT = os.environ.get("TESLALINUX_PAGE_UNIT", "nginx.service")
+KEEP = 10
+FRAME = "surfaceChanged"
+MAP_READY = "Map shown and ready"
+MONO = re.compile(r"^\[\s*(\d+(?:\.\d+)?)\]")
+
+
+def secs(us):
+    """microseconds since the kernel's start, as seconds (0: never happened)"""
+    return round(us / 1e6, 2) if isinstance(us, int) and us > 0 else None
+
+
+def systemctl_show(unit, props):
+    cmd = ["systemctl", "show"] + [a for p in props for a in ("-p", p)] + ([unit] if unit else [])
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    vals = {}
+    for line in out.splitlines():
+        k, _, v = line.partition("=")
+        if v.isdigit():
+            vals[k] = int(v)
+    return vals
+
+
+def service_times():
+    """the boot's own milestones from systemd (the app's come from its journal)"""
+    m = systemctl_show(None, ["InitRDTimestampMonotonic", "UserspaceTimestampMonotonic", "FinishTimestampMonotonic"])
+    kernel_end = m.get("InitRDTimestampMonotonic") or m.get("UserspaceTimestampMonotonic") or 0
+    finish = m.get("FinishTimestampMonotonic") or 0
+    return {
+        "kernelSeconds": secs(kernel_end),
+        "userspaceSeconds": secs(finish - kernel_end) if finish and kernel_end else None,
+        "hotspotSeconds": secs(systemctl_show(HOTSPOT_UNIT, ["ActiveEnterTimestampMonotonic"]).get("ActiveEnterTimestampMonotonic")),
+        "pageSeconds": secs(systemctl_show(PAGE_UNIT, ["ActiveEnterTimestampMonotonic"]).get("ActiveEnterTimestampMonotonic")),
+    }
+
+
+def app_line(line, found, cap):
+    """one line of `journalctl -o short-monotonic` into found {appFrameSeconds, appMapSeconds};
+    False once the lines are past the cap (nothing later counts: stop reading)"""
+    m = MONO.match(line)
+    if not m:
+        return True
+    t = float(m.group(1))
+    if t > cap:
+        return False
+    if found.get("appFrameSeconds") is None and FRAME in line:
+        found["appFrameSeconds"] = round(t, 2)
+    if found.get("appMapSeconds") is None and MAP_READY in line:
+        found["appMapSeconds"] = round(t, 2)
+    return True
+
+
+def merge(state, rec):
+    """this boot's record into the state: {"current": rec, "history": [newest first, one per boot]}"""
+    old = state.get("history") if isinstance(state, dict) else None
+    history = [h for h in (old if isinstance(old, list) else []) if isinstance(h, dict) and h.get("bootId") != rec["bootId"]]
+    history.insert(0, {k: rec.get(k) for k in ("bootId", "at", "kernelSeconds", "hotspotSeconds", "pageSeconds", "appMapSeconds")})
+    return {"current": rec, "history": history[:KEEP]}
+
+
+def load():
+    try:
+        with open(STATE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save(data):
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=1)
+        f.write("\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATE)
+
+
+def uptime():
+    with open("/proc/uptime") as f:
+        return float(f.read().split()[0])
+
+
+def measure(cap):
+    with open("/proc/sys/kernel/random/boot_id") as f:
+        boot = f.read().strip()
+    at = int(time.time() - uptime())
+    app = {"appFrameSeconds": None, "appMapSeconds": None}
+    # the app's journal of this boot from its start, followed while the cap has not passed
+    follow = uptime() < cap
+    cmd = ["journalctl", "-b", "-u", APP_UNIT, "-o", "short-monotonic", "-q", "--no-pager", "-n", "all"] + (["-f"] if follow else [])
+    try:
+        jr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        jr = None
+    written = None
+    checked = 0.0
+    buf = b""
+    try:
+        while True:
+            # systemd's milestones every 2 s (the app's journal can stream fast while it starts)
+            if time.monotonic() - checked >= 2 or app != (written or {}).get("_app"):
+                checked = time.monotonic()
+                done = app["appMapSeconds"] is not None or uptime() >= cap
+                rec = dict(bootId=boot, at=at, **service_times())
+                rec.update(app)
+                rec["firmwareCounted"] = False
+                # the boot itself must have finished too, or its userspace part is not known yet
+                rec["final"] = done and rec["userspaceSeconds"] is not None
+                if rec != {k: v for k, v in (written or {}).items() if k != "_app"}:
+                    save(merge(load(), rec))
+                written = dict(rec, _app=dict(app))
+                if rec["final"] or (done and uptime() >= cap + 120):
+                    return rec
+            if jr is None:
+                time.sleep(2)
+                continue
+            r, _, _ = select.select([jr.stdout], [], [], 2.0)
+            if not r:
+                continue
+            chunk = os.read(jr.stdout.fileno(), 65536)
+            if not chunk:
+                # the journal ended (not followed, or journalctl gone): what it had is all there is
+                jr.wait()
+                jr = None
+                continue
+            buf += chunk
+            lines = buf.split(b"\n")
+            buf = lines.pop()
+            if not all(app_line(line.decode("utf-8", "replace"), app, cap) for line in lines):
+                # past the cap: the rest of the journal is a later start of the app
+                jr.kill()
+                jr.wait()
+                jr = None
+    finally:
+        if jr is not None:
+            jr.kill()
+
+
+def main(argv):
+    if argv[1:2] == ["--print"]:
+        print(json.dumps(load(), indent=1))
+        return 0
+    cap = 180.0
+    if argv[1:2] == ["--cap"] and len(argv) > 2:
+        cap = float(argv[2])
+    measure(cap)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

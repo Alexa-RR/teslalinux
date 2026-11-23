@@ -68,7 +68,7 @@ OWNED_DIRS=(/usr/share/teslalinux /usr/local/lib/teslalinux /usr/local/share/tes
 # the car stack's units (host/phase1-pios/etc/systemd)
 UNITS=(teslalinux-netconfig.service teslalinux-dbus.service teslalinux-uplink.service tacomp.service
   teslalinux-api.service teslalinux-gps.service teslalinux-audio.service teslalinux-pipewire.service
-  teslalinux-wireplumber.service teslalinux-pipewire-pulse.service teslalinux-atl.service)
+  teslalinux-wireplumber.service teslalinux-pipewire-pulse.service teslalinux-atl.service teslalinux-boottime.service)
 APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.service teslalinux-api.service
   teslalinux-pipewire-pulse.service teslalinux-wireplumber.service teslalinux-pipewire.service tacomp.service teslalinux-dbus.service)
 # runtime packages next to the dist's MANIFEST list (tools/debian/carstack.sh, host/phase1-pios/provision.sh)
@@ -480,7 +480,7 @@ step_files() {
   cp -r "$P/host/phase1-pios/etc/." /usr/share/teslalinux/templates/
   install -m 0644 "$P/host/phase1-pios/env" /usr/share/teslalinux/env.template
   for f in teslalinux-render teslalinux-restart-app teslalinux-set-locale teslalinux-set-keyboard teslalinux-set-app-interface teslalinux-network \
-           teslalinux-system-update teslalinux-uplink teslalinux-dexopt teslalinux-set-gpu-speed; do
+           teslalinux-system-update teslalinux-uplink teslalinux-dexopt teslalinux-set-gpu-speed teslalinux-boottime; do
     put_file "$P/host/$f" "/usr/local/bin/$f" 0755
   done
   put_file "$P/host/phase1-pios/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display 0755

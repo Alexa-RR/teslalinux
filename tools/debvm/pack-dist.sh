@@ -114,7 +114,7 @@ log "2/5 payload from $REPO -> $TOP/share/teslalinux/"
 PAYLOAD=(
   host/phase1-pios host/rpi4 host/tls/teslalinux-tls host/local/check.py
   host/teslalinux-render host/teslalinux-restart-app host/teslalinux-set-locale host/teslalinux-set-keyboard host/teslalinux-set-app-interface
-  host/teslalinux-network host/teslalinux-system-update host/teslalinux-uplink host/teslalinux-dexopt host/teslalinux-android-cacerts host/teslalinux-set-gpu-speed
+  host/teslalinux-network host/teslalinux-system-update host/teslalinux-uplink host/teslalinux-dexopt host/teslalinux-android-cacerts host/teslalinux-set-gpu-speed host/teslalinux-boottime
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
   services/display/test/ws-client.py
   web
