@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""teslalinux: the car page draws Waze's speedometer (one verified Waze version).
+"""teslalinux: the car page draws Waze's speedometer (verified Waze versions, and others where the code fits).
 
   waze-speedometer.py jar APP_DIR OUT.jar [--atl API_IMPL_JAR]
                                               make the class override (APP_DIR: an installed app,
-                                              /var/lib/teslalinux/apps/com.waze); exit 2: not this version
+                                              /var/lib/teslalinux/apps/com.waze); exit 2: not found in this version
                                               (--atl: and only if this ATL has ATLCarSpeedometer)
   waze-speedometer.py check APP_DIR [--atl API_IMPL_JAR]
-                                              report only: is this version known and the code as expected
+                                              report only: is the code as expected (verified, or may not work)
   waze-speedometer.py hide DATA_DIR           turn Waze's own map speedometer off (DATA_DIR: ATL's data
                                               directory for the app, /var/lib/tesla/android/waze), keeping
                                               what it was
@@ -41,8 +41,13 @@ surface, so the car page cannot restyle, place or leave it out. Two pieces move 
 sign) and the over-the-limit offset, which the car page uses as Waze does
 (services/api/api.py speedometer_status).
 
-Only a Waze version listed in VERIFIED, whose code is exactly as expected, gets the jar; anything else
-exits 2 and writes nothing.
+A Waze version listed in VERIFIED gets the jar when its code is exactly as expected ("verified").
+Another version ("unverified": it may not work) gets it when the same code is there under the names a
+verified version has, or else under its own names: the class LocationSensorListener.updateSpeedometer
+constructs (the method and the class it lives in keep their names) is read for its fields, its getters
+and the method that makes it, and the checks above run on those names (the same access flags, the
+same constructor and getter code, the same toString labels, the one construction site). When neither
+fits, the tool exits 2 and writes nothing.
 """
 import hashlib
 import json
@@ -344,21 +349,133 @@ def check(app_dir):
         raise Mismatch("%s versionCode %s is not a verified Waze version (%s)"
                        % (info.get("package"), vc, ", ".join(str(k) for k in VERIFIED)))
     v = VERIFIED[vc]
-    seen_class = seen_caller = False
+    check_dexes(base, dex_list(base), v)
+    return vc, info.get("versionName"), v
+
+
+def dex_list(base):
+    """(name, Dex) of every classes*.dex of the APK, in name order"""
     with zipfile.ZipFile(base) as z:
-        for name in sorted(n for n in z.namelist() if n.startswith("classes") and n.endswith(".dex")):
-            dex = Dex(z.read(name))
-            if dex.class_def(v["class"]) is not None:
-                if seen_class:
-                    raise Mismatch("%s is defined in more than one dex" % v["class"])
-                seen_class = check_reading_class(dex, v)
-            if dex.class_def(v["caller"][0]) is not None:
-                seen_caller = check_caller(dex, v)
+        return [(name, Dex(z.read(name))) for name in sorted(n for n in z.namelist()
+                                                            if n.startswith("classes") and n.endswith(".dex"))]
+
+
+def check_dexes(base, dexes, v):
+    """the reading class and its construction site of V, checked in the APK's DEXES; raises Mismatch"""
+    seen_class = seen_caller = False
+    for _name, dex in dexes:
+        if dex.class_def(v["class"]) is not None:
+            if seen_class:
+                raise Mismatch("%s is defined in more than one dex" % v["class"])
+            seen_class = check_reading_class(dex, v)
+        if dex.class_def(v["caller"][0]) is not None:
+            seen_caller = check_caller(dex, v)
     if not seen_class:
         raise Mismatch("no dex of %s holds %s" % (base, v["class"]))
     if not seen_caller:
         raise Mismatch("no dex of %s holds %s" % (base, v["caller"][0]))
-    return vc, info.get("versionName"), v
+
+
+def _ref(line, kind):
+    """(class, name, type or proto) of the field or method a disassembled LINE refers to"""
+    ref = line.split(" ")[-1]
+    cls, member = ref.split("->", 1)
+    if kind == "field":
+        name, typ = member.split(":", 1)
+        return cls, name, typ
+    i = member.index("(")
+    return cls, member[:i], member[i:]
+
+
+def derive(dexes, template):
+    """TEMPLATE (a VERIFIED entry) with the names this APK uses: the class the stable construction
+    site (LocationSensorListener.updateSpeedometer) makes, its fields in the order its constructor
+    stores them, its getters by the field each returns, the null check its constructor calls and the
+    flow the construction site hands the reading to. Only names are read here; the checks
+    (check_dexes) then hold the code to the same shape as the template's. Raises Mismatch."""
+    cls, method, proto = template["caller"]
+    sites = []
+    for _name, dex in dexes:
+        cd = dex.class_def(cls)
+        if cd is None:
+            continue
+        data = dex.class_data(cd["data"])
+        sites += [(dex, c) for n, p, _a, c in data["direct"] + data["virtual"] if n == method and p == proto and c]
+    if len(sites) != 1:
+        raise Mismatch("%s.%s%s found %d times, expected once" % (cls, method, proto, len(sites)))
+    dex, code = sites[0]
+    try:
+        text = disassemble(dex, dex.code(code)[3])
+        if not text or not text[0].startswith("new-instance v0 L") or len(text) < 7:
+            raise Mismatch("%s.%s does not start by making the reading" % (cls, method))
+        reading = text[0].split(" ")[2]
+        flow = _ref(text[6], "field")
+        if flow[0] != cls:
+            raise Mismatch("%s.%s hands the reading to %s, not a field of its own" % (cls, method, flow[0]))
+        holders = [(d, d.class_def(reading)) for _n, d in dexes if d.class_def(reading) is not None]
+        if len(holders) != 1:
+            raise Mismatch("%s is defined in %d dexes, expected one" % (reading, len(holders)))
+        rdex, cd = holders[0]
+        data = rdex.class_data(cd["data"])
+        ctors = [c for n, p, _a, c in data["direct"] if n == "<init>" and p == INIT_PROTO and c]
+        if len(ctors) != 1:
+            raise Mismatch("%s has no constructor %s" % (reading, INIT_PROTO))
+        ctor = disassemble(rdex, rdex.code(ctors[0])[3])
+        stores = [_ref(line, "field") for line in ctor if line.startswith("iput")]
+        if len(stores) != 4 or any(s[0] != reading for s in stores):
+            raise Mismatch("%s's constructor stores %d fields, expected its four" % (reading, len(stores)))
+        fields = tuple((n, t) for _c, n, t in stores)
+        calls = [_ref(line, "method") for line in ctor if line.startswith("invoke-static")]
+        if len(calls) != 1:
+            raise Mismatch("%s's constructor has %d static calls, expected the null check" % (reading, len(calls)))
+        value_of = {n: value for (n, _t), value in zip(fields, ("speed", "units", "speedLimit", "speedKph"))}
+        getters = []
+        for n, p, _a, c in data["virtual"]:
+            if n in ("equals", "hashCode", "toString") or not p.startswith("()") or not c:
+                continue
+            body = disassemble(rdex, rdex.code(c)[3])
+            got = _ref(body[0], "field") if body and body[0].startswith("iget") else None
+            if got is None or got[0] != reading or got[1] not in value_of:
+                raise Mismatch("%s.%s%s is not a getter of one of its fields" % (reading, n, p))
+            getters.append((n, value_of[got[1]]))
+        if sorted(value for _n, value in getters) != sorted(value_of.values()):
+            raise Mismatch("%s's getters return %s, expected each of its four fields once"
+                           % (reading, sorted(value for _n, value in getters)))
+    except (ValueError, IndexError) as e:  # a line of another form than the template's
+        raise Mismatch("%s.%s or the class it makes is not of the known shape (%s)" % (cls, method, e))
+    return dict(template, **{"class": reading, "fields": fields, "getters": tuple(sorted(getters)),
+                             "null_check": calls[0], "caller_flow": flow[1]})
+
+
+def check_any(app_dir):
+    """(versionCode, versionName, entry, state): "verified" for a VERIFIED version (check); for any
+    other Waze, "unverified" when the code is there as a verified version has it, first under that
+    version's names, else under the names this APK uses (derive). Raises Mismatch when neither fits."""
+    base = os.path.join(app_dir, "base.apk")
+    info = json.loads(subprocess.run([sys.executable, "-I", APK_INFO, base], check=True,
+                                     capture_output=True, text=True).stdout)
+    vc = int(info["versionCode"])
+    if info.get("package") != "com.waze":
+        raise Mismatch("%s is not Waze" % info.get("package"))
+    if vc in VERIFIED:
+        vc, vn, v = check(app_dir)
+        return vc, vn, v, "verified"
+    dexes = dex_list(base)
+    problems = []
+    for known in sorted(VERIFIED, reverse=True):  # the newest first: the names a nearby version most likely keeps
+        try:
+            check_dexes(base, dexes, VERIFIED[known])
+            return vc, info.get("versionName"), VERIFIED[known], "unverified"
+        except Mismatch as e:
+            problems.append("the names of %d: %s" % (known, e))
+        try:
+            v = derive(dexes, VERIFIED[known])
+            check_dexes(base, dexes, v)
+            return vc, info.get("versionName"), v, "unverified"
+        except Mismatch as e:
+            problems.append("its own names: %s" % e)
+    raise Mismatch("versionCode %d: the speedometer reading was not found in this Waze version (%s)"
+                   % (vc, "; ".join(problems)))
 
 
 # ---------------------------------------------------------------------------- writing the class
@@ -660,12 +777,13 @@ def main():
         rest = rest[:i] + rest[i + 2:]
     try:
         if cmd in ("jar", "check") and len(rest) == (2 if cmd == "jar" else 1):
-            vc, vn, v = check(rest[0])
+            vc, vn, v, state = check_any(rest[0])
             if atl:
                 check_atl(atl)
             dex = reading_class_dex(v)
-            print("waze-speedometer: Waze %s (%d): %s and %s.%s as expected; %s extends %s"
-                  % (vn, vc, v["class"], v["caller"][0], v["caller"][1], v["class"], ATL_BASE))
+            print("waze-speedometer: Waze %s (%d, %s): %s and %s.%s as expected; %s extends %s"
+                  % (vn, vc, state if state == "verified" else "not verified, may not work",
+                     v["class"], v["caller"][0], v["caller"][1], v["class"], ATL_BASE))
             if cmd == "jar":
                 write_jar(dex, rest[1])
                 print("waze-speedometer: wrote %s" % rest[1])

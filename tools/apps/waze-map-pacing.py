@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""teslalinux: Waze's car map on the display's 60 frames/s schedule (verified Waze versions only).
+"""teslalinux: Waze's car map on the display's 60 frames/s schedule (verified Waze versions, and others where the code fits).
 
   waze-map-pacing.py APP_DIR OUT.jar [--atl API_IMPL_JAR]
                                             make the class overrides (APP_DIR: an installed app,
-                                            /var/lib/teslalinux/apps/com.waze); exit 2: not this version
+                                            /var/lib/teslalinux/apps/com.waze); exit 2: not found in this version
                                             (with --atl: and only if this ATL has ATLFrameRateLimiter)
   waze-map-pacing.py --check APP_DIR [--atl API_IMPL_JAR]
-                                            report only: is this version known and the code as expected
+                                            report only: is the code as expected (verified, or may not work)
   waze-map-pacing.py --dump APP_DIR         print the classes read, as they are read, with the sha256
                                             of the map loop's (to verify a new version by hand)
 
@@ -55,8 +55,14 @@ loader, so the classes in it are loaded from it (and the map loop stays in its p
 package-private members it uses); the APK itself is never changed (Google APIs check its signing
 block). Nothing of Waze is in this repository: the jar is made on the device from the installed APK.
 
-Only a Waze version listed in VERIFIED_AUTO, whose code holds exactly what is expected, gets the
-jar; anything else exits 2 and writes nothing.
+A Waze version listed in VERIFIED_AUTO gets the jar when its code holds exactly what is expected
+("verified"). Another version ("unverified": it may not work) gets it when the same code is there:
+first under the names a verified version has; else found by its shape. The frame limiter is then the
+one class whose fields, methods (protos and access) and code equal the verified limiter's once its
+obfuscated class and member names are put in, extended by as many classes as in the verified version
+and referred to only for its API; the map loop is the one class whose text (class_text) equals the
+verified loop's with obfuscated names numbered in order (shape_text, its sha256 in "shape"). When no
+single class fits, the tool exits 2 ("not found in this Waze version") and writes nothing.
 """
 import hashlib
 import json
@@ -146,6 +152,10 @@ VERIFIED_AUTO = {
             "method": ("run", "()V"),
             "still": 33,
             "fast": 17,
+            # the same class with renamed names taken out (shape_text), for versions not listed here
+            "shape": {"sha256": "c6637c32fad2162cc55fbbd9f5d5ef3bda2f4ceeb876bee6324fcbabd5733976",
+                      "access": 0x10, "super": "Ljava/lang/Object;", "interfaces": ("Ljava/lang/Runnable;",),
+                      "fields": 3, "methods": 2},
         },
     },
 }
@@ -507,16 +517,22 @@ def check_loop(dexes, lv):
     """The map loop class is the one read for this version (its text's sha256), defined in one dex,
     final (nothing extends it), with no annotations, static values or exception handlers to carry;
     every reference to it elsewhere names a member it has; its METHOD holds STILL and FAST once each.
-    Returns (that dex, the instruction index in METHOD whose wait the copy changes)."""
+    An entry without "sha256" (a loop found by its shape, find_loop) is held to the sha256 of its
+    shape_text instead. Returns (that dex, the instruction index in METHOD whose wait the copy changes)."""
     cls = lv["class"]
     defining = [(name, dex) for name, dex in dexes if dex.class_def(cls) is not None]
     if len(defining) != 1:
         raise Mismatch("%s is defined in %d dexes, expected one" % (cls, len(defining)))
     name, dex = defining[0]
-    text = class_text(dex, cls)
-    digest = hashlib.sha256(text.encode()).hexdigest()
-    if digest != lv["sha256"]:
-        raise Mismatch("%s in %s is not the map loop read for this version (sha256 %s)" % (cls, name, digest))
+    if lv.get("sha256"):
+        text = class_text(dex, cls)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if digest != lv["sha256"]:
+            raise Mismatch("%s in %s is not the map loop read for this version (sha256 %s)" % (cls, name, digest))
+    else:
+        digest = hashlib.sha256(shape_text(dex, cls).encode()).hexdigest()
+        if digest != lv["shape"]["sha256"]:
+            raise Mismatch("%s in %s is not of the map loop's shape (sha256 %s)" % (cls, name, digest))
     d = dex.class_def(cls)
     # what the sha256 already covers, stated: the copy relies on each
     expect(cls + " final", bool(d["access"] & 0x10), True)
@@ -607,6 +623,214 @@ def check_auto(app_dir):
     return vc, info.get("versionName"), v, dexes
 
 
+# ---------------------------------------------------------------------------- other Waze versions
+
+# classes whose names R8 leaves alone (the platform's, the desugared library's, Kotlin's own)
+PLATFORM = ("Ljava/", "Ljavax/", "Landroid/", "Ldalvik/", "Lj$/", "Lkotlin/")
+_DESC = re.compile(r"L[^;\s{}(),:]+;")
+_REF = re.compile(r"(L[^;\s{}(),:]+;)(?:->([^:(\s]+)(:\S+|\(\S+))?")
+
+
+def obfuscated_class(desc):
+    """an R8-renamed class: outside PLATFORM, with a package or name of one or two lowercase letters
+    (Lcom/waze/bq/a;, Lcom/waze/map/de;, Lkotlinx/coroutines/b/bj;)"""
+    return not desc.startswith(PLATFORM) and any(re.fullmatch(r"[a-z]{1,2}", s) for s in desc[1:-1].split("/")[1:])
+
+
+def shape_text(dex, cls):
+    """class_text with the names a new build may change taken out: CLS is THIS, its fields and methods
+    are numbered in the order of their type (or proto) and access, renamed classes and the renamed
+    members of other app classes are numbered as they first appear. Everything else (access flags,
+    the platform's and the app's kept names, every instruction and constant) stays as it is."""
+    d = dex.class_def(cls)
+    fields = dex.class_fields(d["data"])
+    methods = dex.class_methods(d["data"])
+
+    def rough(t):  # the sort key: renamed classes all alike, so the order does not depend on their names
+        return _DESC.sub(lambda m: "THIS" if m.group(0) == cls else ("?" if obfuscated_class(m.group(0)) else m.group(0)), t)
+
+    own = {}
+    for i, (n, t, _a) in enumerate(sorted(fields, key=lambda f: (rough(f[1]), f[2], f[0]))):
+        own[(n, ":" + t)] = "f%d" % i
+    for i, (n, p, _a, _c) in enumerate(sorted(methods, key=lambda m: (rough(m[1]), m[2], m[0]))):
+        own[(n, p)] = n if n in ("<init>", "<clinit>") else "m%d" % i
+    classes, members = {cls: "THIS"}, {}
+
+    def cname(desc):
+        if desc not in classes:
+            classes[desc] = "C%d" % len(classes) if obfuscated_class(desc) else desc
+        return classes[desc]
+
+    def norm(text):
+        def ref(m):
+            desc, name, sig = m.group(1), m.group(2), m.group(3)
+            out = cname(desc)
+            if name is None:
+                return out
+            if desc == cls:
+                member = own.get((name, sig), name)
+            elif name in ("<init>", "<clinit>") or desc.startswith(PLATFORM) or not (
+                    obfuscated_class(desc) or re.fullmatch(r"[a-zA-Z]{1,2}", name)):
+                member = name
+            else:
+                member = members.setdefault((desc, name, sig), "x%d" % len(members))
+            return "%s->%s%s" % (out, member, _DESC.sub(lambda s: cname(s.group(0)), sig))
+        return _REF.sub(ref, text)
+
+    lines = ["class THIS access 0x%x super %s interfaces %s annotations %s static-values %s"
+             % (d["access"], norm(d["super"]), ",".join(norm(i) for i in d["interfaces"]) or "-",
+                "yes" if d["annotations_off"] else "no", "yes" if d["static_values_off"] else "no")]
+    for n, t, a in sorted(fields, key=lambda f: own[(f[0], ":" + f[1])]):
+        lines.append("field %s:%s 0x%x" % (own[(n, ":" + t)], norm(t), a))
+    for n, p, a, code_off in sorted(methods, key=lambda m: own[(m[0], m[1])]):
+        if not code_off:
+            lines.append("method %s%s 0x%x no code" % (own[(n, p)], norm(p), a))
+            continue
+        regs, ins, tries, units = dex.code(code_off)
+        lines.append("method %s%s 0x%x registers %d ins %d outs %d tries %d"
+                     % (own[(n, p)], norm(p), a, regs, ins, dex.code_outs(code_off), tries))
+        lines += ["  " + norm(t) for t in disassemble(dex, units)]
+    return "\n".join(lines) + "\n"
+
+
+def renamed_limiter(v, cls, fields, methods):
+    """V (a VERIFIED_AUTO entry) for a limiter CLS with these FIELDS [(name, type, access)] and METHODS
+    [(name, proto, access)]: each of V's members matched to the one of the same type (or proto) and
+    access, and every name in V's code replaced; None when the members do not pair up one to one"""
+    def pair(want, have):
+        out = {}
+        for n, sig, a in want:
+            same = [h for h in have if h[1:] == (sig, a)]
+            if len(same) != 1:
+                return None
+            out[(n, sig)] = same[0][0]
+        return out if len(set(out.values())) == len(out) == len(have) else None
+    fmap = pair(v["fields"], fields)
+    mmap = pair(list(v["api"]) + list(v["private"]), methods)
+    if fmap is None or mmap is None:
+        return None
+    old = v["class"]
+
+    def ref(m):
+        if m.group(1) != old:
+            return m.group(0)
+        if m.group(2) is None:
+            return cls
+        name, sig = m.group(2), m.group(3)
+        new = fmap.get((name, sig[1:])) if sig[0] == ":" else mmap.get((name, sig))
+        if new is None:
+            raise Mismatch("%s->%s%s is not a member of the limiter" % (old, name, sig))
+        return "%s->%s%s" % (cls, new, sig.replace(old, cls))
+    try:
+        code = {(mmap[(n, p)], p): (regs, ins, [_REF.sub(ref, t) for t in text])
+                for (n, p), (regs, ins, text) in v["code"].items()}
+    except Mismatch:
+        return None
+    return dict(v, **{
+        "class": cls,
+        "fields": tuple((fmap[(n, t)], t, a) for n, t, a in v["fields"]),
+        "api": {(mmap[(n, p)], p, a): target for (n, p, a), target in v["api"].items()},
+        "private": tuple((mmap[(n, p)], p, a) for n, p, a in v["private"]),
+        "code": code})
+
+
+def find_limiter(dexes, template):
+    """TEMPLATE with the limiter of these DEXES: under the template's own names when they fit (the
+    exact checks), else the one class of the limiter's shape (renamed_limiter, then the exact checks
+    on its names) and the classes that extend it. Raises Mismatch."""
+    try:
+        defining = check_references(dexes, template)
+        check_limiter(dict(dexes)[defining], template)
+        return template
+    except Mismatch:
+        pass
+    want_fields = sorted((t, a) for _n, t, a in template["fields"])
+    want_methods = sorted((p, a) for _n, p, a in list(template["api"]) + list(template["private"]))
+    found = []
+    for _name, dex in dexes:
+        for desc, access, sup, ifaces, data_off in dex.class_defs():
+            if access != 0x1 or sup != OBJECT or ifaces or not data_off:
+                continue
+            fields = dex.class_fields(data_off)
+            if sorted((t, a) for _n, t, a in fields) != want_fields:
+                continue
+            methods = [(n, p, a) for n, p, a, _c in dex.class_methods(data_off)]
+            if sorted((p, a) for _n, p, a in methods) != want_methods:
+                continue
+            v = renamed_limiter(template, desc, fields, methods)
+            if v is None:
+                continue
+            try:
+                check_limiter(dex, v)
+            except Mismatch:
+                continue
+            found.append(v)
+    if len(found) != 1:
+        raise Mismatch("%d classes of the frame limiter's shape, expected one" % len(found))
+    v = found[0]
+    subclasses = sorted(set(d[0] for _n, dex in dexes for d in dex.class_defs() if d[2] == v["class"]))
+    if len(subclasses) != len(template["subclasses"]):
+        raise Mismatch("%s is extended by %d classes, expected %d" % (v["class"], len(subclasses), len(template["subclasses"])))
+    v["subclasses"] = tuple(subclasses)
+    check_references(dexes, v)
+    return v
+
+
+def find_loop(dexes, lv):
+    """LV (a map loop entry) for these DEXES: under its own name when its text is the one read
+    (check_loop), else the one class whose shape_text has the sha256 of the verified loop's. Raises
+    Mismatch."""
+    try:
+        check_loop(dexes, lv)
+        return lv
+    except Mismatch:
+        pass
+    shape = lv["shape"]
+    found = []
+    for _name, dex in dexes:
+        for desc, access, sup, ifaces, data_off in dex.class_defs():
+            if (access != shape["access"] or sup != shape["super"] or not data_off
+                    or tuple(dex.type_list(ifaces)) != tuple(shape["interfaces"])):
+                continue
+            if (len(dex.class_fields(data_off)), len(dex.class_methods(data_off))) != (shape["fields"], shape["methods"]):
+                continue
+            try:
+                if hashlib.sha256(shape_text(dex, desc).encode()).hexdigest() == shape["sha256"]:
+                    found.append(desc)
+            except Mismatch:  # code the disassembler does not know: not the loop
+                continue
+    if len(found) != 1:
+        raise Mismatch("%d classes of the map loop's shape, expected one" % len(found))
+    out = dict(lv, **{"class": found[0], "sha256": None})
+    check_loop(dexes, out)
+    return out
+
+
+def check_any(app_dir):
+    """(versionCode, versionName, entry, the APK's dexes, state): "verified" for a VERIFIED_AUTO
+    version (check_auto); for any other Waze "unverified" when its limiter and map loop are found as
+    a verified version has them (find_limiter, find_loop; the newest verified version first). Raises
+    Mismatch when they are not."""
+    base, info, vc = app_info(app_dir)
+    if info.get("package") != "com.waze":
+        raise Mismatch("%s is not Waze" % info.get("package"))
+    if vc in VERIFIED_AUTO:
+        vc, vn, v, dexes = check_auto(app_dir)
+        return vc, vn, v, dexes, "verified"
+    dexes = read_dexes(base)
+    problems = []
+    for known in sorted(VERIFIED_AUTO, reverse=True):
+        try:
+            v = find_limiter(dexes, VERIFIED_AUTO[known])
+            if "loop" in v:
+                v = dict(v, loop=find_loop(dexes, v["loop"]))
+            return vc, info.get("versionName"), v, dexes, "unverified"
+        except Mismatch as e:
+            problems.append("as in %d: %s" % (known, e))
+    raise Mismatch("versionCode %d: the map's frame limiter was not found in this Waze version (%s)"
+                   % (vc, "; ".join(problems)))
+
+
 # ---------------------------------------------------------------------------- writing
 
 def write_uleb(value):
@@ -653,7 +877,7 @@ def write_dex(classes):
     """A dex holding CLASSES, each a dict: "class" (descriptor), "access", "super", "interfaces"
     (descriptors), "fields" [(name, type, access)], "methods" [(name, proto, access, code)], code
     (registers, ins, outs, insns), insns a list of 16-bit code units where a reference index is
-    ("type", descriptor), ("field", (class, name, type)) or ("method", (class, name, proto)). No
+    ("type", descriptor), ("string", text), ("field", (class, name, type)) or ("method", (class, name, proto)). No
     debug information, annotations or static values."""
     types, protos, fields, methods, names = set(), set(), set(), set(), set()
 
@@ -684,7 +908,7 @@ def write_dex(classes):
             add_method((c["class"], n, p))
             for u in code[3]:
                 if isinstance(u, tuple):
-                    {"type": types.add, "field": add_field, "method": add_method}[u[0]](u[1])
+                    {"type": types.add, "string": names.add, "field": add_field, "method": add_method}[u[0]](u[1])
     strings = sorted(types | names | set(shorty(p) for p in protos))
     for s in strings:
         s.encode("ascii")  # ASCII: Python's order is the dex's (UTF-16 code unit) order
@@ -697,7 +921,7 @@ def write_dex(classes):
     fidx = {f: i for i, f in enumerate(fields)}
     methods = sorted(methods, key=lambda m: (tidx[m[0]], sidx[m[1]], pidx[m[2]]))
     midx = {m: i for i, m in enumerate(methods)}
-    index = {"type": tidx, "field": fidx, "method": midx}
+    index = {"type": tidx, "string": sidx, "field": fidx, "method": midx}
     defined = set(c["class"] for c in classes)
     order, placed = [], set()
     while len(order) < len(classes):  # a class defined here after its superclass and interfaces
@@ -943,7 +1167,7 @@ def override_dex(v, dexes):
 
 def patch_auto(app_dir, out_jar, check_only, atl):
     try:
-        vc, vn, v, dexes = check_auto(app_dir)
+        vc, vn, v, dexes, state = check_any(app_dir)
         if atl:
             check_atl(atl, v)
         dex = override_dex(v, dexes)
@@ -953,8 +1177,8 @@ def patch_auto(app_dir, out_jar, check_only, atl):
     except (OSError, zipfile.BadZipFile, ValueError) as e:
         print("waze-map-pacing: %s: nothing changed" % e, file=sys.stderr)
         return 1
-    print("waze-map-pacing: Waze %s (%d): the frame limiter %s as expected; it extends %s (starting at %d frames/s)"
-          % (vn, vc, v["class"], ATL_LIMITER, v["rate"]))
+    print("waze-map-pacing: Waze %s (%d, %s): the frame limiter %s as expected; it extends %s (starting at %d frames/s)"
+          % (vn, vc, state if state == "verified" else "not verified, may not work", v["class"], ATL_LIMITER, v["rate"]))
     if "loop" in v:
         lv = v["loop"]
         print("waze-map-pacing: the map loop %s as expected; its %d ms wait is %d ms under ATL_FRAME_RATE=display"
