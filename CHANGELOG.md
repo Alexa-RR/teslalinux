@@ -15,6 +15,11 @@ version's.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-25
+
+Waze follows the route you set on the car's own screen, updates stop taking Waze away for minutes,
+and the device can keep its logs for later.
+
 ### Waze follows the car's own route
 
 *Settings > Tesla, new.*
@@ -78,6 +83,22 @@ version's.
   the same code in the installed Waze, under the checked version's names or its own. Waze 5.25 and
   5.26 get the speedometer this way; their map frame rate code differs, so they keep Waze's own.
 - Settings shows one short line for these instead of the list of checked versions.
+
+### Smaller fixes
+
+*The car page.*
+
+- The car's keyboard covers the bottom of the picture instead of shrinking or moving it.
+- The car's position reaches Waze even when the page opens without a GPS fix (a garage, a tunnel).
+- Sound in the car's browser is on by default on a new install.
+
+### Platform
+
+*For developers.*
+
+- New services: `teslalinux-carkey` (Go, Tesla's vehicle-command over BlueZ; the dist build needs
+  `golang-go`) and `teslalinux-carsync`. New helper `teslalinux-logs`. `install.sh prepare`, and the
+  dist's MANIFEST lists `installer_features=prepare` (docs/SYSTEM-UPDATES.md, docs/TESLA-LINK.md).
 
 ## [0.6.4] - 2026-11-24
 
