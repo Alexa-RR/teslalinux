@@ -1333,7 +1333,9 @@
         ? "Plug in a second (USB) Wi-Fi card. Saved networks are used as soon as one is in."
         : wifi.ssid
           ? "Connected to " + wifi.ssid + (typeof wifi.signalDbm === "number" ? ", " + UI.fmt.signal(wifi.signalDbm) + " signal (" + wifi.signalDbm + " dBm)" : "")
-          : "A second Wi-Fi card (" + (wifi.iface || "USB") + ") joins a saved network when it is in range";
+          : enabled && wifi.cardState === "connecting"
+            ? "Joining a saved network…"
+            : "A second Wi-Fi card (" + (wifi.iface || "USB") + ") joins a saved network when it is in range";
       const wst = UI.row({
         id: "net.backup",
         title: "Use backup Wi-Fi",
@@ -1362,30 +1364,139 @@
         ),
       });
       const networks = Array.isArray(wifi.networks) ? wifi.networks : [];
-      const saved = networks.map((n) =>
-        UI.listItem(
-          n.open ? "lock_open" : "lock",
-          n.ssid,
-          (n.open ? "Open network" : "Password saved") + (n.hidden ? ", hidden" : "") + (wifi.ssid === n.ssid ? ", connected" : ""),
-          UI.armed("Remove", "Tap again", async (b) => {
-            b.disabled = true;
-            try {
-              await send({ remove: n.ssid });
-              UI.toast("Removed “" + n.ssid + "”.");
-              redraw();
-            } catch (e) {
-              UI.toast(e.userMessage || "Not removed: the device did not answer.");
-              b.disabled = false;
-            }
-          }),
-        ),
+      const canConnect = Boolean(wifi.present) && enabled;
+      // each saved network's row; Connect's progress and result are painted into it in place
+      this._wifiCurrent = wifi.ssid ? { ssid: wifi.ssid, signalDbm: wifi.signalDbm } : null;
+      this._wifiRows = networks.map((n) => {
+        const row = {
+          ssid: n.ssid,
+          base: (n.open ? "Open network" : n.keyOnly ? "Key saved (WPA2 only)" : "Password saved") + (n.hidden ? ", hidden" : ""),
+          canConnect,
+          detail: h("div", { class: "list-detail", "aria-live": "polite" }),
+          connect: UI.button("Connect", () => this._connectWifi(n.ssid, redraw)),
+        };
+        const remove = UI.armed("Remove", "Tap again", async (b) => {
+          b.disabled = true;
+          try {
+            await send({ remove: n.ssid });
+            UI.toast("Removed “" + n.ssid + "”.");
+            redraw();
+          } catch (e) {
+            UI.toast(e.userMessage || "Not removed: the device did not answer.");
+            b.disabled = false;
+          }
+        });
+        row.el = h("div", { class: "list-item" }, icon(n.open ? "lock_open" : "lock"), h("div", null, h("div", { class: "list-name" }, n.ssid), row.detail), h("div", { class: "list-end" }, row.connect, remove));
+        this._paintWifiRow(row);
+        return row;
+      });
+      // the last attempt (also one started before this page opened), followed while it runs
+      if (networks.length && wifi.present) this._watchWifiConnect(redraw);
+      const add = h(
+        "div",
+        { class: "row-actions", "data-id": "net.add" },
+        UI.button("Add a network", () =>
+          this._addNetwork(wifi, canConnect).then((ssid) => {
+            if (!ssid) return;
+            if (canConnect) this._wifiAttempt = { ssid, state: "connecting" };
+            redraw();
+            if (canConnect) this._connectWifi(ssid, redraw);
+          }), null, "add"),
       );
-      const add = h("div", { class: "row-actions", "data-id": "net.add" }, UI.button("Add a network", () => this._addNetwork(wifi).then((ok) => ok && redraw()), null, "add"));
-      return [wst, wp, networks.length ? h("div", null, saved) : h("p", { class: "group-note" }, "No networks saved yet."), add];
+      return [wst, wp, networks.length ? h("div", null, this._wifiRows.map((r) => r.el)) : h("p", { class: "group-note" }, "No networks saved yet."), add];
     }
 
-    /** the "Add a network" sheet: scan, name, password, hidden */
-    _addNetwork(wifi) {
+    /** One saved network's state: connecting, connected (with the signal), the last failure and why, or idle. */
+    _paintWifiRow(row) {
+      const a = this._wifiAttempt && this._wifiAttempt.ssid === row.ssid ? this._wifiAttempt : null;
+      const cur = this._wifiCurrent && this._wifiCurrent.ssid === row.ssid ? this._wifiCurrent : null;
+      const connected = Boolean(cur) || Boolean(a && a.state === "connected" && !this._wifiCurrent);
+      row.detail.className = "list-detail";
+      row.connect.disabled = false;
+      row.connect.hidden = !row.canConnect || connected;
+      row.connect.lastChild.textContent = "Connect";
+      if (a && a.state === "connecting") {
+        row.detail.replaceChildren(h("span", { class: "spin" }), "Connecting…");
+        row.connect.disabled = true;
+        row.connect.lastChild.textContent = "Connecting…";
+      } else if (connected) {
+        const sig = cur && typeof cur.signalDbm === "number"
+          ? ", " + UI.fmt.signal(cur.signalDbm) + " signal (" + cur.signalDbm + " dBm)"
+          : a && typeof a.signalPercent === "number" ? ", signal " + a.signalPercent + " %" : "";
+        row.detail.replaceChildren("Connected" + sig);
+        row.detail.classList.add("is-ok");
+      } else if (a && a.state === "failed" && Date.now() / 1000 - (a.finished || 0) < 900) {
+        row.detail.replaceChildren("Not connected: " + (a.message || "no reason given") + ".");
+        row.detail.classList.add("is-err");
+        row.connect.lastChild.textContent = "Try again";
+      } else {
+        row.detail.replaceChildren(row.base);
+      }
+    }
+
+    _paintWifiRows() {
+      (this._wifiRows || []).forEach((r) => this._paintWifiRow(r));
+    }
+
+    /** Connect: POST /api/wifiConnect starts the attempt; GET /api/wifiConnect follows it. */
+    async _connectWifi(ssid, redraw) {
+      this._wifiAttempt = { ssid, state: "connecting" };
+      this._paintWifiRows();
+      const r = await this.apiClient.connectWifi(ssid);
+      if (!r.ok) {
+        this._wifiAttempt = { ssid, state: "failed", message: r.message || "the device did not answer", finished: Date.now() / 1000 };
+        this._paintWifiRows();
+        return;
+      }
+      this._watchWifiConnect(redraw, true);
+    }
+
+    /** Polls the attempt while it runs (and the page shows its rows); redraws once when one ends. */
+    async _watchWifiConnect(redraw, started) {
+      if (this._wifiWatching) {
+        // a poll already runs (it may have read the state from before this attempt): it goes on
+        if (started) this._wifiWatchAgain = true;
+        return;
+      }
+      this._wifiWatching = true;
+      this._wifiWatchAgain = false;
+      let ran = Boolean(started);
+      const until = Date.now() + 120000;
+      try {
+        for (;;) {
+          let r = null;
+          try {
+            r = await this.apiClient.fetchWifiConnect();
+          } catch (_e) {
+            r = null;
+          }
+          if (r && typeof r === "object") {
+            this._wifiAttempt = r.attempt || null;
+            this._wifiCurrent = r.current || null;
+            this._paintWifiRows();
+          }
+          const a = this._wifiAttempt;
+          const shown = (this._wifiRows || []).some((row) => row.el.isConnected);
+          const again = this._wifiWatchAgain;
+          this._wifiWatchAgain = false;
+          if ((!a || a.state !== "connecting") && !again) break;
+          if (!shown || Date.now() > until) break;
+          ran = true;
+          await new Promise((res) => global.setTimeout(res, 1500));
+        }
+      } finally {
+        this._wifiWatching = false;
+      }
+      const a = this._wifiAttempt;
+      if (!ran || !a || a.state === "connecting") return;
+      if (a.state === "connected") UI.toast("Connected to “" + a.ssid + "”.");
+      // the header and the uplink follow a moment later (teslalinux-uplink checks every 5 s)
+      global.setTimeout(redraw, 1500);
+    }
+
+    /** the "Add a network" sheet: scan, name, password, hidden; resolves with the saved network's name
+     * (the caller connects to it) or a falsy value */
+    _addNetwork(wifi, willConnect) {
       const name = h("input", { id: "add-ssid", class: "settings-field-input", maxlength: 32, placeholder: "Network name", autocomplete: "off", spellcheck: "false", autocapitalize: "off" });
       const pass = h("input", { id: "add-psk", class: "settings-field-input", type: "password", maxlength: 64, placeholder: "Empty for an open network", autocomplete: "new-password" });
       let hidden = false;
@@ -1447,7 +1558,7 @@
           h("div", { class: "sheet-scan" }, scan),
           found,
           h("div", { class: "field" }, h("label", { for: "add-ssid" }, "Network name"), name),
-          h("div", { class: "field" }, h("label", { for: "add-psk" }, "Password"), pass, h("div", { class: "field-help" }, "Stored on the device as the Wi-Fi key, never as the password.")),
+          h("div", { class: "field" }, h("label", { for: "add-psk" }, "Password"), pass, h("div", { class: "field-help" }, "Kept on this device only, readable by the system alone. WPA3 networks need the password itself.")),
           hiddenRow,
           err,
         ],
@@ -1481,8 +1592,8 @@
           ok.textContent = "Save network";
           return;
         }
-        UI.toast("Saved “" + name.value + "”. The backup card joins it when it is in range.");
-        p.finish(true);
+        UI.toast(willConnect ? "Saved “" + name.value + "”. Connecting…" : "Saved “" + name.value + "”. The backup card joins it when it is in range.");
+        p.finish(name.value);
       });
       return p;
     }

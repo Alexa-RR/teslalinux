@@ -74,7 +74,9 @@ Changes from upstream:
     draft with an apply bar (Discard / At next start / Apply now; `POST /api/network`,
     `host/teslalinux-network`, upstream's softAp and offline routes; upstream's apply-at-boot banner is
     gone), and the backup Wi-Fi, applied at once (a second USB Wi-Fi card joins a saved network when
-    LTE has no internet or whenever connected; Add a network with a scan, `GET /api/wifiScan`).
+    LTE has no internet or whenever connected; Add a network with a scan, `GET /api/wifiScan`, joined
+    right after saving; Connect on each saved network with its progress and result,
+    `POST/GET /api/wifiConnect`).
   * **Updates**: Teslalinux itself, first (`host/teslalinux-release-update`, docs/SYSTEM-UPDATES.md:
     installed and available release with its notes, Check now, download progress, Download over
     mobile data, Install now, Go back, the automatic switch, or "Not available" with the reason;

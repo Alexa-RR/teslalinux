@@ -34,10 +34,24 @@ version's.
 - If the new release does not start correctly, the Pi goes back to the previous one by itself.
   "Go back" does the same by hand.
 
+### Backup Wi-Fi joins phone hotspots, and connects on request
+
+*Settings > Connections > Backup Wi-Fi.*
+
+- The backup Wi-Fi now joins WPA3 networks, such as an iPhone's hotspot. Before, it never connected
+  to them.
+- Each saved network has a Connect button. It shows when it is connecting, then the signal, or why
+  it did not connect: wrong password, not in range, or no answer.
+- A network you add is joined right away.
+- Networks saved before this update keep working on WPA2. For WPA3, add the network again with its
+  password.
+
 ### Platform
 
 #### Added
 
+- `POST /api/wifiConnect` and `GET /api/wifiConnect` (`teslalinux-network wifi-connect`): join a
+  saved backup Wi-Fi network now and follow the attempt.
 - `teslalinux-release-update` (docs/SYSTEM-UPDATES.md): GitHub's releases API, the release's own
   SHA256SUMS and install.sh, a health check after the restart, rollback with the installer's backup
   set. The dist's MANIFEST records the repository it was released from (`release_repo=`).
@@ -45,6 +59,9 @@ version's.
 #### Fixed
 
 - The app's own Mesa is used only where a V3D GPU exists. In the Debian VM the car map was blank.
+- The backup Wi-Fi keeps the network's password (root only) and gives it to NetworkManager. With
+  only the WPA2 key, NetworkManager still offered SAE and wpa_supplicant chose it on WPA2/WPA3
+  networks, then failed ("SAE: No password available").
 
 ## [0.5.0] - 2026-11-24
 

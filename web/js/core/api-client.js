@@ -103,6 +103,16 @@
       return this._fetchJson(this.apiBaseUrl + "/wifiScan");
     }
 
+    // teslalinux: join a saved backup Wi-Fi network now; resolves with {ok, message} at once, the
+    // attempt's progress and result come from fetchWifiConnect() ({attempt, current})
+    connectWifi(ssid) {
+      return this._postJsonResult(this.apiBaseUrl + "/wifiConnect", { ssid });
+    }
+
+    fetchWifiConnect() {
+      return this._fetchJson(this.apiBaseUrl + "/wifiConnect");
+    }
+
     // teslalinux: the operating system's own updates (apt / apk); resolves with {ok, message}
     // with logFrom: also the run's output from that byte offset (whole lines), for the live terminal
     fetchSystemUpdate(logFrom) {

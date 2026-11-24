@@ -43,6 +43,10 @@ with open(os.path.join(TMP, "network"), "w") as f:
             '"networks": [{"ssid": "Home", "hidden": false, "open": false}]}\'; exit 0; fi\n'
             'if [ "$1" = wifi-scan ]; then echo \'{"iface": "wlan1", "networks": [{"ssid": "Garage", "signalDbm": -60, '
             '"secure": true, "band": "2.4 GHz"}]}\'; exit 0; fi\n'
+            # wifi-connect: keep the request; "Home" starts, anything else is not saved
+            'if [ "$1" = wifi-connect ]; then r=$(cat); echo "connect $r" >> "%s"; case "$r" in *\'"Home"\'*) '
+            'echo \'{"ok": true, "message": "Connecting"}\';; *) echo \'{"ok": false, "message": "That network is not saved"}\';; '
+            'esac; exit 0; fi\n' % NETWORK_LOG +
             'echo "$@" >> "%s"; cat >> "%s"; echo >> "%s"\n' % (NETWORK_LOG, NETWORK_LOG, NETWORK_LOG))
 os.chmod(os.path.join(TMP, "network"), 0o755)
 # the app interface helper: keep the arguments
@@ -72,6 +76,8 @@ os.environ.update({
     "ANDROID_APP_DATA_DIR": os.path.join(TMP, "appdata"),
     "TESLALINUX_MAP_SKIN_MANIFEST": os.path.join(TMP, "mapskin.json"),
     "TESLALINUX_NETWORK": os.path.join(TMP, "network"),
+    "TESLALINUX_WIFI_CONNECT_STATE": os.path.join(TMP, "wifi-connect.json"),
+    "TESLALINUX_UPLINK_STATE": os.path.join(TMP, "uplink.json"),
     "TESLALINUX_SYSUPDATE_DIR": os.path.join(TMP, "sysupdate"),
     "TESLALINUX_SYSUPDATE_LOG": os.path.join(TMP, "sysupdate.log"),
     "TESLALINUX_APPUPDATE": os.path.join(TMP, "appupdate"),
@@ -620,6 +626,32 @@ class Settings(unittest.TestCase):
         for bad in ({"add": {"ssid": ""}}, {"add": {"ssid": "x", "psk": "short"}}, {"prefer": "both"},
                     {"enabled": "yes"}, {"remove": 3}, "x"):
             self.assertEqual(call("network", "POST", json.dumps({"when": "now", "wifi": bad}), "application/json")[0], 400, bad)
+
+    def test_wifi_connect(self):
+        post = lambda req: call("wifiConnect", "POST", json.dumps(req), "application/json")  # noqa: E731
+        code, _h, body = post({"ssid": "Home"})
+        self.assertEqual((code, json.loads(body)), (200, {"ok": True, "message": "Connecting"}))
+        with open(NETWORK_LOG) as f:
+            self.assertIn('connect {"ssid": "Home"}', f.read())
+        code, _h, body = post({"ssid": "Nowhere"})
+        self.assertEqual((code, json.loads(body)["message"]), (409, "That network is not saved"))
+        for bad in ({"ssid": ""}, {"ssid": "x" * 33}, {"ssid": "a\nb"}, {"ssid": 3}, "Home", None):
+            self.assertEqual(post(bad)[0], 400, bad)
+        path = os.environ["TESLALINUX_WIFI_CONNECT_STATE"]
+        self.assertEqual(json.loads(call("wifiConnect")[2]), {"attempt": None, "current": None})
+        now = int(time.time())
+        with open(path, "w") as f:
+            json.dump({"ssid": "Home", "state": "connecting", "started": now, "pid": 42}, f)
+        with open(os.environ["TESLALINUX_UPLINK_STATE"], "w") as f:
+            json.dump({"time": now, "wifi": {"ssid": "Home", "signalDbm": -58}}, f)
+        st = json.loads(call("wifiConnect")[2])
+        self.assertEqual((st["attempt"]["state"], st["current"]), ("connecting", {"ssid": "Home", "signalDbm": -58}))
+        self.assertNotIn("pid", st["attempt"])
+        with open(path, "w") as f:  # an attempt that never finished is reported as stopped
+            json.dump({"ssid": "Home", "state": "connecting", "started": now - 600}, f)
+        self.assertEqual(json.loads(call("wifiConnect")[2])["attempt"]["state"], "failed")
+        os.remove(path)
+        os.remove(os.environ["TESLALINUX_UPLINK_STATE"])
 
     def test_system_update_state(self):
         os.makedirs(os.path.join(TMP, "sysupdate"), exist_ok=True)

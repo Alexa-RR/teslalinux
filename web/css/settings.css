@@ -1556,6 +1556,27 @@
   color: var(--ink-3);
 }
 
+/* a saved backup Wi-Fi network: Connect and Remove, and how the last Connect went */
+#page-settings .list-end {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+#page-settings .list-detail .spin {
+  vertical-align: -2px;
+  margin-right: 6px;
+}
+
+#page-settings .list-detail.is-ok {
+  color: var(--green);
+}
+
+#page-settings .list-detail.is-err {
+  color: var(--red);
+}
+
 #page-settings .disclosure {
   display: flex;
   align-items: center;

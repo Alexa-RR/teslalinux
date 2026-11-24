@@ -23,13 +23,25 @@ on stdin and was validated by the API. It is validated again here, because this 
   apply's "wifi": {"enabled", "prefer": "lte"|"wifi", "add": {"ssid", "psk", "hidden", "open"}, "remove": SSID}
       The backup Wi-Fi: a second Wi-Fi card joins one of the saved networks and teslalinux-uplink routes
       through it when LTE has no internet (prefer "lte") or whenever it is connected (prefer "wifi").
-      Saved in /etc/teslalinux/wifi-client.json (root only) with the WPA key (PBKDF2 of the password,
-      as wpa_passphrase computes it), never the password itself; rendered into NetworkManager profiles
-      "teslalinux-wifi-*" or /etc/teslalinux/wpa_supplicant-client.conf. The newest network ranks first.
+      Saved in /etc/teslalinux/wifi-client.json (root only) with the password and the WPA2 key (PBKDF2
+      of the password, as wpa_passphrase computes it); rendered into NetworkManager profiles
+      "teslalinux-wifi-*" (root only) or /etc/teslalinux/wpa_supplicant-client.conf (0600). The newest
+      network ranks first. WPA3 (SAE) needs the password itself: a WPA2 key cannot do SAE, and with a
+      key alone NetworkManager still offers SAE, which wpa_supplicant picks for a WPA2/WPA3 network
+      (a phone's hotspot) and then fails ("SAE: No password available"), so the card never joins.
+      Networks saved before the password was kept ("keyOnly") still join WPA2 networks.
   teslalinux-network wifi-state
-      The backup Wi-Fi settings and its card, without keys, as JSON.
+      The backup Wi-Fi settings and its card, without keys, as JSON; "cardState" is NetworkManager's
+      state of the card ("connected", "connecting", "disconnected", ...; null without NetworkManager).
   teslalinux-network wifi-scan
       The networks the backup card sees, strongest first, as JSON.
+  teslalinux-network wifi-connect  < {"ssid"}
+      Join that saved network now on the backup card, in the background (NetworkManager: connection up
+      on the card; elsewhere wpa_supplicant's select_network). Prints {"ok", "message"} at once; the
+      attempt and its result go to /run/teslalinux/wifi-connect.json (0644, no secrets):
+      {ssid, state: "connecting"|"connected"|"failed", result: "connected"|"wrong-password"|"not-found"|
+      "needs-password"|"timeout"|"no-address"|"failed", message (plain words, with NetworkManager's
+      reason), signalPercent or signalDbm, started, finished}.
 """
 import hashlib
 import json
@@ -269,7 +281,11 @@ def render_wifi(cfg):
                         "connection.autoconnect-priority", str(n.get("priority", 0)),
                         "ipv4.route-metric", "600", "ipv6.method", "ignore"]
             if n.get("psk"):
-                settings += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", n["psk"], "wifi-sec.psk-flags", "0"]
+                # key-mgmt wpa-psk: NetworkManager offers WPA2-PSK and SAE; the password makes both work
+                # (a WPA2 key alone makes SAE fail on WPA2/WPA3 networks, see the header). PMF stays
+                # optional (the default), as SAE requires it and WPA2 networks may not offer it.
+                settings += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", n.get("passphrase") or n["psk"],
+                             "wifi-sec.psk-flags", "0", "wifi-sec.pmf", "default"]
             if name in existing:
                 if not n.get("psk"):
                     # an open network now: the profile's old security settings go
@@ -283,8 +299,11 @@ def render_wifi(cfg):
         if iface:
             if cfg["enabled"] and nets:
                 subprocess.run(["nmcli", "device", "set", iface, "managed", "yes", "autoconnect", "yes"], capture_output=True)
-                subprocess.Popen(["nmcli", "--wait", "30", "device", "connect", iface], stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                # a card that is connected (or connecting) stays so: another setting saved from the page
+                # must not drop the uplink in use; Connect picks a network explicitly
+                if nm_device_state(iface)[0] not in ("connected", "connecting"):
+                    subprocess.Popen(["nmcli", "--wait", "30", "device", "connect", iface], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             else:
                 subprocess.run(["nmcli", "device", "disconnect", iface], capture_output=True)
         return
@@ -294,7 +313,11 @@ def render_wifi(cfg):
     for n in nets:
         lines.append("network={")
         lines.append("\tssid=%s" % n["ssid"].encode("utf-8").hex())  # hex: any byte is safe
-        if n.get("psk"):
+        if n.get("passphrase"):
+            # WPA2 and WPA3 (SAE needs the password and PMF); wpa_supplicant takes the text between the
+            # first and the last quote as it is, so quotes inside are safe (printable ASCII, no newline)
+            lines += ["\tkey_mgmt=WPA-PSK SAE", '\tpsk="%s"' % n["passphrase"], "\tieee80211w=1"]
+        elif n.get("psk"):
             lines += ["\tkey_mgmt=WPA-PSK", "\tpsk=%s" % n["psk"]]
         else:
             lines.append("\tkey_mgmt=NONE")
@@ -329,12 +352,18 @@ def apply_wifi(ops):
         hidden = add.get("hidden") is True
         old = next((n for n in cfg["networks"] if n["ssid"] == add["ssid"]), None)
         if old is not None and not pw and add.get("open") is not True:
-            pw_hex = old.get("psk", "")  # the same network again without a password: keep the stored key
+            # the same network again without a password: keep the stored key and password
+            pw_hex, phrase = old.get("psk", ""), old.get("passphrase", "")
         else:
             pw_hex = wpa_psk(add["ssid"], pw) if pw else ""
+            # 64 hex digits are a WPA2 key, not a password: such a network cannot use WPA3
+            phrase = pw if pw and not re.match(r"^[0-9A-Fa-f]{64}$", pw) else ""
         cfg["networks"] = [n for n in cfg["networks"] if n["ssid"] != add["ssid"]]
         # the newest network first: the most recently added gets the highest priority
-        cfg["networks"].insert(0, {"ssid": add["ssid"], "psk": pw_hex, "hidden": hidden})
+        entry = {"ssid": add["ssid"], "psk": pw_hex, "hidden": hidden}
+        if phrase:
+            entry["passphrase"] = phrase
+        cfg["networks"].insert(0, entry)
         if len(cfg["networks"]) > MAX_NETWORKS:
             die("at most %d saved networks" % MAX_NETWORKS)
     for i, n in enumerate(cfg["networks"]):
@@ -350,9 +379,13 @@ def apply_wifi(ops):
 def cmd_wifi_state():
     cfg = read_wifi()
     iface = wifi_iface(cfg)
+    managed = nm_running()
+    # NetworkManager's state of the card: "connecting" also while it joins a network by itself
+    card = nm_device_state(iface)[0] if managed and iface else None
     print(json.dumps({"enabled": cfg["enabled"], "prefer": cfg["prefer"], "iface": iface, "present": bool(iface),
-                      "apIface": ap_iface(), "managed": nm_running(),
-                      "networks": [{"ssid": n["ssid"], "hidden": bool(n.get("hidden")), "open": not n.get("psk")}
+                      "apIface": ap_iface(), "managed": managed, "cardState": card,
+                      "networks": [{"ssid": n["ssid"], "hidden": bool(n.get("hidden")), "open": not n.get("psk"),
+                                    "keyOnly": bool(n.get("psk")) and not n.get("passphrase")}
                                    for n in cfg["networks"]]}))
 
 
@@ -360,17 +393,16 @@ def _iw_unescape(s):
     return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s).encode("latin-1", "replace").decode("utf-8", "replace")
 
 
-def cmd_wifi_scan():
-    """Networks the second Wi-Fi card sees: [{ssid, signalDbm or signalPercent, secure, band}], strongest first"""
-    cfg = read_wifi()
-    iface = wifi_iface(cfg)
-    if not iface:
-        print(json.dumps({"iface": None, "networks": []}))
-        return
+def scan_networks(iface, rescan="yes"):
+    """{ssid: {ssid, signalPercent (NetworkManager) or signalDbm, secure, wpa3, band}} the card sees, the
+    strongest access point of each network. rescan "yes" scans now; "auto" (NetworkManager: a list
+    older than 30 s is refreshed) or "dump" without NetworkManager (iw's cached results) do not wait
+    for a scan when there is a recent one."""
     nets = {}
     if nm_running():
         out = subprocess.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ", "device", "wifi", "list", "ifname", iface,
-                              "--rescan", "yes"], capture_output=True, text=True, timeout=40).stdout
+                              "--rescan", "yes" if rescan == "yes" else "auto"], capture_output=True, text=True,
+                             timeout=40).stdout
         for line in out.splitlines():
             parts = re.split(r"(?<!\\):", line)
             if len(parts) < 4 or not parts[0]:
@@ -378,7 +410,7 @@ def cmd_wifi_scan():
             ssid = parts[0].replace("\\:", ":").replace("\\\\", "\\")
             sig = int(parts[1]) if parts[1].isdigit() else 0
             freq = int(re.sub(r"\D", "", parts[3]) or 0)
-            n = {"ssid": ssid, "signalPercent": sig, "secure": parts[2] not in ("", "--"),
+            n = {"ssid": ssid, "signalPercent": sig, "secure": parts[2] not in ("", "--"), "wpa3": "WPA3" in parts[2],
                  "band": "5 GHz" if freq >= 5000 else "2.4 GHz"}
             if ssid not in nets or sig > nets[ssid]["signalPercent"]:
                 nets[ssid] = n
@@ -386,7 +418,8 @@ def cmd_wifi_scan():
         subprocess.run(["ip", "link", "set", iface, "up"], capture_output=True)
         out = ""
         for _ in range(3):  # "Device or resource busy" while wpa_supplicant scans: try again
-            r = subprocess.run(["iw", "dev", iface, "scan"], capture_output=True, text=True, timeout=40)
+            r = subprocess.run(["iw", "dev", iface, "scan"] + (["dump"] if rescan != "yes" else []), capture_output=True,
+                               text=True, timeout=40)
             out = r.stdout
             if r.returncode == 0:
                 break
@@ -394,7 +427,7 @@ def cmd_wifi_scan():
         cur = None
         for line in out.splitlines():
             if line.startswith("BSS "):
-                cur = {"ssid": None, "signalDbm": -100, "secure": False, "band": None}
+                cur = {"ssid": None, "signalDbm": -100, "secure": False, "wpa3": False, "band": None}
                 continue
             if cur is None:
                 continue
@@ -410,8 +443,192 @@ def cmd_wifi_scan():
                     nets[cur["ssid"]] = cur
             elif t.startswith(("RSN:", "WPA:")) or ("capability:" in t and "Privacy" in t):
                 cur["secure"] = True
+            elif t.startswith("* Authentication suites:") and "SAE" in t.split(":", 1)[1].split():
+                cur["wpa3"] = True
+    return nets
+
+
+def cmd_wifi_scan():
+    """Networks the second Wi-Fi card sees: [{ssid, signalDbm or signalPercent, secure, wpa3, band}], strongest
+    first"""
+    iface = wifi_iface(read_wifi())
+    if not iface:
+        print(json.dumps({"iface": None, "networks": []}))
+        return
+    nets = scan_networks(iface)
     key = (lambda n: -n.get("signalPercent", 0)) if nm_running() else (lambda n: -n.get("signalDbm", -100))
     print(json.dumps({"iface": iface, "networks": sorted(nets.values(), key=key)[:40]}))
+
+
+# ---------------------------------------------------------------- Connect (the settings page's button)
+
+CONNECT_STATE = os.environ.get("TESLALINUX_WIFI_CONNECT_STATE", "/run/teslalinux/wifi-connect.json")
+CONNECT_WAIT = int(os.environ.get("TESLALINUX_WIFI_CONNECT_WAIT", "45"))
+WPA_CTRL = "/run/teslalinux-wpa"  # ctrl_interface of the rendered wpa_supplicant config (teslalinux-uplink runs it)
+# NetworkManager's device states (NMDeviceState): prepare 40 .. secondaries 90 are on the way to connected
+NM_CONNECTING = range(40, 100)
+
+
+def nm_device_state(iface):
+    """("connected" | "connecting" | "disconnected" | "unavailable" | "failed" | ..., connection name or "")"""
+    r = subprocess.run(["nmcli", "-g", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", iface],
+                       capture_output=True, text=True)
+    lines = r.stdout.splitlines() if r.returncode == 0 else []
+    m = re.match(r"^(\d+)", lines[0]) if lines else None
+    code = int(m.group(1)) if m else 0
+    word = ("connected" if code == 100 else "connecting" if code in NM_CONNECTING else
+            "disconnected" if code == 30 else "failed" if code == 120 else "unavailable" if code in (10, 20) else "unknown")
+    return word, (lines[1] if len(lines) > 1 else "")
+
+
+def write_connect_state(st):
+    os.makedirs(os.path.dirname(CONNECT_STATE), exist_ok=True)
+    write_file(CONNECT_STATE, json.dumps(st) + "\n", 0o644)  # no secrets: the network's name and the outcome
+
+
+def read_connect_state():
+    try:
+        with open(CONNECT_STATE) as f:
+            st = json.load(f)
+        return st if isinstance(st, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def nm_failure(stderr):
+    """NetworkManager's own words for a failed `connection up`, without nmcli's prefix and hint"""
+    text = " ".join(line.strip() for line in (stderr or "").splitlines() if not line.startswith("Hint:"))
+    m = re.search(r"activation failed: (.+?)\.?$", text)
+    return (m.group(1) if m else re.sub(r"^Error: ", "", text)).strip().rstrip(".") or "no reason given"
+
+
+def classify_failure(reason, net, seen, timed_out=False):
+    """(result, message) in plain words. reason: NetworkManager's text (or wpa_supplicant's states seen);
+    net: the saved network; seen: what a scan shows of it now (None: not in range)."""
+    r = reason.lower()
+    if timed_out or "timeout expired" in r:
+        if seen is None:
+            return "not-found", "“%s” is not in range (the card does not see it)" % net["ssid"]
+        return "timeout", "No connection within %d seconds" % CONNECT_WAIT
+    if seen is None:
+        return "not-found", "“%s” is not in range (the card does not see it)" % net["ssid"]
+    if "secrets were required" in r or "supplicant disconnected" in r or "took too long to authenticate" in r \
+            or "wrong-key" in r:
+        return "wrong-password", "The network did not accept the password (%s)" % reason
+    if "could not be found" in r and seen.get("wpa3") and net.get("psk") and not net.get("passphrase"):
+        return "needs-password", ("“%s” uses WPA3, which needs the password itself: add the network again with "
+                                  "its password" % net["ssid"])
+    if "ip configuration" in r or "dhcp" in r:
+        return "no-address", "Joined, but the network gave no address (%s)" % reason
+    return "failed", "The network did not accept the connection (%s)" % reason
+
+
+def _signal(seen):
+    return {k: seen[k] for k in ("signalPercent", "signalDbm") if seen and k in seen}
+
+
+def connect_nm(iface, net):
+    r = subprocess.run(["nmcli", "--wait", str(CONNECT_WAIT), "connection", "up", "id", nm_wifi_name(net["ssid"]),
+                        "ifname", iface], capture_output=True, text=True, timeout=CONNECT_WAIT + 20)
+    seen = scan_networks(iface, "auto").get(net["ssid"])
+    if r.returncode == 0:
+        return "connected", "Connected to “%s”" % net["ssid"], seen
+    reason = nm_failure(r.stderr)
+    return classify_failure(reason, net, seen, timed_out=r.returncode == 3) + (seen,)
+
+
+def wpa_cli(iface, *args):
+    r = subprocess.run(["wpa_cli", "-p", WPA_CTRL, "-i", iface] + list(args), capture_output=True, text=True, timeout=10)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def connect_wpa(iface, net, index):
+    """Without NetworkManager: teslalinux-uplink's wpa_supplicant has the saved networks in their order;
+    select this one (which disables the others), wait for COMPLETED and dhcpcd's address, enable all again."""
+    want = (('"%s"' % net["ssid"]), net["ssid"].encode("utf-8").hex())
+    if not shutil.which("wpa_cli") or wpa_cli(iface, "get_network", str(index), "ssid") not in want:
+        return "failed", "The Wi-Fi client is not running on %s (teslalinux-uplink starts it)" % iface, None
+    states, result = set(), None
+    try:
+        if wpa_cli(iface, "select_network", str(index)) != "OK":
+            return "failed", "wpa_supplicant refused to select the network", None
+        deadline = time.time() + CONNECT_WAIT
+        while time.time() < deadline:
+            st = dict(line.split("=", 1) for line in wpa_cli(iface, "status").splitlines() if "=" in line)
+            states.add(st.get("wpa_state", ""))
+            if st.get("wpa_state") == "COMPLETED" and st.get("ip_address"):
+                result = ("connected", "Connected to “%s”" % net["ssid"])
+                break
+            time.sleep(1)
+    finally:
+        wpa_cli(iface, "enable_network", "all")
+    seen = scan_networks(iface, "dump").get(net["ssid"])
+    if result:
+        return result + (seen,)
+    if "COMPLETED" in states:
+        return classify_failure("no DHCP address", net, seen) + (seen,)
+    if "4WAY_HANDSHAKE" in states:
+        return classify_failure("wrong-key: the 4-way handshake failed", net, seen) + (seen,)
+    if states & {"ASSOCIATING", "ASSOCIATED", "AUTHENTICATING"}:
+        if seen and seen.get("wpa3") and not net.get("passphrase") and net.get("psk"):
+            return classify_failure("could not be found", net, seen) + (seen,)
+        return classify_failure("association failed", net, seen) + (seen,)
+    return classify_failure("", net, seen, timed_out=True) + (seen,)
+
+
+def cmd_wifi_connect():
+    """Validate, then run the attempt detached (wifi-connect-run): the page polls the state file."""
+    try:
+        req = json.load(sys.stdin)
+    except ValueError:
+        die("request is not JSON")
+    ssid = req.get("ssid") if isinstance(req, dict) else None
+    if not valid_ssid(ssid):
+        die("invalid network name")
+    cfg = read_wifi()
+    iface = wifi_iface(cfg)
+
+    def answer(ok, message):
+        print(json.dumps({"ok": ok, "message": message}))
+
+    if not iface:
+        return answer(False, "There is no second Wi-Fi card")
+    if not cfg["enabled"]:
+        return answer(False, "Backup Wi-Fi is switched off")
+    if not any(n["ssid"] == ssid for n in cfg["networks"]):
+        return answer(False, "That network is not saved")
+    if not nm_running() and not shutil.which("wpa_cli"):
+        return answer(False, "This system has no Wi-Fi client tools (NetworkManager or wpa_cli)")
+    cur = read_connect_state()
+    if cur and cur.get("state") == "connecting" and cur.get("ssid") == ssid \
+            and time.time() - (cur.get("started") or 0) < CONNECT_WAIT + 30 and cur.get("pid") \
+            and os.path.exists("/proc/%d" % cur["pid"]):
+        return answer(True, "Already connecting")
+    write_connect_state({"ssid": ssid, "iface": iface, "state": "connecting", "started": int(time.time())})
+    subprocess.Popen([sys.executable, os.path.abspath(__file__), "wifi-connect-run", ssid], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    answer(True, "Connecting")
+
+
+def cmd_wifi_connect_run(ssid):
+    cfg = read_wifi()
+    iface = wifi_iface(cfg)
+    index, net = next(((i, n) for i, n in enumerate(cfg["networks"]) if n["ssid"] == ssid), (None, None))
+    started = int(time.time())
+    write_connect_state({"ssid": ssid, "iface": iface, "state": "connecting", "started": started, "pid": os.getpid()})
+    try:
+        if net is None or not iface:
+            result, message, seen = "failed", "That network is not saved", None
+        elif nm_running():
+            result, message, seen = connect_nm(iface, net)
+        else:
+            result, message, seen = connect_wpa(iface, net, index)
+    except (OSError, subprocess.SubprocessError) as e:
+        result, message, seen = "failed", "The attempt stopped (%s)" % e, None
+    st = {"ssid": ssid, "iface": iface, "state": "connected" if result == "connected" else "failed", "result": result,
+          "message": message, "started": started, "finished": int(time.time())}
+    st.update(_signal(seen))
+    write_connect_state(st)
 
 
 def cmd_apply(when):
@@ -495,7 +712,11 @@ def main():
         return cmd_wifi_state()
     if args == ["wifi-scan"]:
         return cmd_wifi_scan()
-    die("usage: teslalinux-network apply now|boot < JSON | lte-state | wifi-state | wifi-scan")
+    if args == ["wifi-connect"]:
+        return cmd_wifi_connect()
+    if len(args) == 2 and args[0] == "wifi-connect-run":  # the detached attempt wifi-connect starts
+        return cmd_wifi_connect_run(args[1])
+    die("usage: teslalinux-network apply now|boot < JSON | lte-state | wifi-state | wifi-scan | wifi-connect < JSON")
 
 
 if __name__ == "__main__":

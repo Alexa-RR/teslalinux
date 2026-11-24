@@ -97,7 +97,18 @@ The settings page's Status, Network and System update sections (new routes only)
 * GET  /api/wifiScan      the networks the backup Wi-Fi card sees (`teslalinux-network wifi-scan`)
   POST /api/network's "wifi": {enabled, prefer: "lte"|"wifi", add: {ssid, psk, hidden, open}, remove}: the
                           backup Wi-Fi (a second card joins a saved network; host/teslalinux-uplink routes
-                          through it when LTE has no internet); /api/status's "failover" is that daemon's state
+                          through it when LTE has no internet); /api/status's "failover" is that daemon's state.
+                          GET's wifi.networks[].keyOnly: saved before the password was kept (WPA2 only);
+                          wifi.cardState: NetworkManager's state of the card (connecting while it joins)
+* POST /api/wifiConnect   JSON {ssid}: join that saved network now (`teslalinux-network wifi-connect`, root,
+                          sudoers; NetworkManager activation on the backup card), started in the background;
+                          {ok, message} at once, ok false with the reason when it cannot start (no card,
+                          switched off, not saved)
+* GET  /api/wifiConnect   the last attempt (/run/teslalinux/wifi-connect.json): {ssid, state: "connecting"|
+                          "connected"|"failed", result: "connected"|"wrong-password"|"not-found"|"needs-password"|
+                          "timeout"|"no-address"|"failed", message in plain words with NetworkManager's reason,
+                          signalPercent/signalDbm, started, finished} or null, plus "current": the network the
+                          card is on now ({ssid, signalDbm} from teslalinux-uplink, or null)
 * GET  /api/systemUpdate  the OS updater's state (teslalinux-system-update: apt or apk), updates
                           available, last check/upgrade, reboot needed, log tail, current uplink kind
 * POST /api/systemUpdate  JSON {action: "check"|"upgrade"|"reboot"}; 409 while a run is going on
@@ -231,10 +242,10 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
 REAR_DISPLAY_FIELDS = ("isRearDisplayEnabled", "isRearDisplayPrioritised")
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
               "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan",
-              "gpuSpeed", "audioOutput", "releaseUpdate"}
+              "gpuSpeed", "audioOutput", "releaseUpdate", "wifiConnect"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
                                   "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed",
-                                  "audioOutput", "releaseUpdate"}
+                                  "audioOutput", "releaseUpdate", "wifiConnect"}
 
 
 def props():
@@ -1774,6 +1785,40 @@ def wifi_scan():
         return {"iface": None, "networks": [], "error": "scan failed"}
 
 
+WIFI_CONNECT_STATE = os.environ.get("TESLALINUX_WIFI_CONNECT_STATE", "/run/teslalinux/wifi-connect.json")
+WIFI_CONNECT_STALE = 120  # an attempt "connecting" for longer than this died (the helper waits at most ~65 s)
+
+
+def wifi_connect_state():
+    """GET /api/wifiConnect: the last Connect attempt (written by the root helper, no secrets) and the
+    network the backup card is on now"""
+    st = _read_json(WIFI_CONNECT_STATE)
+    if isinstance(st, dict) and st.get("state") == "connecting" and time.time() - (st.get("started") or 0) > WIFI_CONNECT_STALE:
+        st.update(state="failed", result="failed", message="The attempt stopped without a result")
+    live = (uplink_state() or {}).get("wifi") or {}
+    current = {"ssid": live["ssid"], "signalDbm": live.get("signalDbm")} if live.get("ssid") else None
+    if isinstance(st, dict):
+        st.pop("pid", None)
+    return {"attempt": st if isinstance(st, dict) else None, "current": current}
+
+
+def wifi_connect(req):
+    """POST /api/wifiConnect: start joining a saved network; (ok, message)"""
+    if not isinstance(req, dict) or not isinstance(req.get("ssid"), str) or not 1 <= len(req["ssid"].encode("utf-8")) <= SSID_MAX \
+            or any(ord(c) < 0x20 or ord(c) == 0x7f for c in req["ssid"]):
+        return None, "invalid network name"
+    try:
+        r = subprocess.run(_root([NETWORK, "wifi-connect"]), input=json.dumps({"ssid": req["ssid"]}), capture_output=True,
+                           text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    try:
+        out = json.loads(r.stdout)
+        return bool(out.get("ok")), str(out.get("message") or "")
+    except (ValueError, AttributeError):
+        return False, (r.stderr.strip().splitlines() or ["failed"])[-1].replace("teslalinux-network: ", "")
+
+
 def valid_wifi_ops(w):
     if not isinstance(w, dict):
         return False
@@ -2188,6 +2233,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(network_state())
         if route == "wifiScan":
             return self._json(wifi_scan())
+        if route == "wifiConnect":
+            return self._json(wifi_connect_state())
         if route == "systemUpdate":
             q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             log_from = (q.get("log") or [None])[0]
@@ -2317,6 +2364,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, json.dumps({"ok": False, "message": "invalid settings"}).encode(), "application/json")
             ok, msg = set_network(req)
             return self._send(200 if ok else 500, json.dumps({"ok": ok, "message": msg}).encode(), "application/json")
+        if route == "wifiConnect":
+            try:
+                req = json.loads(body.decode("utf-8") or "null")
+            except (ValueError, UnicodeDecodeError):
+                req = None
+            ok, msg = wifi_connect(req)
+            code = 400 if ok is None else 200 if ok else 409  # 409: it cannot start (no card, switched off, not saved)
+            return self._send(code, json.dumps({"ok": bool(ok), "message": msg}).encode(), "application/json")
         if route == "systemUpdate":
             try:
                 req = json.loads(body.decode("utf-8") or "null")
