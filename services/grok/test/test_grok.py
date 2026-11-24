@@ -619,16 +619,55 @@ class TestConnectCloudflare(unittest.TestCase):
     def test_wrong_account_and_domain(self):
         self.st.zone = None
         out = self.start()
-        self.assertIn("sees no domain", self.back(self.st.consent(out["url"])))
+        page = self.back(self.st.consent(out["url"]))
+        self.assertIn("sees no domain in Driver&#x27;s Account", page)
         self.assertEqual(len(self.st.revoked), 1, "revoked after a failure too")
         self.st.zone = "example.com"
         out = self.start(domain="other.org")
         self.assertIn("other.org is not among the domains", self.back(self.st.consent(out["url"])))
         self.assertEqual(len(self.st.revoked), 2)
         self.assertEqual(self.st.apps, {})
-        self.st.userinfo_email = ""
         out = self.start()
-        self.assertIn("no verified email", self.back(self.st.consent(out["url"], email="")))
+        self.assertIn("gave no email address", self.back(self.st.consent(out["url"], email="")))
+
+    # the permissions Cloudflare's API schema accepts for each call (x-api-token-group, Nov 2026), and
+    # the project client's scope ids with their permission names (GET /client/v4/oauth/scopes)
+    NEEDS = [("GET", r"/user$", {"User Details Read", "User Details Write"}),
+             ("GET", r"/accounts$", None),  # lists the accounts the grant has; no permission of its own
+             ("GET", r"/zones$", {"Zone Read"}),
+             ("GET", r"/accounts/\w+/access/(organizations|identity_providers)$", {"Access: Organizations, Identity Providers, and Groups Read"}),
+             ("GET|POST", r"/accounts/\w+/cfd_tunnel$", {"Cloudflare One Connectors Write"}),
+             ("GET", r"/accounts/\w+/cfd_tunnel/[\w-]+/token$", {"Cloudflare One Connectors Write"}),
+             ("PUT", r"/accounts/\w+/cfd_tunnel/[\w-]+/configurations$", {"Cloudflare One Connectors Write"}),
+             ("GET|POST", r"/accounts/\w+/access/apps$", {"Access: Apps and Policies Write"}),
+             ("PUT", r"/accounts/\w+/access/apps/[\w-]+$", {"Access: Apps and Policies Write"}),
+             ("GET|POST", r"/zones/\w+/dns_records$", {"DNS Write"}),
+             ("PATCH", r"/zones/\w+/dns_records/\w+$", {"DNS Write"})]
+    SCOPE_NAMES = {"dns.write": "DNS Write", "zone.read": "Zone Read", "access.write": "Access: Apps and Policies Write",
+                   "access-acct.read": "Access: Organizations, Identity Providers, and Groups Read",
+                   "teams-connectors.write": "Cloudflare One Connectors Write", "account-settings.read": "Account Settings Read",
+                   "user-details.read": "User Details Read"}
+
+    def test_every_call_is_in_the_scopes(self):
+        import re
+        self.st.records["x"] = {"id": "x", "type": "CNAME", "name": "mcp.example.com", "content": "old.cfargotunnel.com", "proxied": False}
+        out = self.start()
+        self.assertIn("is set up", self.back(self.st.consent(out["url"])))
+        self.assertIn("is set up", self.back(self.st.consent(self.start()["url"])))  # again: the update calls
+        granted = {self.SCOPE_NAMES[s] for s in cfoauth.SCOPES}
+        self.assertEqual(len(granted), 7)
+        seen = set()
+        for method, path, _ in self.st.calls:
+            if path.startswith("oauth2"):
+                continue
+            path = path.split("?")[0]
+            rule = [r for r in self.NEEDS if re.fullmatch(r[0], method) and re.search(r[1], path)]
+            self.assertTrue(rule, "no rule for %s %s" % (method, path))
+            need = rule[0][2]
+            self.assertTrue(need is None or need & granted, "%s %s needs one of %s" % (method, path, need))
+            seen.add((method, rule[0][1]))
+        self.assertIn(("PATCH", r"/zones/\w+/dns_records/\w+$"), seen)
+        self.assertIn(("PUT", r"/accounts/\w+/access/apps/[\w-]+$"), seen)
 
     def test_choose_among_domains(self):
         self.st.more_zones = ["other.org"]

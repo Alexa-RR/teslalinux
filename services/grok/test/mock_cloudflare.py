@@ -31,7 +31,8 @@ class State:
         self.codes = {}          # code -> {challenge, redirect_uri, client_id, email}
         self.oauth_tokens = {}   # token -> email
         self.revoked = []
-        self.userinfo_email = "driver@example.com"
+        self.user_email = "driver@example.com"
+        self.account_name = "Driver's Account"
 
     def consent(self, authorize_url, email=None):
         """The browser's trip through Cloudflare's consent page: checks the request as Cloudflare would
@@ -39,10 +40,12 @@ class State:
         q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(authorize_url).query).items()}
         assert q["response_type"] == "code" and q["client_id"] == self.client_id, q
         assert q["code_challenge_method"] == "S256" and q["code_challenge"][0].isalnum(), q
-        assert q["scope"].split() == ["argotunnel.write", "access.write", "access-acct.read", "zone.read", "dns.write", "openid", "email"], q
+        # exactly the project client's scopes (all required; Cloudflare refuses others)
+        assert q["scope"].split() == ["dns.write", "zone.read", "access.write", "access-acct.read", "teams-connectors.write",
+                                      "account-settings.read", "user-details.read"], q
         code = uuid.uuid4().hex
         self.codes[code] = {"challenge": q["code_challenge"], "redirect_uri": q["redirect_uri"], "client_id": q["client_id"],
-                            "email": email or self.userinfo_email}
+                            "email": self.user_email if email is None else email}
         return {"code": code, "state": q["state"]}
 
 
@@ -83,14 +86,6 @@ def make_oauth_handler(st):
                 st.oauth_tokens.pop(f.get("token"), None)
                 return self._out(200, {})
             self._out(404, {"error": "not_found"})
-
-        def do_GET(self):
-            if self.path == "/oauth2/userinfo":
-                tok = (self.headers.get("Authorization") or "")[7:]
-                if tok not in st.oauth_tokens:
-                    return self._out(401, {"error": "invalid_token"})
-                return self._out(200, {"sub": "u1", "email": st.oauth_tokens[tok], "email_verified": True})
-            self._out(404, {"error": "not_found"})
     return O
 
 
@@ -120,6 +115,11 @@ def make_handler(st):
             if auth != "Bearer " + TOKEN and auth[7:] not in st.oauth_tokens:
                 return self._out(403, None, [{"code": 10000, "message": "Authentication error"}])
             acc = "/accounts/%s" % ACCOUNT
+            if path == "/user" and method == "GET":
+                # User Details Read: the login's email (an API token stands for the account owner)
+                return self._out(200, {"id": "u1", "email": st.oauth_tokens.get(auth[7:], st.user_email)})
+            if path == "/accounts" and method == "GET":
+                return self._out(200, [{"id": ACCOUNT, "name": st.account_name}])
             if path == "/zones" and method == "GET":
                 names = [n for n in [st.zone] + st.more_zones if n]
                 name = q.get("name", [None])[0]
@@ -195,7 +195,7 @@ def start(st):
 
 
 def start_oauth(st):
-    """Cloudflare's OAuth endpoints (token, revoke, userinfo; the consent page is State.consent)."""
+    """Cloudflare's OAuth endpoints (token, revoke; the consent page is State.consent)."""
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_oauth_handler(st))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, "http://127.0.0.1:%d/oauth2" % srv.server_address[1]

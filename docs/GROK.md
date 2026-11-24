@@ -80,9 +80,10 @@ Not offered to Grok: PalGate gates (`docs/GATES.md`). They could become a separa
    page opens in the browser. In the car you can scan the QR code with a phone on the car's Wi-Fi
    and sign in there instead. The link works for 10 minutes.
 2. Sign in to Cloudflare. On the consent page, check that the app is **Teslalinux**, choose the account
-   with your domain, and allow it. It asks for exactly what the setup needs: Cloudflare Tunnel Write,
+   with your domain, and allow it. It asks for exactly what the setup needs: DNS Write, Zone Read,
    Access: Apps and Policies Write, Access: Organizations, Identity Providers, and Groups Read,
-   Zone Read, DNS Write, and your email address.
+   Cloudflare One Connectors Write (the tunnel), Account Settings Read (which accounts you allowed)
+   and User Details Read (your email address, for the Access rule).
 3. Cloudflare sends you back to the device (`https://car.alexahub.dev/api/grok/oauth/callback`). The
    device creates (or, run again, updates) a tunnel named `teslalinux-<hostname>`, the DNS record for
    `mcp.<your-domain>`, and an Access application for it with Managed OAuth and one rule: the email
@@ -218,42 +219,45 @@ handshake, `server/discover`, the version in every request) and the earlier ones
 Connect Cloudflare uses one OAuth client for the whole project, a Cloudflare self-managed OAuth
 client (developers.cloudflare.com/fundamentals/oauth). It is a public client in the OAuth sense:
 Authorization Code with PKCE (S256), token endpoint authentication `none`, no secret. So its id can
-live in the repository: `DEFAULT_CLIENT_ID` in `services/grok/cfoauth.py`. Until that is set,
+live in the repository: `DEFAULT_CLIENT_ID` in `services/grok/cfoauth.py`. When it is empty,
 Settings > Grok shows Connect Cloudflare as unavailable and the API-token path works as before.
 
-Creating it needs the dashboard (or an API token with OAuth Client Write: the `cf` CLI's own login
-cannot be granted that permission). In the Cloudflare account that owns the project's domain,
-**Manage Account > OAuth clients > Create**:
+The project's client was made in the dashboard (**Manage Account > OAuth clients**; the `cf` CLI's
+own login cannot be granted OAuth Client Write):
 
 | Field | Value |
 |---|---|
+| Client ID | `a3ec02d7b50d47e2ec23d7772fa51e31` |
 | Client name | Teslalinux |
-| Client URL | `https://github.com/Alexa-RR/teslalinux` |
-| Redirect URIs | `https://car.alexahub.dev/api/grok/oauth/callback` |
-| Grant types | Authorization code (no refresh token: the device never keeps the sign-in) |
-| Response types | code |
+| Redirect URI | `https://car.alexahub.dev/api/grok/oauth/callback` |
+| Grant type | Authorization code (no refresh token: the device never keeps the sign-in) |
 | Token endpoint authentication | None (public client, PKCE) |
-| Scopes, all required | `argotunnel.write`, `access.write`, `access-acct.read`, `zone.read`, `dns.write`, `openid`, `email` |
+| Visibility | Private |
 
-The scope ids come from `GET https://api.cloudflare.com/client/v4/oauth/scopes` (`cf iam oauth-scopes
-list`): Cloudflare Tunnel Write, Access: Apps and Policies Write, Access: Organizations, Identity
-Providers, and Groups Read, Zone Read, DNS Write; `openid` and `email` give the login's email address
-for the Access policy. With an API token that has OAuth Client Write, the same in one call:
+Its scopes, all required, and what each is for. The device requests exactly these ids, from
+`GET https://api.cloudflare.com/client/v4/oauth/scopes` (`cf iam oauth-scopes list`):
 
-```sh
-cf iam oauth-clients create --body '{"client_name":"Teslalinux","client_uri":"https://github.com/Alexa-RR/teslalinux",
-  "grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none",
-  "redirect_uris":["https://car.alexahub.dev/api/grok/oauth/callback"],
-  "scopes":["argotunnel.write","access.write","access-acct.read","zone.read","dns.write","openid","email"]}'
-```
+| Dashboard name | Scope id | Used for |
+|---|---|---|
+| DNS Write | `dns.write` | the hostname's DNS record (list, create, update) |
+| Zone Read | `zone.read` | the domains the login allows, and each one's account |
+| Access: Apps and Policies Write | `access.write` | the Access application with Managed OAuth and its email rule |
+| Access: Organizations, Identity Providers, and Groups Read | `access-acct.read` | the team domain and the login methods |
+| Cloudflare One Connectors Write | `teams-connectors.write` | the tunnel: list, create, its token, its route |
+| Account Settings Read | `account-settings.read` | the accounts the driver allowed (named when a login has no domain) |
+| User Details Read | `user-details.read` | the driver's email address (`GET /user`) for the Access rule |
 
-Then put the client's id into `DEFAULT_CLIENT_ID`. A new client is **private**: only members of the
-account that owns it can authorize it, which is enough to try it. To let every Teslalinux driver use
-it, make it **public**. That is permanent: it cannot be made private again.
+`Access: Apps and Policies Write` has an account-level id (`access.write`) and a zone-level one
+(`zone-access.write`); the setup uses account-level Access applications, so the client must carry
+the account-level one. `services/grok/test/test_grok.py` checks every API call against these.
 
-1. Verify the client URL's domain (Cloudflare's "client URL domain ownership verification").
-   `github.com` cannot be verified by the project, so set the client URL to a page on a domain the
-   project controls first.
+A **private** client can be authorized only by members of the account that owns it, which is enough
+to try it. To let every Teslalinux driver use it, make it **public**. That is permanent: it cannot be
+made private again.
+
+1. Give it a client URL on a domain the project can verify (not `github.com`), and verify that
+   domain: Cloudflare shows a TXT record to add to the domain's DNS. The record's value belongs to
+   that account; it never goes into this repository.
 2. Give it a logo (a URL to the project's logo) and keep the name, client URL and scopes filled in.
 3. **Manage Account > OAuth clients**, the client's menu, **Change Visibility** to public.
 

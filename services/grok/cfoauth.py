@@ -10,17 +10,23 @@ auth "none", no secret), so its id can be in the repository. The flow, all on th
      https://<DEVICE_HOST>/api/grok/oauth/callback&scope=..&state=..&code_challenge=..
   2. callback(): Cloudflare sends the browser back with code and state (or error=access_denied);
      the state must be a pending one, the code is exchanged (with the verifier) for an access token
-  3. the driver's email from /oauth2/userinfo, the zones the grant can see from the API; the domain
+  3. the driver's email from the API's /user, the zones the grant can see; the domain
      is the one the driver named, else the only zone, else the driver picks one (the token stays
      in memory for that, at most STATE_TTL_S)
   4. cfsetup.setup() with the token (tunnel, DNS record, Access application with Managed OAuth and
      the email policy), then the token is revoked (/oauth2/revoke) whatever happened: nothing but
      what the tunnel needs is kept.
 
-Scopes (Cloudflare's OAuth scope ids for the API token permissions cfsetup needs): argotunnel.write
-(Cloudflare Tunnel Write), access.write (Access: Apps and Policies Write), access-acct.read
-(Access: Organizations, Identity Providers, and Groups Read), zone.read, dns.write; openid and
-email for the driver's address.
+Scopes: exactly the project client's (Cloudflare's OAuth scope ids, from GET /client/v4/oauth/scopes,
+for the permissions each call needs):
+  teams-connectors.write  Cloudflare One Connectors Write: the tunnel (list, create, token, routes)
+  access.write            Access: Apps and Policies Write: the Access application (list, create, update)
+  access-acct.read        Access: Organizations, Identity Providers, and Groups Read: the team domain,
+                          the login methods
+  zone.read               Zone Read: the domains and their account
+  dns.write               DNS Write: the hostname's record (list, create, update)
+  account-settings.read   Account Settings Read: the accounts the driver allowed (GET /accounts)
+  user-details.read       User Details Read: the driver's email address (GET /user), for the Access policy
 """
 import base64
 import hashlib
@@ -36,9 +42,10 @@ import urllib.request
 import cfsetup
 
 # the project's OAuth client (docs/GROK.md, "For the maintainer"); a fork sets its own
-DEFAULT_CLIENT_ID = ""
+DEFAULT_CLIENT_ID = "a3ec02d7b50d47e2ec23d7772fa51e31"
 OAUTH_BASE = "https://dash.cloudflare.com/oauth2"
-SCOPES = ["argotunnel.write", "access.write", "access-acct.read", "zone.read", "dns.write", "openid", "email"]
+SCOPES = ["dns.write", "zone.read", "access.write", "access-acct.read", "teams-connectors.write",
+          "account-settings.read", "user-details.read"]
 STATE_TTL_S = 600
 CALLBACK_PATH = "/api/grok/oauth/callback"
 
@@ -150,13 +157,20 @@ class Flow:
         except OAuthError:
             return False
 
-    def userinfo(self, token):
-        req = urllib.request.Request(self.oauth_base + "/userinfo", headers={"Authorization": "Bearer " + token, "Accept": "application/json"})
+    def user(self, token):
+        """The login's user details (GET /user, User Details Read): its email address."""
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                return json.loads(r.read().decode() or "{}")
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise OAuthError("Cloudflare did not say who signed in (%s)." % getattr(e, "reason", e))
+            return cfsetup.Client(token, self.api_base).call("GET", "/user", what="Reading who signed in") or {}
+        except cfsetup.SetupError as e:
+            raise OAuthError(str(e))
+
+    def accounts(self, token):
+        """The accounts the driver allowed on the consent page (GET /accounts, Account Settings Read)."""
+        try:
+            acc = cfsetup.Client(token, self.api_base).call("GET", "/accounts?per_page=50", what="Listing your accounts") or []
+        except cfsetup.SetupError as e:
+            raise OAuthError(str(e))
+        return [a.get("name") or a.get("id") for a in acc if isinstance(a, dict)]
 
     def zones(self, token):
         c = cfsetup.Client(token, self.api_base)
@@ -187,15 +201,17 @@ class Flow:
             raise OAuthError("Cloudflare sent no authorization code. Start again.")
         token = self.exchange(code, p["verifier"])
         try:
-            info = self.userinfo(token)
+            info = self.user(token)
             email = (info.get("email") or "").strip() if isinstance(info, dict) else ""
-            if not email or info.get("email_verified") is False:
-                raise OAuthError("Cloudflare gave no verified email address for this login, so Access cannot be "
+            if not email:
+                raise OAuthError("Cloudflare gave no email address for this login, so Access cannot be "
                                  "limited to you. Use Advanced (an API token) instead.")
+            accounts = self.accounts(token)
             zones = self.zones(token)
             if not zones:
-                raise OAuthError("This Cloudflare login sees no domain. Sign in with the account that has your "
-                                 "domain, and allow that account on Cloudflare's page.")
+                raise OAuthError("This Cloudflare login sees no domain%s. Sign in with the account that has your "
+                                 "domain, and allow that account on Cloudflare's page." % (
+                                     " in %s" % ", ".join(accounts) if accounts else ""))
             want = p["domain"]
             if want and want not in zones:
                 raise OAuthError("%s is not among the domains this login allowed (%s). Allow that domain's account "
