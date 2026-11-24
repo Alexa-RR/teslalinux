@@ -15,6 +15,10 @@ version's.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-24
+
+The map no longer freezes while you move it, and a tidier Connect Cloudflare.
+
 ### The map no longer freezes while you move it
 
 *Car and phone map.*
@@ -1120,7 +1124,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.4.0...v0.5.0
