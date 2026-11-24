@@ -198,6 +198,7 @@
         ["dev.about", "device", "About Teslalinux", "about credits version licence license gpl source code github tesla android"],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
+        ["sound.test", "sound", "Test sound", "test sound chime play hear speaker audio volume"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
         ["sound.browservolume", "sound", "Browser volume", "volume loud quiet"],
         ["sound.voicebutton", "sound", "Voice search button", "voice microphone mic search speech dictation"],
@@ -2871,6 +2872,7 @@
           };
           this._pollTimer = global.setTimeout(poll, 3000);
         }
+        waze.push(this._soundTestRow(out, conf));
         groups.push(UI.group("Waze's sound", waze));
       }
 
@@ -2930,6 +2932,64 @@
       if (voice.length) groups.push(UI.group("Voice", voice));
       if (!groups.length) throw new Error("no answer");
       return groups;
+    }
+
+    /**
+     * Test sound (POST /api/audioTest): the Pi plays a short chime into the sink Waze plays into, so
+     * it takes Waze's whole path (the car's stream, the Pi speaker, or both) and a silent Waze can be
+     * told apart from a silent path. The press is also the tap the car's browser needs before it
+     * plays anything: the page's sound stream is started first, and the chime asked for once it had
+     * a moment to connect.
+     */
+    _soundTestRow(out, conf) {
+      const api = this.apiClient;
+      const r = UI.row({
+        id: "sound.test",
+        title: "Test sound",
+        more: "Plays a short chime from the Pi the way Waze's voice goes. Hear it but not Waze? Then the sound path works and Waze is not playing.",
+      });
+      const btn = UI.button("Play", null, null, "volume_up");
+      btn.addEventListener("click", async () => {
+        const st = UI.status(r);
+        const o = this.cache.audio || out;
+        const car = o.output !== "pi";
+        const browserOn = !conf || utils.toInt(conf["persist.tesla-android.browser_audio.is_enabled"], 1) === 1;
+        if (o.output === "car" && !browserOn) {
+          st.err("Sound in the car's browser is off: turn it on below.");
+          return;
+        }
+        if (o.output === "pi" && !o.speaker) {
+          st.err("Nothing is connected to the Pi to play it on.");
+          return;
+        }
+        btn.disabled = true;
+        try {
+          if (car && browserOn) {
+            const was = typeof global.getAudioState === "function" ? global.getAudioState() : null;
+            if (typeof global.startAudioFromGesture === "function") global.startAudioFromGesture();
+            if (was !== "playing") {
+              st.pending("Connecting the car's sound…");
+              await new Promise((res) => global.setTimeout(res, 1500));
+            }
+          }
+          const res = await api.playAudioTest();
+          const a = res.audio || o;
+          const speaker = a.speaker ? a.speaker.description || a.speaker.name || "the Pi speaker" : null;
+          const where =
+            a.output === "pi" ? "on " + (speaker || "the Pi speaker")
+              : a.output === "both" && speaker ? "in the car and on " + speaker
+                : "in the car";
+          st.info("Playing a chime " + where + "…");
+          await new Promise((res2) => global.setTimeout(res2, Math.ceil((res.seconds || 1.5) * 1000)));
+          st.ok("Played " + where + ". Nothing heard? Check the car's volume, or restart its touchscreen.", true);
+        } catch (_e) {
+          st.err("The Pi could not play the test sound.");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      UI.setControl(r, btn);
+      return r;
     }
 
     _voiceOn() {

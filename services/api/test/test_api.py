@@ -66,7 +66,14 @@ with open(os.path.join(TMP, "mapskin.json"), "w") as f:
 BOOT_CONFIG = b"arm_64bit=1\n# >>> teslalinux (tools/pios/install.sh rewrites this block) >>>\n[pi4]\nboot_delay=0\n[all]\n# <<< teslalinux <<<\n"
 with open(os.path.join(TMP, "config.txt"), "wb") as f:
     f.write(BOOT_CONFIG)
+# the test sound's player (pw-play): keep the arguments and what it was given, then play for a second
+AUDIO_TEST_LOG = os.path.join(TMP, "audiotest.log")
+AUDIO_TEST_WAV = os.path.join(TMP, "audiotest.wav")
+with open(os.path.join(TMP, "pw-play"), "w") as f:
+    f.write('#!/bin/sh\necho "$@" > "%s"\ncat > "%s"\nsleep 1\n' % (AUDIO_TEST_LOG, AUDIO_TEST_WAV))
+os.chmod(os.path.join(TMP, "pw-play"), 0o755)
 os.environ.update({
+    "TESLALINUX_AUDIO_TEST_PLAYER": os.path.join(TMP, "pw-play"),
     "TESLALINUX_SET_GPU_SPEED": os.path.join(REPO, "host", "teslalinux-set-gpu-speed"),
     "TESLALINUX_GPU_ENV": os.path.join(TMP, "gpu.env"),
     "TESLALINUX_BOOT_CONFIG": os.path.join(TMP, "config.txt"),
@@ -126,7 +133,7 @@ class Upstream(unittest.TestCase):
         self.assertTrue(all(isinstance(v, int) for v in cfg.values()))
         # upstream defaults (vendor.mk) where the env file does not override them
         self.assertEqual(cfg["persist.tesla-android.gps.is_active"], 1)  # ours: on (tlprops.UPSTREAM_DEFAULTS)
-        self.assertEqual(cfg["persist.tesla-android.browser_audio.is_enabled"], 0)
+        self.assertEqual(cfg["persist.tesla-android.browser_audio.is_enabled"], 1)  # ours: on, like GPS
         self.assertEqual(cfg["persist.tesla-android.offline-mode.telemetry.is_enabled"], 1)
         self.assertEqual(cfg["persist.tesla-android.softap.channel"], 44)
         self.assertEqual(hdr.get("Access-Control-Allow-Origin"), "*")
@@ -488,6 +495,27 @@ class AudioOutput(unittest.TestCase):
             self.assertEqual(self.post(bad)[0], 500, bad)
         with open(settings) as f:
             self.assertEqual(json.load(f), {"output": "car", "volume": 35})
+
+    def test_test_sound(self):
+        """POST /api/audioTest: the chime as a WAV on the player's stdin, into the app's sink; one at a time"""
+        code, _, body = call("audioTest", "POST", "{}", "application/json")
+        self.assertEqual(code, 200)
+        res = json.loads(body)
+        self.assertFalse(res["already"])
+        self.assertGreater(res["seconds"], 1)
+        self.assertIn(res["audio"]["output"], ("car", "pi", "both"))
+        # the fake player holds on for a second: a second press meanwhile plays no second chime
+        self.assertTrue(json.loads(call("audioTest", "POST", "{}", "application/json")[2])["already"])
+        for _ in range(50):
+            if os.path.exists(AUDIO_TEST_WAV) and os.path.getsize(AUDIO_TEST_WAV) == len(api.audio_test_wav()):
+                break
+            time.sleep(0.1)
+        with open(AUDIO_TEST_LOG) as f:
+            self.assertEqual(f.read().split(), ["--target", "android", "-"])
+        with open(AUDIO_TEST_WAV, "rb") as f:
+            wav = f.read()
+        self.assertEqual(wav[:4] + wav[8:16], b"RIFFWAVEfmt ")
+        self.assertEqual(int.from_bytes(wav[24:28], "little"), 48000)
 
 
 class BootTime(unittest.TestCase):

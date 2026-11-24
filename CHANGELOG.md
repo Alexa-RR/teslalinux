@@ -15,6 +15,13 @@ version's.
 
 ## [Unreleased]
 
+### A test sound in Settings > Sound
+
+*Hear whether the sound path works.*
+
+- **Play** sends a short chime from the device the way Waze's voice goes (the car, the Pi speaker,
+  or both), and starts the car's sound stream.
+
 ### "Starting Waze" no longer covers Waze
 
 *The car page, after a fresh install.*

@@ -65,8 +65,10 @@ Changes from upstream:
   * **Display**: the picture sent to the car (format, resolution, quality, follow the window size,
     refresh rate; upstream's `displayState`) and the Pi's graphics speed (`/api/gpuSpeed`, at the next
     device start).
-  * **Sound**: where Waze's sound plays (`/api/audioOutput`), the Pi speaker and its volume, the car's
-    browser audio and its volume, and voice search (car interface only).
+  * **Sound**: where Waze's sound plays (`/api/audioOutput`), the Pi speaker and its volume, a test
+    sound (`/api/audioTest`: a chime from the Pi into the sink Waze plays into, so it takes Waze's
+    whole path; the press also starts the car's sound stream), the car's browser audio and its
+    volume, and voice search (car interface only).
   * **Connections** (replaces upstream's "Network"): the internet now (uplink, LTE operator and bars,
     data, the backup uplinks' own checks, failover and SIM notes, the modem's radio and recovery
     folded; `GET /api/status`, read from `host/teslalinux-uplink`), the hotspot (name, password, country,

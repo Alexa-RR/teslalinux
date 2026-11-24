@@ -50,7 +50,10 @@ UPSTREAM_DEFAULTS = {
     OFFLINE: "1", OFFLINE_TELEMETRY: "1", OFFLINE_FIRMWARE: "1",
     VD_WIDTH: "1088", VD_HEIGHT: "832", VD_REFRESH: "30", VD_QUALITY: "70", VD_DENSITY: "200",
     VD_PRESET: "0", VD_RENDERER: "0",
-    AUDIO_ENABLED: "0", AUDIO_VOLUME: "100", VD_RESPONSIVE: "0", VD_H264: "0",
+    # not upstream's "0": the navigator's voice prompts reach the car's speakers only through the
+    # page's sound stream, and Settings > Sound's default "Car" means that stream (a fresh install
+    # without it played nothing in the car)
+    AUDIO_ENABLED: "1", AUDIO_VOLUME: "100", VD_RESPONSIVE: "0", VD_H264: "0",
     # not upstream's "0": here the app is a navigator, and the car's position reaches it only while
     # the page sends the browser's geolocation (a fresh install without it showed Waze with no fix)
     GPS_ACTIVE: "1",

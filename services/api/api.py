@@ -63,6 +63,10 @@ Where the app's sound plays (new routes only):
 * POST /api/audioOutput   JSON {"output"?: ..., "volume"?: 0..100}: written to the settings file
                           teslalinux-audio follows (/var/lib/teslalinux/state/audio.json, within half a
                           second, no restart); answers the new state; 500 on anything else
+* POST /api/audioTest     (any body) a short chime played into the sink the app plays into, so it goes
+                          wherever the app's sound goes; {"seconds": its length, "already": a chime
+                          was still playing (no second one), "audio": GET /api/audioOutput's answer};
+                          500 when PipeWire's player cannot start
 
 The app's interface (new routes only):
 * GET  /api/appInterface  {"interface": "phone" | "car"}: the app's phone screens, or its car interface
@@ -197,6 +201,9 @@ AUDIO_SETTINGS = os.environ.get("TESLALINUX_AUDIO_SETTINGS", "/var/lib/teslalinu
 AUDIO_STATUS = os.environ.get("TESLALINUX_AUDIO_STATUS",
                               os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/tesla"), "teslalinux-audio.json"))
 AUDIO_OUTPUTS = ("car", "pi", "both")
+# the test sound (POST /api/audioTest): PipeWire's player, into the sink the app plays into
+AUDIO_TEST_PLAYER = os.environ.get("TESLALINUX_AUDIO_TEST_PLAYER", "pw-play")
+AUDIO_APP_SINK = os.environ.get("TESLALINUX_AUDIO_APP_SINK", "android")
 AUDIO_DEFAULTS = {"output": "car", "volume": 80}
 # how long the device took to start (host/teslalinux-boottime writes it once per boot)
 BOOTTIME_STATE = os.environ.get("TESLALINUX_BOOTTIME_STATE", "/var/lib/teslalinux/state/boottime.json")
@@ -245,7 +252,7 @@ ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpda
               "gpuSpeed", "audioOutput", "releaseUpdate", "wifiConnect"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
                                   "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed",
-                                  "audioOutput", "releaseUpdate", "wifiConnect"}
+                                  "audioOutput", "audioTest", "releaseUpdate", "wifiConnect"}
 
 
 def props():
@@ -1069,6 +1076,84 @@ def set_audio_output(req):
             json.dump(s, f)
         os.chmod(tmp, 0o644)
         os.replace(tmp, AUDIO_SETTINGS)
+
+
+# A short two-note chime played into the sink the app plays into, so it goes wherever the app's sound
+# goes (the car's stream, the Pi speaker, or both): the whole path is tested, not only the browser.
+# It starts with a little silence: the car's stream starts its encoder when the page connects, and
+# a chime that began at once could lose its first note.
+AUDIO_TEST_LEAD_S = 0.3
+AUDIO_TEST_NOTES = ((880.0, 0.0, 0.5), (1318.5, 0.22, 0.9))  # (Hz, start s, length s): A5 then E6
+AUDIO_TEST_RATE = 48000
+_audio_test = {"proc": None, "wav": None}
+_audio_test_lock = threading.Lock()
+
+
+def audio_test_wav():
+    """the chime as a 48 kHz 16-bit stereo WAV (made once): each note a sine with a soft octave and an
+    exponential fade, 5 ms attack so it does not click"""
+    if _audio_test["wav"] is None:
+        import io
+        import math
+        import struct
+        import wave
+        rate = AUDIO_TEST_RATE
+        lead = int(AUDIO_TEST_LEAD_S * rate)
+        total = lead + int(max(start + length for _, start, length in AUDIO_TEST_NOTES) * rate)
+        mix = [0.0] * total
+        for freq, start, length in AUDIO_TEST_NOTES:
+            first, n = lead + int(start * rate), int(length * rate)
+            for i in range(n):
+                t = i / rate
+                env = min(1.0, t / 0.005) * math.exp(-t * 6.0 / length)
+                mix[first + i] += env * (math.sin(2 * math.pi * freq * t) + 0.25 * math.sin(4 * math.pi * freq * t))
+        peak = max(abs(x) for x in mix) or 1.0
+        frames = bytearray()
+        for x in mix:
+            s = int(x / peak * 0.5 * 32767)
+            frames += struct.pack("<hh", s, s)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(bytes(frames))
+        _audio_test["wav"] = buf.getvalue()
+    return _audio_test["wav"]
+
+
+def audio_test_seconds():
+    return AUDIO_TEST_LEAD_S + max(start + length for _, start, length in AUDIO_TEST_NOTES)
+
+
+def play_audio_test():
+    """POST /api/audioTest: the chime into the app's sink with pw-play (PipeWire runs as this user in
+    XDG_RUNTIME_DIR). One at a time: a press while it plays answers that one. Raises OSError when the
+    player cannot start."""
+    with _audio_test_lock:
+        p = _audio_test["proc"]
+        if p is not None and p.poll() is None:
+            return {"seconds": audio_test_seconds(), "already": True}
+        env = dict(os.environ)
+        env.setdefault("XDG_RUNTIME_DIR", "/run/tesla")
+        cmd = [AUDIO_TEST_PLAYER, "--target", AUDIO_APP_SINK, "-"]
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                             env=env)
+        _audio_test["proc"] = p
+
+    def feed():
+        try:
+            _, err = p.communicate(audio_test_wav(), timeout=audio_test_seconds() + 10)
+            if p.returncode:
+                print("teslalinux-api: test sound: %s exited %d: %s"
+                      % (AUDIO_TEST_PLAYER, p.returncode, (err or b"").decode("utf-8", "replace").strip()), flush=True)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+        except OSError as e:
+            print("teslalinux-api: test sound: %s" % e, flush=True)
+    threading.Thread(target=feed, daemon=True).start()
+    return {"seconds": audio_test_seconds(), "already": False}
 
 
 # ---------------------------------------------------------------------------- keyboard
@@ -2321,6 +2406,14 @@ class Handler(BaseHTTPRequestHandler):
                 print("teslalinux-api: audio settings not written: %s" % e, flush=True)
                 return self._error()
             return self._json(audio_output_state())
+        if route == "audioTest":
+            try:
+                played = play_audio_test()
+            except OSError as e:
+                print("teslalinux-api: test sound not played: %s" % e, flush=True)
+                return self._error()
+            played["audio"] = audio_output_state()
+            return self._json(played)
         if route == "keyboard":
             try:
                 req = json.loads(body.decode("utf-8") or "null")

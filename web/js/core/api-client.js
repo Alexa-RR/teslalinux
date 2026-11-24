@@ -61,6 +61,15 @@
       return this._postJson(this.apiBaseUrl + "/audioOutput", change);
     }
 
+    // teslalinux: a short chime from the Pi into the app's sink ({seconds, already, audio})
+    playAudioTest() {
+      return this._fetchJson(this.apiBaseUrl + "/audioTest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    }
+
     // teslalinux: the GPU clock (standard | faster | fastest; services/api/api.py, next restart)
     fetchGpuSpeed() {
       return this._fetchJson(this.apiBaseUrl + "/gpuSpeed");
