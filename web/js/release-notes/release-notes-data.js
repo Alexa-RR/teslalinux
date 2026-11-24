@@ -12,83 +12,83 @@
         "changelogItems": [
           {
             "title": "Open PalGate gates from the car",
-            "shortDescription": "Settings > Gates, and a gate button on the map in both interfaces.",
-            "descriptionMarkdown": "• Link the device to your PalGate account once: Settings > Gates shows a code, and the PalGate app on your phone scans it (Device Linking > Link a Device). The PalGate app does not run on the device; it opens your gates the way the app's linked devices do.\n• A gate button stands next to the settings and sound buttons. With one gate shown it opens that gate at once; with more it lists them, one tap each. You see it being sent, then opened, or why it did not open.\n• Choose which gates the button shows, their order, their names, and which output a two-output gate opens.\n• Open on arrival, per gate and off until you turn it on: take the gate's position from the car, then it opens when the car comes into the circle around it from outside, driving towards it at a speed you set, and not again until the car has left and the cooldown has passed. A notice on the map says when it did.\n• Your PalGate phone number and link stay on the device, readable by its service only."
+            "shortDescription": "Settings > Gates.",
+            "descriptionMarkdown": "• Link the device once in Settings > Gates: scan the code with the PalGate app on your phone (Device Linking > Link a Device).\n• A gate button sits next to the settings and sound buttons. With one gate it opens right away; with several you pick one.\n• Choose which gates show, their order and names, and which output a two-output gate uses.\n• Open on arrival, per gate and off by default: the gate opens when you drive towards it, and only once until you leave.\n• Your PalGate details stay on the device."
           },
           {
-            "title": "Waze keeps your position in tunnels with beacons",
-            "shortDescription": "Both interfaces. Uses the Pi's own Bluetooth (or a USB Bluetooth adapter).",
-            "descriptionMarkdown": "• Tunnels such as Boston's I-93, New York's Lincoln, Holland, Queens-Midtown and Brooklyn-Battery or Chicago's Lower Wacker Drive have Waze Beacons: small Bluetooth transmitters that tell Waze where the car is when GPS cannot reach it. Waze now hears them, as on a phone, so the car's arrow keeps moving through the tunnel.\n• Bluetooth is turned on for this; it does not make the device start any later. Waze only listens near tunnels that have beacons, and Waze may only listen: it cannot pair with or connect to anything."
+            "title": "Waze Beacons in tunnels",
+            "shortDescription": "Uses the Pi's Bluetooth or a USB adapter.",
+            "descriptionMarkdown": "Some tunnels (in Boston, New York, Chicago and elsewhere) have Bluetooth beacons for Waze. Waze now picks them up, so your position keeps moving underground. Bluetooth only listens: it can't pair or connect, and startup isn't any slower."
           },
           {
-            "title": "New settings and sound buttons on the map",
-            "shortDescription": "Both interfaces, both looks, day and night.",
-            "descriptionMarkdown": "• The settings and sound buttons are no longer a small black tab squeezed into the top right corner. They are map buttons like Waze's own on the car screen: round and dark with the Rounded look, a frosted tile with Graphite, the same size as Waze's map buttons and lined up with them, never smaller than a fingertip.\n• They never cover Waze's buttons, the directions or a card: on a narrow screen, such as a phone's, the cards start below them, and full-screen lists and search end before them.\n• The settings button now shows sliders, so it is not mistaken for Waze's own settings gear."
+            "title": "New map buttons",
+            "shortDescription": "Both interfaces.",
+            "descriptionMarkdown": "The settings and sound buttons are now real map buttons, the same size as Waze's and lined up with them, and they no longer cover Waze's buttons or cards. The settings icon is now sliders, so it isn't mistaken for Waze's gear."
           },
           {
-            "title": "Typing while driving, for a passenger",
-            "shortDescription": "Car mode. Settings > Waze > While driving > Typing while driving.",
-            "descriptionMarkdown": "• Off (the default) is as in Android Auto: while the car moves the search field takes no typing, and voice search still works. On lets a passenger type a destination while the car moves; lists stay as short as before.\n• It applies at once, without restarting Waze, on every screen showing Waze, and stays on after a restart. Typing while driving is the driver's responsibility: turn it on for a passenger."
+            "title": "Typing while driving",
+            "shortDescription": "Car mode. Settings > Waze > While driving.",
+            "descriptionMarkdown": "Off by default, like Android Auto: the search field doesn't take typing while the car moves, but voice search still works. Turn it on to let a passenger type."
           },
           {
-            "title": "See the car's screen on a computer",
+            "title": "Model 3 screen emulation",
             "shortDescription": "Settings > This device > Debug.",
-            "descriptionMarkdown": "• \"Emulate the Model 3 screen\" shows this page on a computer exactly as a Model 3's browser shows it: its window size and pixel density, the picture size it asks the Pi for and its sharpness, scaled to fit the window or one car pixel per screen pixel. A bar above it says the emulation is on, with a button to stop. It is for this browser only."
+            "descriptionMarkdown": "Shows the car page in a desktop browser at the Model 3's screen size and pixel density, for testing without the car."
           },
           {
-            "title": "Map frame rate: Automatic",
-            "shortDescription": "",
-            "descriptionMarkdown": "Car mode. Settings > Waze interface > Map frame rate. Measured on a Raspberry Pi 4 at its standard speed, on a road route.\n\n• New default: Automatic. Waze's map draws up to 60 pictures a second while it moves (while you drive, pan or zoom, or use the car screen's buttons and lists) and Waze's own 30 while it is still. While driving it is as smooth as Full (about 47 pictures a second at the standard size); standing still it needs half the Pi's processor and graphics time that Full does, the same as Waze's own rate. A few seconds after the car stops, the map goes back to 30.\n• Three choices now: Automatic, Waze's own (30 a second) and Full (up to 60 all the time). A Pi that already had Waze's own or Full chosen keeps it. Automatic, like Full, works with the Waze version the device has checked (5.27.5); with another version Waze keeps its own rate, and the setting says so."
+            "title": "Smoother map",
+            "shortDescription": "Car mode. Settings > Waze interface > Map frame rate.",
+            "descriptionMarkdown": "• New default, Automatic: up to 60 fps while the map moves, Waze's usual 30 when it's still. Driving is as smooth as Full (about 47 fps on a Pi 4), and standing still uses half the CPU and GPU. If you picked Waze's own or Full before, that's kept.\n• The map is about 6% faster with a patched Mesa graphics driver that ships with the app.\n• Automatic and Full need Waze 5.27.5; other versions keep Waze's own rate."
           },
           {
-            "title": "Waze starts in seconds after a mode change",
-            "shortDescription": "Both interfaces. Measured on a Raspberry Pi 4 at its standard speed.",
-            "descriptionMarkdown": "• Switching between the phone and car interfaces, or changing Map frame rate, no longer prepares Waze's code all over again: Waze is back on the map in about 6 seconds (9 in the phone interface) instead of about 2 minutes.\n• After an install or an update, the code is prepared once during the install (about 2 minutes on a Pi 4), and the first start in the car then takes about 6 seconds instead of 2 more minutes."
+            "title": "Faster starts after switching modes",
+            "shortDescription": "Both interfaces.",
+            "descriptionMarkdown": "Switching between phone and car mode, or changing the map frame rate, no longer recompiles Waze: it's back on the map in 6 to 9 seconds instead of about 2 minutes. After an install or update, Waze is compiled during the install, so the first start is fast too."
           },
           {
-            "title": "The car screen says what Waze is doing while it starts",
-            "shortDescription": "Both interfaces, day and night.",
-            "descriptionMarkdown": "• While Waze is not on the screen yet, the car screen says whether Waze is being prepared for this device (once, after an update or a mode change), starting, or restarting after it stopped, instead of a dark screen.\n• While Waze is being prepared, a bar shows how far along it is and about how long is left, measured from the last time on this device (the first time it says that it takes a few minutes), with the steps that follow. It goes away as soon as Waze draws its map."
+            "title": "Startup screen",
+            "shortDescription": "Both interfaces.",
+            "descriptionMarkdown": "While Waze loads, the car screen says whether it's being prepared, starting or restarting instead of staying black. When Waze is being prepared there's a progress bar with a time estimate."
           },
           {
-            "title": "Waze's own settings in Settings",
+            "title": "Waze's settings in Settings",
             "shortDescription": "Car mode. Settings > Waze > Waze's settings.",
-            "descriptionMarkdown": "• Waze's car settings now appear in the settings page itself, exactly as Waze offers them and in Waze's language: roads to avoid, toll and HOV passes, vehicle type, sound, privacy, your account and the rest. Switches, choices and sub-pages work as in Waze, and every change goes straight to Waze, so they stay right whatever Waze version is installed.\n• Leaving the settings page puts Waze back on its map. If Waze is asking something on the map at that moment, the group says so: answer it there first.\n• While Waze guides you it offers no way to its settings (on the car screen too), and while a question or a list is on its map neither. The group now says which, opens Waze's settings by itself as soon as Waze offers them again, and during a drive offers to end it.\n• Closing the car page (or the browser) while Waze's settings are open also puts Waze back on its map, at once; when the car simply drives out of the Wi-Fi's range, within about half a minute. Before, Waze's settings stayed on the car's map.\n• Long lists on the car screen (Waze's settings, search results) no longer start under their page arrows on a narrow screen (\"ccount\" instead of \"Account\")."
+            "descriptionMarkdown": "• Waze's own car settings (roads to avoid, toll passes, vehicle type, sound, account and more) are now inside our settings page, and changes go straight to Waze.\n• Leaving the page puts Waze back on the map, also when you close the browser or drive out of Wi-Fi range.\n• Waze hides its settings while it navigates. The page says so and offers to end the drive."
           },
           {
-            "title": "The speedometer on the car screen",
-            "shortDescription": "Car mode, both looks, day and night. Settings > Waze interface > Speedometer.",
-            "descriptionMarkdown": "• The speedometer is now drawn by the car screen instead of inside Waze's map: the current speed in a bubble and the road's speed limit as a road sign beside it, at the bottom right next to the map buttons. It follows the look (Rounded or Graphite), day and night, and Panel size. The speed turns red above the limit, as in Waze; speeds are in miles where Waze uses miles, with the US speed limit sign where Waze shows that one.\n• Settings > Waze interface > Speedometer: Speed and limit (the default), Limit only, or Off; and Speedometer position: bottom right (the default) or under the directions at the top left.\n• This needs a Waze version the device has checked (now 5.27.5). With any other version Waze keeps drawing its own, and the setting says so. In the phone interface Waze's own speedometer is back."
+            "title": "Speedometer",
+            "shortDescription": "Car mode. Settings > Waze interface > Speedometer.",
+            "descriptionMarkdown": "The speed and speed limit are now drawn by the car page, bottom right next to the map buttons, in the same look as the rest. The speed turns red over the limit. Show speed and limit, limit only or nothing, and optionally move it under the directions. Needs Waze 5.27.5; other versions and phone mode keep Waze's own speedometer."
           },
           {
-            "title": "The car's keyboard by default, voice search off",
-            "shortDescription": "Settings > Waze > Keyboard and Settings > Sound > Voice search button.",
-            "descriptionMarkdown": "• Typing into Waze now uses the car's own keyboard by default (also a phone's, when the page is open on one), and the car's keyboard has a microphone for dictating a place. Waze's built-in keyboard is still there: turn \"Use this device's keyboard\" off. A Pi that already has a choice keeps it.\n• The microphone button in the car interface's search is off unless switched on. It uses the browser's speech recognition, which a Tesla's browser does not have, so in the car it did nothing. The setting says so, and the voice language and the microphone test appear only when it is on. With it off, Waze is told that this page cannot recognise speech."
+            "title": "Car keyboard by default, voice search off",
+            "shortDescription": "Settings > Waze > Keyboard, and Settings > Sound > Voice search button.",
+            "descriptionMarkdown": "• Typing uses the car's keyboard by default; it has a mic for dictation. Waze's built-in keyboard is still there, and an existing choice is kept.\n• The mic button in car mode search is now off by default. Tesla's browser has no speech recognition, so it never worked in the car."
           },
           {
-            "title": "Voice search in the phone interface",
+            "title": "Voice search in phone mode",
             "shortDescription": "Settings > Sound > Voice search button.",
-            "descriptionMarkdown": "• Waze's own microphone button in the phone interface works: with voice search switched on in this browser, a tap listens through the car page and Waze searches what was said."
+            "descriptionMarkdown": "Waze's mic button works in phone mode when voice search is on and the browser supports it."
           },
           {
-            "title": "A new settings page",
-            "shortDescription": "Settings, in the car and on a phone, day and night.",
-            "descriptionMarkdown": "• Seven sections instead of eleven, by what you want to do: Overview, Waze, Display, Sound, Connections, Updates and This device. Each shows its state in the list on the left (for example \"LTE, 4 of 5 bars\" or \"Up to date\"), with a dot where something needs you.\n• Overview tells at a glance whether the car is connected, the internet works, Waze has the car's position and is running, lists what needs you, and has the controls you change most.\n• Bigger buttons and switches for the touchscreen; choices you can see at once instead of drop-down lists; language and time zone in a list you can filter. Every change says in its row whether it was saved, and a failure no longer empties the page.\n• Changes that restart Waze wait in one bar at the bottom: change several, then restart Waze once, or undo them.\n• Hotspot and LTE changes are collected until you apply them, now or at the next start.\n• Search finds any setting by name or by what it does.\n• This device shows how long the last start took: ready for the car after about 8 seconds on a Pi 4, and when Waze's map was ready, with the previous starts.\n• The page follows the car interface's day and night. Release notes open from Updates > What's new."
+            "title": "New settings page",
+            "shortDescription": "Settings.",
+            "descriptionMarkdown": "• Seven sections instead of eleven: Overview, Waze, Display, Sound, Connections, Updates and This device.\n• Overview shows at a glance whether the car, internet, GPS and Waze are working.\n• Bigger controls for the touchscreen, and a search across all settings.\n• Changes that need a Waze restart are collected so you restart once. Hotspot and LTE changes wait until you apply them.\n• This device shows how long the last startup took."
           },
           {
-            "title": "A smaller turn card",
-            "shortDescription": "Car mode, both looks, day and night.",
-            "descriptionMarkdown": "The card with the next turn took almost half the screen. It is now about a fifth shorter: a smaller turn sign and lanes row, and the street name gets room for its two lines. The exit and road signs Waze puts in front of a street name were drawn at the height of the letters, too small to read; they now keep their own shape and are a little taller than the text."
+            "title": "Smaller turn card",
+            "shortDescription": "Car mode.",
+            "descriptionMarkdown": "The next-turn card is about a fifth shorter, and the exit and road signs before street names are readable now."
           },
           {
-            "title": "Map text size without a restart, sound on a Pi speaker",
-            "shortDescription": "Settings > Waze > Map text size in Car mode, and Settings > Sound.",
-            "descriptionMarkdown": "• Changing Map text size no longer makes Waze restart. Waze's map surface was replaced while the picture of its last frame still pointed at a closed buffer, which cut Waze off the display.\n• Waze's voice on a speaker connected to the Pi: Settings > Sound > Where Waze's sound plays (Car, Pi speaker, Both), with its own volume. A USB sound card or speaker is used when plugged in, else the 3.5 mm jack; plugging in or out takes effect at once."
+            "title": "Map text size and Pi speaker",
+            "shortDescription": "Settings > Waze > Map text size, and Settings > Sound.",
+            "descriptionMarkdown": "• Changing the map text size no longer restarts Waze.\n• Waze's voice can play on a speaker plugged into the Pi (USB or the headphone jack), in the car, or both, with its own volume."
           },
           {
-            "title": "Smaller fixes",
-            "shortDescription": "Things that were in the way.",
-            "descriptionMarkdown": "• In the phone interface, the vehicle picker (Car info on the map) drew its car, motorcycle and taxi pictures twice as large as on a phone: their names were missing, the blue frame around the chosen vehicle had no top, and the description bubble sat far below it. Waze's pictures are now drawn at their Android size everywhere, so the picker shows small pictures with their names, as on a phone. The row of vehicles repeating to the sides is Waze's own: it scrolls round endlessly, and the car's wide screen shows more of it than a phone does."
+            "title": "Fixes",
+            "shortDescription": "Smaller things.",
+            "descriptionMarkdown": "• Phone mode: the vehicle picker drew its pictures twice too large and lost their names.\n• Long lists on narrow screens no longer start under the scroll arrows."
           }
         ]
       },

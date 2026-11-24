@@ -21,343 +21,186 @@ until that section becomes the next version's.
 
 ## [0.4.0] - 2026-11-24
 
-Open your PalGate gates from the car, and Waze keeps your position in tunnels with Waze Beacons.
-The map is as smooth as Full while you drive and uses half the Pi's time while it stands still,
-Waze is back on the map in seconds after a mode change instead of two minutes, and the car screen
-says what Waze is doing while it starts. Waze's own settings and a new speedometer are on the car
-screen, the settings page is new, and the turn card is smaller.
+PalGate gate buttons, Waze Beacons in tunnels, a smoother map, and much faster starts after
+switching modes.
 
 ### Open PalGate gates from the car
 
-*Settings > Gates, and a gate button on the map in both interfaces.*
+*Settings > Gates.*
 
-- Link the device to your PalGate account once: Settings > Gates shows a code, and the PalGate
-  app on your phone scans it (Device Linking > Link a Device). The PalGate app does not run on the
-  device; it opens your gates the way the app's linked devices do.
-- A gate button stands next to the settings and sound buttons. With one gate shown it opens that
-  gate at once; with more it lists them, one tap each. You see it being sent, then opened, or why
-  it did not open.
-- Choose which gates the button shows, their order, their names, and which output a two-output
-  gate opens.
-- Open on arrival, per gate and off until you turn it on: take the gate's position from the car,
-  then it opens when the car comes into the circle around it from outside, driving towards it at
-  a speed you set, and not again until the car has left and the cooldown has passed. A notice on
-  the map says when it did.
-- Your PalGate phone number and link stay on the device, readable by its service only.
+- Link the device once in Settings > Gates: scan the code with the PalGate app on your phone
+  (Device Linking > Link a Device).
+- A gate button sits next to the settings and sound buttons. With one gate it opens right away;
+  with several you pick one.
+- Choose which gates show, their order and names, and which output a two-output gate uses.
+- Open on arrival, per gate and off by default: the gate opens when you drive towards it, and
+  only once until you leave.
+- Your PalGate details stay on the device.
 
-### Waze keeps your position in tunnels with beacons
+### Waze Beacons in tunnels
 
-*Both interfaces. Uses the Pi's own Bluetooth (or a USB Bluetooth adapter).*
+*Uses the Pi's Bluetooth or a USB adapter.*
 
-- Tunnels such as Boston's I-93, New York's Lincoln, Holland, Queens-Midtown and
-  Brooklyn-Battery or Chicago's Lower Wacker Drive have Waze Beacons: small Bluetooth transmitters
-  that tell Waze where the car is when GPS cannot reach it. Waze now hears them, as on a phone,
-  so the car's arrow keeps moving through the tunnel.
-- Bluetooth is turned on for this; it does not make the device start any later. Waze only
-  listens near tunnels that have beacons, and Waze may only listen: it cannot pair with or connect
-  to anything.
+Some tunnels (in Boston, New York, Chicago and elsewhere) have Bluetooth beacons for Waze. Waze
+now picks them up, so your position keeps moving underground. Bluetooth only listens: it can't
+pair or connect, and startup isn't any slower.
 
-### New settings and sound buttons on the map
+### New map buttons
 
-*Both interfaces, both looks, day and night.*
+*Both interfaces.*
 
-- The settings and sound buttons are no longer a small black tab squeezed into the top right
-  corner. They are map buttons like Waze's own on the car screen: round and dark with the
-  Rounded look, a frosted tile with Graphite, the same size as Waze's map buttons and lined up
-  with them, never smaller than a fingertip.
-- They never cover Waze's buttons, the directions or a card: on a narrow screen, such as a
-  phone's, the cards start below them, and full-screen lists and search end before them.
-- The settings button now shows sliders, so it is not mistaken for Waze's own settings gear.
+The settings and sound buttons are now real map buttons, the same size as Waze's and lined up
+with them, and they no longer cover Waze's buttons or cards. The settings icon is now sliders, so
+it isn't mistaken for Waze's gear.
 
-### Typing while driving, for a passenger
+### Typing while driving
 
-*Car mode. Settings > Waze > While driving > Typing while driving.*
+*Car mode. Settings > Waze > While driving.*
 
-- Off (the default) is as in Android Auto: while the car moves the search field takes no typing,
-  and voice search still works. On lets a passenger type a destination while the car moves; lists
-  stay as short as before.
-- It applies at once, without restarting Waze, on every screen showing Waze, and stays on after a
-  restart. Typing while driving is the driver's responsibility: turn it on for a passenger.
+Off by default, like Android Auto: the search field doesn't take typing while the car moves, but
+voice search still works. Turn it on to let a passenger type.
 
-### See the car's screen on a computer
+### Model 3 screen emulation
 
 *Settings > This device > Debug.*
 
-- "Emulate the Model 3 screen" shows this page on a computer exactly as a Model 3's browser shows
-  it: its window size and pixel density, the picture size it asks the Pi for and its sharpness,
-  scaled to fit the window or one car pixel per screen pixel. A bar above it says the emulation
-  is on, with a button to stop. It is for this browser only.
+Shows the car page in a desktop browser at the Model 3's screen size and pixel density, for
+testing without the car.
 
-### Map frame rate: Automatic
+### Smoother map
 
-*Car mode. Settings > Waze interface > Map frame rate. Measured on a Raspberry Pi 4 at its standard
-speed, on a road route.*
+*Car mode. Settings > Waze interface > Map frame rate.*
 
-- New default: **Automatic**. Waze's map draws up to 60 pictures a second while it moves (while
-  you drive, pan or zoom, or use the car screen's buttons and lists) and Waze's own 30 while it is
-  still. While driving it is as smooth as Full (about 47 pictures a second at the standard size);
-  standing still it needs half the Pi's processor and graphics time that Full does, the same as
-  Waze's own rate. A few seconds after the car stops, the map goes back to 30.
-- Three choices now: Automatic, Waze's own (30 a second) and Full (up to 60 all the time). A Pi
-  that already had Waze's own or Full chosen keeps it. Automatic, like Full, works with the Waze
-  version the device has checked (5.27.5); with another version Waze keeps its own rate, and the
-  setting says so.
+- New default, Automatic: up to 60 fps while the map moves, Waze's usual 30 when it's still.
+  Driving is as smooth as Full (about 47 fps on a Pi 4), and standing still uses half the CPU and
+  GPU. If you picked Waze's own or Full before, that's kept.
+- The map is about 6% faster with a patched Mesa graphics driver that ships with the app.
+- Automatic and Full need Waze 5.27.5; other versions keep Waze's own rate.
 
-### Waze starts in seconds after a mode change
+### Faster starts after switching modes
 
-*Both interfaces. Measured on a Raspberry Pi 4 at its standard speed.*
+*Both interfaces.*
 
-- Switching between the phone and car interfaces, or changing Map frame rate, no longer prepares
-  Waze's code all over again: Waze is back on the map in about 6 seconds (9 in the phone
-  interface) instead of about 2 minutes.
-- After an install or an update, the code is prepared once during the install (about 2 minutes on
-  a Pi 4), and the first start in the car then takes about 6 seconds instead of 2 more minutes.
+Switching between phone and car mode, or changing the map frame rate, no longer recompiles Waze:
+it's back on the map in 6 to 9 seconds instead of about 2 minutes. After an install or update,
+Waze is compiled during the install, so the first start is fast too.
 
-### The car screen says what Waze is doing while it starts
+### Startup screen
 
-*Both interfaces, day and night.*
+*Both interfaces.*
 
-- While Waze is not on the screen yet, the car screen says whether Waze is being prepared for this
-  device (once, after an update or a mode change), starting, or restarting after it stopped,
-  instead of a dark screen.
-- While Waze is being prepared, a bar shows how far along it is and about how long is left,
-  measured from the last time on this device (the first time it says that it takes a few
-  minutes), with the steps that follow. It goes away as soon as Waze draws its map.
+While Waze loads, the car screen says whether it's being prepared, starting or restarting instead
+of staying black. When Waze is being prepared there's a progress bar with a time estimate.
 
-### Waze's own settings in Settings
+### Waze's settings in Settings
 
 *Car mode. Settings > Waze > Waze's settings.*
 
-- Waze's car settings now appear in the settings page itself, exactly as Waze offers them and in
-  Waze's language: roads to avoid, toll and HOV passes, vehicle type, sound, privacy, your account
-  and the rest. Switches, choices and sub-pages work as in Waze, and every change goes straight to
-  Waze, so they stay right whatever Waze version is installed.
-- Leaving the settings page puts Waze back on its map. If Waze is asking something on the map at
-  that moment, the group says so: answer it there first.
-- While Waze guides you it offers no way to its settings (on the car screen too), and while a
-  question or a list is on its map neither. The group now says which, opens Waze's settings by
-  itself as soon as Waze offers them again, and during a drive offers to end it.
-- Closing the car page (or the browser) while Waze's settings are open also puts Waze back on its
-  map, at once; when the car simply drives out of the Wi-Fi's range, within about half a minute.
-  Before, Waze's settings stayed on the car's map.
-- Long lists on the car screen (Waze's settings, search results) no longer start under their page
-  arrows on a narrow screen ("ccount" instead of "Account").
+- Waze's own car settings (roads to avoid, toll passes, vehicle type, sound, account and more) are
+  now inside our settings page, and changes go straight to Waze.
+- Leaving the page puts Waze back on the map, also when you close the browser or drive out of
+  Wi-Fi range.
+- Waze hides its settings while it navigates. The page says so and offers to end the drive.
 
-### The speedometer on the car screen
+### Speedometer
 
-*Car mode, both looks, day and night. Settings > Waze interface > Speedometer.*
+*Car mode. Settings > Waze interface > Speedometer.*
 
-- The speedometer is now drawn by the car screen instead of inside Waze's map: the current speed
-  in a bubble and the road's speed limit as a road sign beside it, at the bottom right next to the
-  map buttons. It follows the look (Rounded or Graphite), day and night, and Panel size. The speed
-  turns red above the limit, as in Waze; speeds are in miles where Waze uses miles, with the US
-  speed limit sign where Waze shows that one.
-- Settings > Waze interface > Speedometer: Speed and limit (the default), Limit only, or Off; and
-  Speedometer position: bottom right (the default) or under the directions at the top left.
-- This needs a Waze version the device has checked (now 5.27.5). With any other version Waze keeps
-  drawing its own, and the setting says so. In the phone interface Waze's own speedometer is back.
+The speed and speed limit are now drawn by the car page, bottom right next to the map buttons, in
+the same look as the rest. The speed turns red over the limit. Show speed and limit, limit only or
+nothing, and optionally move it under the directions. Needs Waze 5.27.5; other versions and phone
+mode keep Waze's own speedometer.
 
-### The car's keyboard by default, voice search off
+### Car keyboard by default, voice search off
 
-*Settings > Waze > Keyboard and Settings > Sound > Voice search button.*
+*Settings > Waze > Keyboard, and Settings > Sound > Voice search button.*
 
-- Typing into Waze now uses the car's own keyboard by default (also a phone's, when the page is
-  open on one), and the car's keyboard has a microphone for dictating a place. Waze's built-in
-  keyboard is still there: turn "Use this device's keyboard" off. A Pi that already has a choice
-  keeps it.
-- The microphone button in the car interface's search is off unless switched on. It uses the
-  browser's speech recognition, which a Tesla's browser does not have, so in the car it did
-  nothing. The setting says so, and the voice language and the microphone test appear only when
-  it is on. With it off, Waze is told that this page cannot recognise speech.
+- Typing uses the car's keyboard by default; it has a mic for dictation. Waze's built-in keyboard
+  is still there, and an existing choice is kept.
+- The mic button in car mode search is now off by default. Tesla's browser has no speech
+  recognition, so it never worked in the car.
 
-### Voice search in the phone interface
+### Voice search in phone mode
 
 *Settings > Sound > Voice search button.*
 
-- Waze's own microphone button in the phone interface works: with voice search switched on in this
-  browser, a tap listens through the car page and Waze searches what was said.
+Waze's mic button works in phone mode when voice search is on and the browser supports it.
 
-### A new settings page
+### New settings page
 
-*Settings, in the car and on a phone, day and night.*
+*Settings.*
 
-- Seven sections instead of eleven, by what you want to do: Overview, Waze, Display, Sound,
-  Connections, Updates and This device. Each shows its state in the list on the left (for example
-  "LTE, 4 of 5 bars" or "Up to date"), with a dot where something needs you.
-- Overview tells at a glance whether the car is connected, the internet works, Waze has the car's
-  position and is running, lists what needs you, and has the controls you change most.
-- Bigger buttons and switches for the touchscreen; choices you can see at once instead of drop-down
-  lists; language and time zone in a list you can filter. Every change says in its row whether it
-  was saved, and a failure no longer empties the page.
-- Changes that restart Waze wait in one bar at the bottom: change several, then restart Waze once,
-  or undo them.
-- Hotspot and LTE changes are collected until you apply them, now or at the next start.
-- Search finds any setting by name or by what it does.
-- This device shows how long the last start took: ready for the car after about 8 seconds on a
-  Pi 4, and when Waze's map was ready, with the previous starts.
-- The page follows the car interface's day and night. Release notes open from Updates > What's new.
+- Seven sections instead of eleven: Overview, Waze, Display, Sound, Connections, Updates and This
+  device.
+- Overview shows at a glance whether the car, internet, GPS and Waze are working.
+- Bigger controls for the touchscreen, and a search across all settings.
+- Changes that need a Waze restart are collected so you restart once. Hotspot and LTE changes wait
+  until you apply them.
+- This device shows how long the last startup took.
 
-### A smaller turn card
+### Smaller turn card
 
-*Car mode, both looks, day and night.*
+*Car mode.*
 
-The card with the next turn took almost half the screen. It is now about a fifth shorter: a
-smaller turn sign and lanes row, and the street name gets room for its two lines. The exit and road
-signs Waze puts in front of a street name were drawn at the height of the letters, too small to
-read; they now keep their own shape and are a little taller than the text.
+The next-turn card is about a fifth shorter, and the exit and road signs before street names are
+readable now.
 
-### Map text size without a restart, sound on a Pi speaker
+### Map text size and Pi speaker
 
-*Settings > Waze > Map text size in Car mode, and Settings > Sound.*
+*Settings > Waze > Map text size, and Settings > Sound.*
 
-- Changing Map text size no longer makes Waze restart. Waze's map surface was replaced while the
-  picture of its last frame still pointed at a closed buffer, which cut Waze off the display.
-- Waze's voice on a speaker connected to the Pi: Settings > Sound > Where Waze's sound plays (Car,
-  Pi speaker, Both), with its own volume. A USB sound card or speaker is used when plugged in, else
-  the 3.5 mm jack; plugging in or out takes effect at once.
+- Changing the map text size no longer restarts Waze.
+- Waze's voice can play on a speaker plugged into the Pi (USB or the headphone jack), in the car,
+  or both, with its own volume.
 
-### Smaller fixes
+### Fixes
 
-*Things that were in the way.*
+*Smaller things.*
 
-- In the phone interface, the vehicle picker (Car info on the map) drew its car, motorcycle and
-  taxi pictures twice as large as on a phone: their names were missing, the blue
-  frame around the chosen vehicle had no top, and the description bubble sat far below it. Waze's
-  pictures are now drawn at their Android size everywhere, so the picker shows small pictures with
-  their names, as on a phone. The row of vehicles repeating to the sides is Waze's own: it scrolls
-  round endlessly, and the car's wide screen shows more of it than a phone does.
+- Phone mode: the vehicle picker drew its pictures twice too large and lost their names.
+- Long lists on narrow screens no longer start under the scroll arrows.
 
 ### Platform
 
 #### Added
 
-- `services/gates` (`teslalinux-gates.service`, loopback 8082 behind `/api/gates*`): PalGate's
-  cloud API as a linked device (our own implementation of the request token, checked against
-  published vectors), a stdlib QR encoder, per-gate auto-open from the GPS feed, an events long
-  poll; tests against a local mock of the API (`services/gates/test/`); `docs/GATES.md`. Needs
-  `python3-cryptography` (`py3-cryptography` on Alpine), now in the install package lists.
-- Bluetooth for the apps (`docs/BEACONS.md`): the Pi 4 keeps its controller (no `disable-bt`),
-  `bluez` is installed and `bluetooth.service` enabled, a saved rfkill soft block is lifted, and
-  `/etc/dbus-1/system.d/teslalinux-bluetooth.conf` allows the `tesla` user only BlueZ's discovery
-  calls. Measured on a Pi 4: hotspot and car page no later than without Bluetooth.
-- `tools/debian/atl-tests/bluetooth/`: BluetoothTest against a mock bluetoothd on a private bus
-  (`run.sh`, 80 checks), `run.sh --live` on a real adapter, and `eddystone-adv.sh`, which makes a
-  BlueZ host advertise Waze-format Eddystone UID and TLM frames.
-
-In ATL (the fork):
-
-- Bluetooth LE scanning as on Android, over BlueZ's D-Bus API (fork track bt): the adapter and
-  its state broadcasts, `BluetoothLeScanner` with filters, callback types, batching,
-  opportunistic scans and AOSP's error, permission and location rules, the legacy `startLeScan`,
-  remote devices from BlueZ; no Bluetooth at all without BlueZ or with `ATL_BLUETOOTH=off`.
-- OpenGL apps get the whole Android GL API: every `android.opengl.GLES10`-`GLES32` call and the
-  GL10/GL11 interface of GLSurfaceView renderers (AOSP's own bindings), with KHR_debug's message
-  callback and log. Apps can draw into a `SurfaceTexture` with a `Canvas` (`Surface.lockCanvas`),
-  also with `ATL_DIRECT_EGL`. The Android keystore makes RSA and EC key pairs with their
-  certificate, signs, decrypts, agrees ECDH keys and imports keys as Android does on a device
-  without secure hardware or attestation keys.
-- Android apps see the real audio outputs: the car, a USB sound card, the 3.5 mm jack, and are
-  told when one is plugged in or out (`AudioManager` devices from PipeWire's pulse server through
-  libpulse, with AOSP's device types, `AudioDeviceCallback`s and `AUDIO_BECOMING_NOISY`).
-- Drawing is closer to Android: every colour-filter blend mode (tints with screen, add, overlay,
-  ...), hairlines that stay one pixel wide when scaled, translucent fill-and-stroke shapes, rounded
-  and bevelled rectangle corners, and `Paint.getFillPath`. Apps that support right-to-left
-  languages now get mirrored layouts when their language is RTL (AOSP's layout direction
-  resolution, relative padding and alignment, and the RTL rules of `LinearLayout`,
-  `RelativeLayout`, `GridLayout` and `ExpandableListView`).
-- The app now sees the car's real connection: an LTE stick shows as cellular and metered, and
-  Wi-Fi or Ethernet as unmetered, with live updates when it changes (from NetworkManager and
-  ModemManager). Apps get exactly the permissions they ask for (the manifest's, by protection
-  level; `AppOpsManager` follows them). The Android keystore enforces how each key may be used.
-  Video and GL apps can stream into textures (`SurfaceTexture`), and frames with a presentation
-  time (`eglPresentationTimeANDROID`) are shown on time. Storage usage (`StorageStatsManager`) and
-  frame timing (`Choreographer` frame data) are now real values.
-- The car-app host passes the app's speedometer to the car page (`ATLCarSpeedometer`, the
-  channel's `speedometer` message, docs/UPSTREAM-NOTES.md). `tools/apps/waze-speedometer.py` makes
-  verified Waze versions' own reading class a subclass of it (a one-class override generated on
-  the device after checking the APK's class and its call site) and turns Waze's map speedometer
-  off through its own setting, kept and put back in the phone interface.
-- `ATLFrameRateLimiter`: a frame limiter for an app's own render loop that lets frames come at the
-  display's refresh rate for 5 s (`ATL_FRAME_BOOST_MS`) after ATL saw the content move (a location
-  fix of a moving device, a touch on the car-app host's map, a message from the car renderer, a
-  different car template), the app's own rate and boosts otherwise (`ATL_DEBUG_FRAME_RATE=1` logs
-  the rate in effect). `tools/apps/waze-map-pacing.py --mode auto` makes a verified Waze version's
-  frame limiter class (`com.waze.bq.a`) a one-class override extending it, after checking the
-  class's code instruction by instruction and every reference to it in the APK's dexes;
-  `TESLALINUX_MAP_PACING=auto|app|full` (auto when unset), `/api/appInterface` `mapPacing` and
-  `mapPacingSupport.modes`. The generated override jars keep their dex 4-byte aligned, so ART maps
-  it instead of extracting a copy.
-- Bitmap pixel access as Android (un-premultiplied colours, setPixels replaces, exact buffer
-  copies, the NDK bitmap API on the pixel memory) and GLUtils; Gouraud-shaded
-  drawVertices/drawBitmapMesh; the expanding clip ops for apps targeting API 27; the Matrix
-  operations that had no native code.
-- View accessibility delegates and event dispatch; the hover, generic motion, drag, system UI and
-  unhandled-key listeners; PathInterpolator(Path) and pathData; PropertyValuesHolder keyframes,
-  evaluators (ArgbEvaluator colour animations) and Path animations; getCurrentLocation as Android;
-  a requested RECORD_AUDIO is granted while the car page offers speech recognition.
-- libcore dexed with D8 (tools/debvm/patches/libcore-d8.py), so libcore's own lambdas
-  (Comparator.comparing, Collectors.groupingBy, ...) work.
-- The built-in on-screen keyboard is the window's IME inset (`WindowInsets.Type.ime()`, the
-  activity resized for `adjustResize`, `WindowInsetsAnimation` callbacks with AOSP's dispatch
-  modes); each window (a dialog, the activity) keeps its own focused view. Android's key character
-  maps (`KeyCharacterMap` from Generic.kcm and Virtual.kcm, AOSP's parser); EGL surface queries and
-  attributes as EGL 1.5 (`EGL_SWAP_BEHAVIOR`, buffer age, `eglGetError` per thread). The Java
-  natives that had no C code: `Process`, `Trace`, `SystemClock`, `SQLiteConnection` blob file
-  descriptors, `AssetManager`, `XmlBlock` and `StringBlock` (styled strings), `BitmapFactory`;
-  `tools/debian/atl-tests/natives/` checks them.
-- `tools/debian/pi-bench.py --procs NAME,... --gpu --per-second`: each process's CPU and V3D
-  share (DRM fdinfo) over the measured seconds, and the frames of every second.
-- One class path for every start: the launcher loads the speedometer and frame limiter overrides
-  whatever the interface and Map frame rate (they are part of the app's class loader context, so a
-  different list made ART compile Waze again), the frame rate is ATL's `ATL_FRAME_RATE` policy at run
-  time (`boost`, `display`, `app`), `waze-map-pacing.py` makes one small dex instead of its
-  whole-dex "full" copy, and `teslalinux-atl --compile` compiles with the same overrides (ATL's
-  `TlPrewarm`). `ClassLoaderContext ... mismatch` no longer appears after a switch. The dex holds
-  the limiter class and Waze's map loop class (`com.waze.map.de`, copied from the installed APK
-  when its text has the verified sha256; `--dump` prints it), whose 33 ms wait between frames is a
-  static field set from ATL's policy when the class loads: 17 ms under `display`, as the old "full"
-  copy had it, so Full keeps its frame rate (Pi 4, 1088x832, still map: 43.1 frames/s, 41.9 with
-  the limiter alone, 42.75 with the old copy).
-- `GET /api/appState` `start` (and `?wait=SEQ` long polls): the app's start for the car page's
-  overlay, from `host/teslalinux-app-log-watch.py` (the launcher's log filter, its state file in
-  `/run/tesla`) and the app's dex2oat in /proc, whose CPU time against the last complete compile of
-  the same file (`~/.cache/teslalinux/compile-times.json`) is its progress (dex2oat writes its
-  output only at its end). `pi-bench.py` reports main-thread CPU (`cpu_main`).
-- `tools/debian/carapp-probe.py`: the car-app channel from a shell: each template's class, screen
-  stack and every action and row with its icon's resource name and callback; click, back, any
-  message, and a socket that vanishes without a close frame.
-- The car-app channel's `appSettings` message (docs/UPSTREAM-NOTES.md): the page says when it
-  opens and closes Waze's settings, and on `pagehide`; the host pops abandoned settings back to the
-  map itself, also when the page's socket closes or stays silent (the host pings every page every
-  10 s and closes one silent for 30 s).
+- `services/gates`: a PalGate linked-device client behind `/api/gates*`, with auto-open from the
+  GPS feed. Tests in `services/gates/test/`, docs in `docs/GATES.md`. Needs `python3-cryptography`.
+- Bluetooth: `bluez` is installed and enabled, and the `tesla` user may only use BlueZ discovery
+  (`docs/BEACONS.md`). Tests in `tools/debian/atl-tests/bluetooth/`.
+- Mesa 26.3.1 with two V3D patches, built into `/opt/teslalinux/mesa` and used by the app
+  (`TESLALINUX_APP_MESA=system` uses Pi OS's instead). Checked by `tools/debian/v3d-mesa-test.c`.
+- ATL: Bluetooth LE scanning over BlueZ's D-Bus API.
+- ATL: the full GLES 1.0 to 3.2 Java API, `Surface.lockCanvas` on a `SurfaceTexture`, and keystore
+  RSA and EC keys.
+- ATL: real audio outputs from PipeWire (`AudioManager` devices and callbacks).
+- ATL: all colour-filter blend modes, hairlines, `Paint.getFillPath`, RTL layouts.
+- ATL: network state from NetworkManager and ModemManager (LTE is metered), manifest permissions,
+  `SurfaceTexture` streaming, presentation timestamps, `StorageStatsManager`, Choreographer frame
+  data.
+- ATL: bitmap pixel access as on Android, GLUtils, `drawVertices`/`drawBitmapMesh`, the missing
+  Matrix natives.
+- ATL: accessibility delegates, hover, drag and generic motion listeners, `PathInterpolator`,
+  keyframe animations.
+- ATL: IME insets and `adjustResize`, `KeyCharacterMap`, EGL 1.5 surface queries, and the Java
+  natives that had no C code (`tools/debian/atl-tests/natives/`).
+- libcore is dexed with D8, so its own lambdas work.
+- Car-app channel: the `speedometer` and `appSettings` messages (docs/UPSTREAM-NOTES.md);
+  `tools/apps/waze-speedometer.py`.
+- `ATLFrameRateLimiter` and `tools/apps/waze-map-pacing.py`, with the policy picked at run time by
+  `ATL_FRAME_RATE` (`boost`, `display`, `app`).
+- One class path for every mode, so ART doesn't recompile on a switch. `teslalinux-atl --compile`
+  compiles with the same overrides.
+- `GET /api/appState` `start`: startup state and compile progress for the startup screen.
+- `tools/debian/pi-bench.py --procs --gpu --per-second` and `tools/debian/carapp-probe.py`.
 
 #### Fixed
 
-- ATL's `AssetManager.destroy()` only logged "STUB", so no asset manager and no loaded APK was ever
-  freed: every Context has a manager of its own, and a parsed package one more. The native manager
-  is now deleted when its last reference goes or the object is finalized, and its APKs are released
-  when no manager sharing them is left (a reference-counted set owning the strong reference
-  `ApkAssets_load` hands out). Asset streams take a reference of their own and themes are deleted
-  when released, as in AOSP; without the first, the first asset stream closed would have freed its
-  manager. art_standalone's androidfw C API gains `AssetManager_delete` and `ApkAssets_release`
-  (`tools/debvm/patches/art_standalone-androidfw-free.py`), which also stops `AssetManager_setApkAssets`
-  leaking a list per call. Measured with 300 managers a round over framework-res.apk: the process
-  grew about 560 MB a round, now not at all. `tools/debian/atl-tests/assets/` checks it (11 checks:
-  streams, themes, sharing, memory).
-- Right-to-left text in ATL's text views is aligned as Android aligns it: a Hebrew place name with
-  the default alignment starts at the right, from the text's own direction (AOSP's text direction
-  heuristics; they were placeholders), also when the view's layout is left to right.
-- `Bitmap.copy` drew on the copy's blank snapshot, and a clip still pushed when a bitmap was read
-  lost what was drawn before it. A KHR_debug message callback's global reference leaked when its
-  GL context was destroyed. `new EditText(context)` skipped the theme's `editTextStyle`, so it was
-  not focusable.
-- ATL drew every bitmap resource (a PNG from an app's `drawable-<density>` directories) at its
-  pixel size, whatever density it was made for: on the car's 245 dpi display, Waze's
-  `drawable-xxhdpi` pictures came out twice as large as on Android. `Drawable.createFromResourceStream`,
-  `BitmapFactory.decodeResource` and `<bitmap>` drawables now scale from the resource's density to
-  the display's, as AOSP does (with a decode into `inBitmap` getting the scaled pixels), and
-  `ImageView.setImageResource` resolves the drawable as AOSP does. `tools/debian/atl-tests/graphics`
-  checks it (`run.sh`, 10 more checks).
+- `AssetManager.destroy()` was a stub, so asset managers and their APKs were never freed (about
+  560 MB per 300 managers). They are freed now. Tests in `tools/debian/atl-tests/assets/`.
+- RTL text alignment in text views.
+- `Bitmap.copy`, a KHR_debug callback leak, and `new EditText(context)` not being focusable.
+- Bitmap resources are scaled from their density directory, as on Android (the vehicle picker).
 
 ## [0.3.1] - 2026-11-20
 
