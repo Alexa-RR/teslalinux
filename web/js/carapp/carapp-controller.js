@@ -749,6 +749,20 @@
             this.appSettingsWaiting({ state: "unavailable", reason, depth: 0 });
           }
           break;
+        case "trip": {
+          // the app's trip (state): the page shows its destination's name beside the estimate's
+          // trip text (Waze's "1 stop": the estimate is then to the stop, the name the destination's)
+          const d = m.trip && m.trip.destinations && m.trip.destinations[0];
+          const name = d && d.name ? d.name : null;
+          if (this.destinationName !== name) {
+            this.destinationName = name;
+            if (this.renderer) {
+              this.renderer.destinationName = name;
+              this.draw();
+            }
+          }
+          break;
+        }
         case "navigation":
           this.navigating = m.active;
           if (this.renderer) {
@@ -1009,6 +1023,7 @@
         this.renderer.listen(this.speedoEl);
         this.renderer.setLook(this.lookStyle, this.isNight());
         this.renderer.navigating = !!this.navigating;
+        this.renderer.destinationName = this.destinationName || null;
         if (this.restrictions) this.renderer.setRestrictions(this.restrictions);
       }
       this.renderer.render(this.template);

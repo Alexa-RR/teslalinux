@@ -509,6 +509,10 @@
 .carapp-travel { align-items: center; }
 .carapp-travel-text { display: flex; flex-direction: column; gap: 2px; }
 .carapp-travel-text .carapp-row-text { display: block; white-space: nowrap; }
+/* the estimate's trip text (Waze: "1 stop": the time and distance are to the stop) */
+.carapp-trip-text { white-space: nowrap; font-weight: 600; opacity: .85; font-size: var(--body2); max-width: 14em; overflow: hidden; text-overflow: ellipsis; }
+.carapp-trip-dest { font-weight: 400; unicode-bidi: isolate; }
+.carapp-card.trip .carapp-trip-text { font-size: calc(var(--g) * 19); color: var(--gr-text-2); max-width: none; padding: 0 calc(var(--g) * 22) calc(var(--g) * 12); margin-top: calc(var(--g) * -6); }
 .carapp-end {
   margin-left: calc(-1 * var(--pad-2));
   width: calc(var(--touch-target) * 0.8);
@@ -534,7 +538,9 @@
 
 /* actions under a pane or a message: titled ones share the width, icon-only ones are round */
 .carapp-actions { align-items: center; }
-.carapp-actions .carapp-action.with-title { flex: 1 1 0; }
+/* (each keeps its whole label: two that do not fit side by side stack, as Waze's "New drive" and
+   "Add a stop" on a narrow card; a label wider than the card alone is ellipsized) */
+.carapp-actions .carapp-action.with-title { flex: 1 1 0; min-width: fit-content; max-width: 100%; }
 .carapp-actions .carapp-action.round {
   flex: none;
   padding: 0;

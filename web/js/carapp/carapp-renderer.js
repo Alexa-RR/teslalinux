@@ -1241,9 +1241,34 @@
         sub.appendChild(dd);
       }
       if (sub.textContent) col.appendChild(sub);
+      // the estimate's trip text (TravelEstimate.tripText, car API 7): the app's word on the trip,
+      // e.g. Waze's "1 stop" while a stop lies before the destination (the estimate is then to
+      // the stop)
+      const trip = this.tripText(est);
+      if (trip) col.appendChild(trip);
       row.appendChild(col);
       card.appendChild(row);
       return card;
+    }
+
+    /**
+     * The TravelEstimate's tripText as a line of its own, or null; with the trip's destination
+     * name after it (the trip message's, set by the controller) when the app names one: with
+     * Waze's "1 stop" the estimate above is the stop's, and this says where the drive ends.
+     */
+    tripText(est) {
+      if (!est || !est.tripText || !this.text(est.tripText).trim()) return null;
+      const el = document.createElement("div");
+      el.className = "carapp-trip-text";
+      this.setText(el, est.tripText);
+      const name = this.destinationName ? this.text(this.destinationName).trim() : "";
+      if (name) {
+        const to = document.createElement("span");
+        to.className = "carapp-trip-dest";
+        to.textContent = " • " + name;
+        el.appendChild(to);
+      }
+      return el;
     }
 
     /** the arrival time of a TravelEstimate at the destination's clock ("11:52"), or "" */
@@ -1289,6 +1314,8 @@
       }
       top.appendChild(rest);
       card.appendChild(top);
+      const trip = this.tripText(est);
+      if (trip) card.appendChild(trip);
       if (this.navigating) {
         const end = document.createElement("div");
         end.className = "carapp-trip-end carapp-clickable";
