@@ -15,6 +15,15 @@ version's.
 
 ## [Unreleased]
 
+### A tidier Connect Cloudflare
+
+*Settings > Grok.*
+
+- The Connect button is Cloudflare orange again and sits in its row like the other buttons. The
+  page's own button style had turned it grey.
+- The sign-in sheet shows the phone code only once the sign-in has started, next to what it is
+  waiting for, instead of an empty white box.
+
 ## [0.6.1] - 2026-11-24
 
 A friendlier installer: it shows it is working during the long steps.

@@ -64,20 +64,28 @@
    * and no Cloudflare fonts or other assets. The styles live here so the section needs no
    * stylesheet hook of its own.
    */
-  const CF_STYLE = ".grok-cf-btn{display:flex;align-items:center;justify-content:center;width:100%;min-height:80px;padding:0 28px;"
-    + "border:0;border-radius:6px;background:#e06d10;color:#fff;font:700 22px/1.2 inherit;letter-spacing:.01em;"
-    + "text-shadow:0 1px 1px rgba(0,0,0,.28);box-shadow:0 1px 2px rgba(0,0,0,.25);cursor:pointer;touch-action:manipulation}"
-    + ".grok-cf-btn:active:not(:disabled){background:#c85a0a;box-shadow:inset 0 2px 4px rgba(0,0,0,.25);transform:translateY(1px)}"
-    + ".grok-cf-btn:focus-visible{outline:3px solid #fbad41;outline-offset:3px}"
-    + ".grok-cf-btn:disabled{background:#9a9a9a;color:#f2f2f2;text-shadow:none;box-shadow:none;cursor:not-allowed;opacity:.7}"
-    + ".grok-cf-btn.is-busy{background:#c85a0a}";
+  // Every rule carries #page-settings too: the page's own "#page-settings button" rule (css/settings.css)
+  // is more specific than a class alone and drew this button as a plain grey one.
+  const CF = (sel) => "#page-settings " + sel + "," + sel;
+  const CF_STYLE = CF(".grok-cf-btn") + "{display:inline-flex;align-items:center;justify-content:center;gap:10px;"
+    + "min-height:56px;padding:0 24px;border:0;border-radius:6px;background:#e06d10;color:#fff;"
+    + "font:700 18px/1.2 inherit;letter-spacing:.01em;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.25);"
+    + "cursor:pointer;touch-action:manipulation}"
+    + CF(".grok-cf-btn--wide") + "{display:flex;width:100%;min-height:64px;font-size:20px}"
+    + CF(".grok-cf-btn:active:not(:disabled)") + "{background:#c85a0a;box-shadow:inset 0 2px 4px rgba(0,0,0,.25);transform:translateY(1px)}"
+    + CF(".grok-cf-btn:focus-visible") + "{outline:3px solid #fbad41;outline-offset:3px}"
+    + CF(".grok-cf-btn:disabled") + "{background:#b9b9b9;color:#fff;box-shadow:none;cursor:not-allowed}"
+    + CF(".grok-cf-btn.is-busy") + "{background:#c85a0a}"
+    + CF(".grok-cf-wait") + "{display:flex;gap:20px;align-items:center;margin-top:16px}"
+    + CF(".grok-cf-wait .gates-qr") + "{flex:0 0 auto;width:180px;height:180px}"
+    + CF(".grok-cf-wait[hidden]") + "{display:none}";
 
-  function cfButton(label, onClick) {
+  function cfButton(label, onClick, wide) {
     const doc = global.document;
     if (!doc.getElementById("grok-cf-style")) {
       doc.head.append(h("style", { id: "grok-cf-style" }, CF_STYLE));
     }
-    return h("button", { class: "grok-cf-btn", type: "button", onclick: onClick || null }, label);
+    return h("button", { class: "grok-cf-btn" + (wide ? " grok-cf-btn--wide" : ""), type: "button", onclick: onClick || null }, label);
   }
 
   /**
@@ -91,7 +99,9 @@
       autocomplete: "off", spellcheck: "false", autocapitalize: "off", autocorrect: "off" });
     const status = h("div", { class: "field-help", "aria-live": "polite" });
     const qr = h("div", { class: "gates-qr", "aria-label": "Sign-in link for a phone" });
-    const go = cfButton("Continue with Cloudflare");
+    // the code and the waiting note appear once the sign-in has started, side by side
+    const wait = h("div", { class: "grok-cf-wait", hidden: "" }, qr, status);
+    const go = cfButton("Continue with Cloudflare", null, true);
     const sheet = UI.openSheet({
       title: "Connect Cloudflare",
       body: [
@@ -99,7 +109,7 @@
           + "Access sign-in on your domain, and gives the permission back right away: it keeps only the tunnel's token."),
         h("div", { class: "field" }, h("label", { for: "grok-c-domain" }, "Domain (optional)"), domainIn,
           h("div", { class: "field-help" }, "Empty: the only domain the sign-in allows, or you pick one after.")),
-        go, qr, status,
+        go, wait,
       ],
       actions: [h("button", { class: "btn", type: "button", onclick: () => sheet.finish(null) }, "Close")],
     });
@@ -126,7 +136,9 @@
       try {
         const out = await API.post("grokOAuthStart", { domain: domainIn.value.trim() });
         global.open(out.url, "_blank", "noopener");
+        qr.hidden = !out.qr;
         if (out.qr) qr.innerHTML = out.qr;
+        wait.hidden = false;
         status.className = "field-help";
         status.textContent = "Cloudflare's page opened. On a phone on this car's Wi-Fi, scan the code instead. "
           + "The link works for " + Math.round(out.expiresIn / 60) + " minutes.";
@@ -134,6 +146,8 @@
         global.clearTimeout(timer);
         watch();
       } catch (e) {
+        qr.hidden = true;
+        wait.hidden = false;
         status.className = "field-help field-err";
         status.textContent = e.userMessage || String(e.message || e);
       }
@@ -236,9 +250,9 @@
 
     // the automatic setup
     const cn = st.connect || {};
-    const connect = UI.row({ id: "grok.connect", title: ready ? "Connect Cloudflare again" : "Connect Cloudflare", stack: true,
+    const connect = UI.row({ id: "grok.connect", title: ready ? "Connect Cloudflare again" : "Connect Cloudflare",
       detail: cn.available ? "Sign in once; the device does the rest" : "Not available in this build (no Cloudflare OAuth client id): use Advanced" });
-    const cbtn = cfButton("Continue with Cloudflare", () => connectSheet(this, token, st));
+    const cbtn = cfButton("Connect", () => connectSheet(this, token, st));
     cbtn.disabled = !cn.available;
     UI.setControl(connect, cbtn);
     if (cn.last && !cn.last.ok) UI.status(connect).err(cn.last.message);
