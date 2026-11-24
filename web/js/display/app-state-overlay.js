@@ -12,6 +12,13 @@
   const RETRY_MS = 3000;
   const FRAME_GRACE_MS = 1500; // the first picture logged, no display frame yet: hidden after this
   const PHASES = ["compiling", "starting", "restarting", "stopped"];
+  // The display itself says the app is drawing: the compositor sends a frame only when something on
+  // screen changed, so several frames in a short time while the device still says "starting" are the
+  // app's own screens (a fresh install's welcome and terms screens come before the map, whose first
+  // picture is what the device waits for, and an app may not log one at all). The panel then goes
+  // and stays away for that start.
+  const DRAWING_FRAMES = 3;
+  const DRAWING_WINDOW_MS = 4000;
 
   function fmtClock(s) {
     s = Math.max(0, Math.round(s));
@@ -34,6 +41,8 @@
       this.shownAt = 0;
       this.waitFrame = 0; // the time the app's first picture was learnt, while waiting for a display frame
       this.hideTimer = null;
+      this.frameTimes = []; // recent display frames, for "the app is drawing"
+      this.drawingFor = null; // the start (its "started" time) the display showed drawing
       this.el = document.createElement("div");
       this.el.id = "app-state-overlay";
       this.el.hidden = true;
@@ -79,11 +88,29 @@
 
     /** a display frame arrived (js/core/app.js): after the app's first picture, the panel goes */
     onDisplayFrame() {
-      if (this.waitFrame && Date.now() > this.waitFrame) this.hide();
+      const now = Date.now();
+      this.frameTimes.push(now);
+      while (this.frameTimes.length && now - this.frameTimes[0] > DRAWING_WINDOW_MS) this.frameTimes.shift();
+      if (this.waitFrame && now > this.waitFrame) this.hide();
+      else if (this.appIsDrawing(this.state)) {
+        this.drawingFor = this.state.started;
+        this.hide();
+      }
+    }
+
+    /** a start the device still calls "starting" whose app process runs while the display keeps changing */
+    appIsDrawing(st) {
+      return !!(st && st.phase === "starting" && st.steps && st.steps.process && st.started
+        && this.frameTimes.length >= DRAWING_FRAMES);
     }
 
     update(st) {
       this.state = st;
+      if (st.phase === "starting" && st.started && (st.started === this.drawingFor || this.appIsDrawing(st))) {
+        this.drawingFor = st.started;
+        this.hide();
+        return;
+      }
       if (PHASES.indexOf(st.phase) < 0) {
         // running (the app's first picture logged), or not known: hidden at the next display frame
         if (!this.el.hidden && !this.waitFrame) {

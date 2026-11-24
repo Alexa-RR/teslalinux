@@ -15,6 +15,14 @@ version's.
 
 ## [Unreleased]
 
+### "Starting Waze" no longer covers Waze
+
+*The car page, after a fresh install.*
+
+- A new Waze opens on its welcome and terms screens before any map, and the "Starting Waze" panel
+  waited for the map, so it covered those screens for good. The panel now also goes away when the
+  display shows that Waze is drawing, and stays away for that start.
+
 ## [0.6.4] - 2026-11-24
 
 A fresh install of 0.6.3 stopped halfway; this one completes.
