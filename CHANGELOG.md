@@ -15,6 +15,11 @@ version's.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
+Grok in the car can now drive Waze: start and end navigation, search places and read the trip.
+The car page is down to the map and Settings.
+
 ### Ask Grok to drive Waze
 
 *Settings > Grok. Off until you turn it on.*
@@ -1023,7 +1028,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.2.0...v0.3.0
