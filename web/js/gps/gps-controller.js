@@ -66,6 +66,19 @@
       try {
         const permissionStatus = await navigator.permissions.query({ name: "geolocation" });
 
+        // teslalinux: a permission given (or taken back) later, from the browser's site settings,
+        // takes effect without reloading the page
+        if (!this._watchingPermission) {
+          this._watchingPermission = true;
+          permissionStatus.addEventListener("change", () => {
+            if (permissionStatus.state === "granted") {
+              this._startLocationUpdates();
+            } else if (permissionStatus.state === "denied") {
+              this._stopLocationUpdates();
+            }
+          });
+        }
+
         if (permissionStatus.state === "granted") {
           this._startLocationUpdates();
           return;
@@ -76,10 +89,7 @@
             return;
           }
           this._hasRequestedPermission = true;
-          navigator.geolocation.getCurrentPosition(
-            () => this._startLocationUpdates(),
-            () => TAHtml.log("Location access denied."),
-          );
+          this._requestPermission();
           return;
         }
 
@@ -89,10 +99,32 @@
           return;
         }
         this._hasRequestedPermission = true;
-        navigator.geolocation.getCurrentPosition(
-          () => this._startLocationUpdates(),
-          () => TAHtml.log("Location access denied."),
-        );
+        this._requestPermission();
+      }
+    }
+
+    // teslalinux: upstream treated any failure of the first request as a refusal and never asked
+    // again. Only PERMISSION_DENIED is one: POSITION_UNAVAILABLE and TIMEOUT mean there is no fix yet
+    // (the car in a garage or a tunnel when the page opens), and the updates start anyway so the
+    // position arrives as soon as the car has one.
+    _requestPermission() {
+      navigator.geolocation.getCurrentPosition(
+        () => this._startLocationUpdates(),
+        (error) => {
+          if (error && error.code === 1) {
+            TAHtml.log("Location access denied.");
+            return;
+          }
+          TAHtml.log("No position yet (" + String(error && error.message) + "); updates start anyway.");
+          this._startLocationUpdates();
+        },
+      );
+    }
+
+    _stopLocationUpdates() {
+      if (this.gpsUpdateIntervalId !== null) {
+        global.clearInterval(this.gpsUpdateIntervalId);
+        this.gpsUpdateIntervalId = null;
       }
     }
 
