@@ -290,6 +290,9 @@ fonts (a FreeType face and a HarfBuzz font each) before Noto Sans Hebrew. With A
 | before | 17.0 / 27.8 / 62.1, 17.1 / 29.8 / 65.1 | 15, 15 | 1434, 1420 ms | 45.4, 45.2 |
 | after | 17.2 / 26.0 / 38.3, 17.2 / 26.6 / 37.5 | 0, 0 | 66, 53 ms | 51.7, 51.7 |
 
+With the tags Godot ranked a script's files by weight and took the Bold ones (Waze's labels ask
+for a bold weight), so ATL 4dc8b335 lists only the regular face in the script families: the
+labels look as before, and a run with it gave 0 frames over 100 ms (slowest 61 ms, p99 37.2).
 Back-and-forth panning over streets already shown never stalled; the USB Wi-Fi card, the encoder's
 key frames and the frame limiter played no part.
 

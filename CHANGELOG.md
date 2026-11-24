@@ -15,6 +15,13 @@ version's.
 
 ## [Unreleased]
 
+### Street names in their usual weight again
+
+*Car and phone map.*
+
+- Since 0.6.2, Hebrew and Arabic names on Waze's map were drawn in bold. They are back to the
+  regular letters they had before, and moving the map stays smooth.
+
 ## [0.6.2] - 2026-11-24
 
 The map no longer freezes while you move it, and a tidier Connect Cloudflare.
