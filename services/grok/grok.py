@@ -67,7 +67,8 @@ TOOL_WAIT_S = 90        # one tool at a time: Waze's car screens have one driver
 INSTRUCTIONS = ("Controls Waze, the navigation app on the driver's car screen. To drive somewhere, call "
                 "navigate_to with the destination, or search_places first and then navigate_to with the "
                 "resultId of the place the driver picks. trip_status says where the car is going and when it "
-                "arrives. The driver is driving: keep answers short.")
+                "arrives. report sends a Waze report (police, a crash, a hazard, traffic, ...) at the car's position when "
+                "the driver asks for one. The driver is driving: keep answers short.")
 
 
 def log(msg):
@@ -228,6 +229,25 @@ TOOLS = [
         {"type": "object", "properties": {}, "additionalProperties": False},
         _tool(lambda a: waze.stop_navigation(a), "stop_navigation"),
         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
+    mcp.Tool(
+        "report", "Report to Waze",
+        "Send a Waze report at the car's position (Car mode): category (Traffic, Police, Hazard, Crash, Blocked lane, "
+        "Bad weather, Animal, Map Issue) and kind (Standstill, Mobile camera, Pothole, Left lane, ...). Other drivers "
+        "see it: report only what the driver asks for. report_types lists all.",
+        {"type": "object", "properties": {
+            "category": {"type": "string", "description": "A category title or id from report_types (e.g. 'Police', 'hazard')."},
+            "kind": {"type": "string", "description": "The kind's title or id (e.g. 'Mobile camera', 'hazard_pothole'). "
+                                                      "May be left out when the kind is the category itself (Police, Crash, Animal)."},
+            "option": {"type": "string", "description": "The answer when Waze asks one more question (for example ahead or behind)."},
+        }, "required": ["category"], "additionalProperties": False},
+        _tool(lambda a: waze.report(a), "report"),
+        {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}),
+    mcp.Tool(
+        "report_types", "Waze's report types",
+        "The report categories and kinds Waze's car screen offers now, with ids for report (Car mode only).",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        _tool(lambda a: waze.report_types(a), "report_types"),
+        {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
 ]
 SERVER = mcp.Server("teslalinux-waze", VERSION, TOOLS, INSTRUCTIONS)
 

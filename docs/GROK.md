@@ -1,7 +1,8 @@
 # Grok remote control
 
 Grok, the assistant in the car, can drive Waze on the device: start navigation, search places with
-Waze's own search, say when you will arrive and what the next turn is, and end the drive. It does
+Waze's own search, say when you will arrive and what the next turn is, end the drive, and send Waze
+reports (police, a crash, a hazard, traffic, ...) when you ask for one. It does
 this through a remote MCP server (Model Context Protocol) that runs on the device and is reached
 through a Cloudflare Tunnel on **your own domain**, behind Cloudflare Access. Nothing of the
 teslalinux project is in the path, and the device is not reachable from the internet until you
@@ -26,12 +27,40 @@ Grok (grok.com connector) --HTTPS--> mcp.<your-domain>   Cloudflare Access: you 
 | `search_places` (Waze's own search, around the car) | yes: name, address, distance and a `resultId` for `navigate_to` | no |
 | `trip_status` (destination, arrival time, distance and time left, next turn) | yes: what Waze reports to the car | no |
 | `stop_navigation` | yes | no: Waze offers other apps no way to end a drive |
+| `report` (a Waze report at the car's position: category and kind) | yes: through Waze's own Report button and screens | no: Waze's report screens are not reachable from outside the app |
+| `report_types` (the categories and kinds Waze offers now) | yes | no |
 
 A tool that cannot do its job says why, in plain words, so Grok can tell you. Searching works on
 Waze's search screens out of sight: the car screen keeps its panels (the turn card holds still for
 the few seconds it takes), but Waze's map may move to the results and back. Waze's car search
 looks around the car's position only and does not give coordinates. Every request is logged on
 the device (Settings > Grok, "What Grok asked for").
+
+### Reports
+
+`report` files a report the way the driver would on Waze's car screen: it taps Waze's map
+**Report** button, then the category, then the kind, all out of sight like a search. Waze sends the
+report at the car's position and answers with its own notice. **Thanks!** shows on the car screen
+too, and the tool returns it. A failure comes back as Waze's own error.
+
+- The categories and kinds are read from Waze's screens (`report_types`), never from a fixed list.
+  With Waze 5.27 they are Traffic (Heavy, Standstill), Police (Police, Mobile camera, Other side),
+  Hazard (Car on shoulder, Construction, Object, Pothole, Broken traffic light), Crash (Crash,
+  Pile-up, Other side), Blocked lane (Left, Right, Center lane), Bad weather (Icy road, Fog, Flood,
+  Unplowed road, Slippery road), Animal (Animal, In lane, On shoulder), Map Issue (General map
+  issue, Wrong turn, Wrong address, Wrong route, Missing roundabout, Missing road), and, while
+  driving, Closure. Waze's Debug entry (it sends Waze's logs) is not offered.
+- Each has an id from Waze's icon, the same in every language (`police_mobile_camera`,
+  `hazard_pothole`); titles work too. The kind can be left out where it is the category itself
+  (Police, Crash, Animal).
+- When Waze asks one more question, its confirmation is taken from the request itself (a closure:
+  "Report a closure on your route", Report). A question with several answers needs `option`;
+  without it nothing is sent and the question goes back to Grok.
+- Waze offers its Report button on the map while the map follows the car. If the map was moved,
+  the tool taps Waze's own center-on-me first. Over another of Waze's screens or questions (such
+  as "Still driving to ...?") there is no Report button, and the tool says so.
+- Reports go to Waze's live service and other drivers see them, so Grok is told to report only what
+  the driver asks for.
 
 Not offered to Grok: PalGate gates (`docs/GATES.md`). They could become a separate opt-in later.
 
@@ -93,7 +122,7 @@ Not offered to Grok: PalGate gates (`docs/GATES.md`). They could become a separa
 1. On grok.com: **Connectors** (grok.com/connectors) > **New Connector** > **Custom**.
 2. URL: `https://mcp.<your-domain>/mcp` (Settings > Grok shows it as "Connector address").
 3. Grok opens Cloudflare's sign-in: sign in with your Cloudflare account or the one-time PIN sent
-   to your email. Grok then lists the four tools.
+   to your email. Grok then lists the six tools.
 4. Use the same Grok account in the car, and ask, for example, "Navigate to the nearest gas
    station" or "When do we arrive?".
 
@@ -137,7 +166,7 @@ to sign in again after two weeks.
 - The tunnel token lives in `/etc/teslalinux/grok/tunnel.env` (root, 0600); systemd hands it to
   cloudflared, which runs as a user of its own. The API token of the automatic setup is never
   written anywhere.
-- Grok can only use the four tools above.
+- Grok can only use the six tools above.
 
 ## On the device
 

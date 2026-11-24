@@ -58,14 +58,50 @@ class FakeCarHost:
         self.n = 0
         self.refuse_navigate = None
         self.base_len = 1
+        self.tracking = True
+        self.reports = []
+        self.kinds = []
         self.reset()
 
     # the app's screens ---------------------------------------------------------------
 
     def reset(self):
         self.navigating, self.trip = False, None
-        self.stack = [self._screen("MapWithContentTemplate", {"actionStrip": {"$": "ActionStrip", "actions": [
-            action(23, "saved_outline_24px"), action(24, "icon_outline_search_24px"), action(25, "settings_outline_24px")]}})]
+        self.stack = [self._map()]
+
+    def _map(self):
+        # Waze's map strip: its Report button while the map follows the car, else center-on-me
+        strip = [action(26, "icon_report_button")] if self.tracking else [action(27, "ic_icon_recenter_button")]
+        return self._screen("MapWithContentTemplate", {"actionStrip": {"$": "ActionStrip", "actions": [
+            action(23, "saved_outline_24px"), action(24, "icon_outline_search_24px"), action(25, "settings_outline_24px")]},
+            "mapController": {"$": "MapController", "mapActionStrip": {"$": "ActionStrip", "actions": strip}}})
+
+    # Waze's report menu (the shapes the VM showed with Waze 5.27: Closure, offered while driving,
+    # is a confirmation screen of its own, Report (primary) or Cancel; "Object" here stands for a
+    # kind that asks one more question without a primary answer; "Fail" for a report Waze could not
+    # send)
+    REPORTS = [("Traffic", "icon_report_traffic_vector", [("Heavy", "car_report_menu_traffic_heavy"), ("Standstill", "car_report_menu_traffic_standstill")]),
+               ("Police", "icon_report_police_vector", [("Police", "car_report_menu_police"), ("Mobile camera", "car_report_menu_police_mobile_camera")]),
+               ("Hazard", "icon_report_hazard_vector", [("Object", "car_report_menu_hazard_object"), ("Pothole", "car_report_menu_hazard_pothole")]),
+               ("Closure", "icon_report_closure_vector", None),
+               ("Fail", "icon_report_fail_vector", [("Fail", "car_report_menu_fail")]),
+               ("Debug", "icon_report_debug", [("Send logs", "car_report_menu_debug_logs")])]
+
+    def _grid(self, title, items, base_cb):
+        return {"contentTemplate": {"$": "GridTemplate", "header": {"$": "Header", "title": title, "endHeaderActions": [action(299, "ic_icon_outline_close_88px")]},
+                                    "singleList": {"$": "ItemList", "items": [
+                                        {"$": "GridItem", "title": t, "image": {"$": "CarIcon", "icon": {"$": "IconCompat", "resName": r, "type": 2}},
+                                         "onClickDelegate": {"$": "OnClickDelegateImpl", "$cb": base_cb + i}} for i, (t, r) in enumerate(items)]}}}
+
+    def _alert(self, ok, title):
+        self.state({"type": "alert", "alert": {"$": "Alert", "alertId": 7, "title": title, "durationMillis": 5000,
+                                               "icon": {"$": "CarIcon", "icon": {"$": "IconCompat", "resName": "car_lib_icon_outline_checkmark_with_bg_36px" if ok else "icon_report_error", "type": 2}}}})
+
+    def _reported(self, name):
+        self.reports.append(name)
+        self.stack = self.stack[:1]
+        self.publish()
+        self._alert(name != "Fail", "Reported" if name != "Fail" else "Couldn't send your report")
 
     def _screen(self, kind, model):
         self.n += 1
@@ -225,6 +261,36 @@ class FakeCarHost:
             if len(self.stack) > 1:
                 self.stack.pop()
                 self.publish()
+        elif t == "click" and top[1] == "MapWithContentTemplate" and m["cb"] == 27 and len(self.stack) == 1:
+            self.tracking = True
+            self.stack = [self._map()]
+            self.publish()
+        elif t == "click" and top[1] == "MapWithContentTemplate" and m["cb"] == 26 and len(self.stack) == 1:
+            self.push("MapWithContentTemplate", self._grid("What do you see?", [(c, r) for c, r, _ in self.REPORTS], 400))
+        elif t == "click" and len(self.stack) == 2 and 400 <= m["cb"] < 400 + len(self.REPORTS):
+            c, r, kinds = self.REPORTS[m["cb"] - 400]
+            if kinds is None:
+                report = dict(action(611, title="Report"), flags=5)
+                self.push("MapWithContentTemplate", {"contentTemplate": {"$": "MessageTemplate", "title": "Closure",
+                                                                         "message": "Report a closure on your route",
+                                                                         "actions": [report, action(612, title="Cancel")]}})
+            else:
+                self.kinds = kinds
+                self.push("MapWithContentTemplate", self._grid(c, kinds, 500))
+        elif t == "click" and len(self.stack) == 3 and 500 <= m["cb"] < 500 + len(self.kinds):
+            name = self.kinds[m["cb"] - 500][0]
+            if name == "Object":
+                self.push("MessageTemplate", {"title": "Object", "message": "Where is it?",
+                                              "actions": [action(601, title="In lane"), action(602, title="On shoulder")]})
+            else:
+                self._reported(name)
+        elif t == "click" and top[1] == "MessageTemplate" and m["cb"] in (601, 602):
+            self._reported("Object " + ("in lane" if m["cb"] == 601 else "on shoulder"))
+        elif t == "click" and len(self.stack) == 3 and m["cb"] == 611:
+            self._reported("Closure")
+        elif t == "click" and len(self.stack) == 3 and m["cb"] == 612:
+            self.stack = self.stack[:1]
+            self.publish()
         elif t == "click":
             cb = m["cb"]
             if top[1] in ("MapWithContentTemplate", "NavigationTemplate") and cb in (24, 90):

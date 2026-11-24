@@ -38,7 +38,8 @@
   };
   TAHtml.TLGrok = API;
 
-  const TOOL_NAMES = { navigate_to: "Navigate", search_places: "Search", trip_status: "Trip status", stop_navigation: "Stop" };
+  const TOOL_NAMES = { navigate_to: "Navigate", search_places: "Search", trip_status: "Trip status", stop_navigation: "Stop",
+    report: "Report", report_types: "Report types" };
 
   function setUpAlready(s) {
     return Boolean(s.tokenSet && s.teamDomain && s.aud);
@@ -46,6 +47,7 @@
 
   function argsText(a) {
     if (!a || typeof a !== "object") return "";
+    if (a.category) return [a.category, a.kind, a.option].filter(Boolean).join(" · ");
     if (a.destination) return a.destination;
     if (a.query) return a.query;
     if (a.resultId) return "a search result";

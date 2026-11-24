@@ -264,7 +264,7 @@ class TestProtocol(unittest.TestCase):
     def test_tools_list(self):
         code, r = rpc("tools/list", version="2025-11-25")
         names = [t["name"] for t in r["result"]["tools"]]
-        self.assertEqual(names, ["navigate_to", "search_places", "trip_status", "stop_navigation"])
+        self.assertEqual(names, ["navigate_to", "search_places", "trip_status", "stop_navigation", "report", "report_types"])
         for t in r["result"]["tools"]:
             self.assertTrue(t["description"] and len(t["description"]) < 320)
             self.assertEqual(t["inputSchema"]["type"], "object")
@@ -429,6 +429,107 @@ class TestWazeCar(unittest.TestCase):
         self.assertEqual(st["endpoint"], "https://mcp.example.com/mcp")
         path = os.path.join(TMP, "state", "actions.jsonl")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+
+class TestReports(unittest.TestCase):
+    def setUp(self):
+        configure()
+        set_mode("car")
+        CAR.tracking = True
+        CAR.reset()
+        CAR.reports.clear()
+        waze._types_cache.update(t=0.0, types=None)
+
+    def test_types_read_from_waze(self):
+        text, st, err = call("report_types", {})
+        self.assertFalse(err, text)
+        ids = [c["id"] for c in st["categories"]]
+        self.assertEqual(ids, ["traffic", "police", "hazard", "closure", "fail"], "Waze's debug entry is not a report")
+        self.assertEqual(st["categories"][1]["kinds"], [{"id": "police", "title": "Police"}, {"id": "police_mobile_camera", "title": "Mobile camera"}])
+        self.assertIn("Mobile camera (police_mobile_camera)", text)
+        self.assertEqual(st["categories"][3]["asks"], {"question": "Closure Report a closure on your route", "answers": ["Report", "Cancel"]})
+        self.assertEqual(len(CAR.stack), 1, "back on the map")
+        self.assertEqual(CAR.reports, [])
+
+    def test_report_out_of_sight(self):
+        watcher = waze.WebSocket(CAR.addr)
+        time.sleep(0.2)
+        page = CAR.clients[-1]
+        CAR.seen_by[id(page)] = []
+        text, st, err = call("report", {"category": "Police", "kind": "Mobile camera"})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.reports, ["Mobile camera"])
+        self.assertTrue(st["reported"])
+        self.assertEqual((st["category"], st["kind"], st["waze"]), ("police", "police_mobile_camera", "Reported"))
+        self.assertTrue(all(k == "MapWithContentTemplate" for k in CAR.seen_by[id(page)]), CAR.seen_by[id(page)])
+        self.assertNotIn("GridTemplate", json.dumps(CAR.seen_by[id(page)]))
+        watcher.close()
+        # by id, and the kind left out where it is the category itself
+        text, st, err = call("report", {"category": "hazard", "kind": "hazard_pothole"})
+        self.assertFalse(err, text)
+        text, st, err = call("report", {"category": "police"})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.reports, ["Mobile camera", "Pothole", "Police"])
+        _, r = rpc("tools/list", version="2025-06-18")
+        self.assertIn("report", [t["name"] for t in r["result"]["tools"]])
+
+    def test_refusals_and_questions(self):
+        text, st, err = call("report", {"category": "Traffic"})
+        self.assertTrue(err)
+        self.assertIn("Heavy (traffic_heavy)", text)
+        text, st, err = call("report", {"category": "UFO", "kind": "x"})
+        self.assertTrue(err)
+        self.assertIn("no report category 'UFO'", text)
+        text, st, err = call("report", {"category": "Hazard", "kind": "Volcano"})
+        self.assertTrue(err)
+        self.assertIn("Pothole (hazard_pothole)", text)
+        # a kind that asks one more question with no primary answer: nothing is sent until it is answered
+        text, st, err = call("report", {"category": "Hazard", "kind": "Object"})
+        self.assertTrue(err)
+        self.assertIn("Where is it?", text)
+        self.assertIn("In lane, On shoulder", text)
+        self.assertEqual(CAR.reports, [])
+        self.assertEqual(len(CAR.stack), 1)
+        text, st, err = call("report", {"category": "Hazard", "kind": "Object", "option": "on shoulder"})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.reports, ["Object on shoulder"])
+        self.assertEqual(st["title"], "Hazard: Object (On shoulder)")
+        # a category that is a confirmation of its own (a closure while driving): the request confirms it
+        text, st, err = call("report", {"category": "closure"})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.reports[-1], "Closure")
+        self.assertEqual(st["title"], "Closure: Closure")
+        text, st, err = call("report", {"category": "Closure", "option": "Cancel"})
+        self.assertEqual(CAR.reports[-1], "Closure", "cancelled: nothing more sent")
+        self.assertIsNone(st["reported"])
+        # Waze's own failure
+        text, st, err = call("report", {"category": "Fail"})
+        self.assertTrue(err)
+        self.assertIn("Couldn't send your report", text)
+        self.assertEqual(len(CAR.stack), 1)
+        # the debug entry is not offered
+        text, st, err = call("report", {"category": "Debug", "kind": "Send logs"})
+        self.assertTrue(err)
+
+    def test_center_on_me_first(self):
+        CAR.tracking = False
+        CAR.reset()
+        text, st, err = call("report", {"category": "Police"})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.reports, ["Police"])
+        self.assertTrue(CAR.tracking, "Waze's center-on-me was tapped first")
+
+    def test_phone_mode_and_log(self):
+        set_mode("phone")
+        text, st, err = call("report", {"category": "Police"})
+        self.assertTrue(err)
+        self.assertIn("Car mode", text)
+        set_mode("car")
+        call("report", {"category": "Police", "kind": "police"})
+        with urllib.request.urlopen(ADMIN_URL + "/api/grok", timeout=5) as r:
+            last = json.loads(r.read())["actions"][0]
+        self.assertEqual((last["tool"], last["args"], last["ok"]), ("report", {"category": "Police", "kind": "police"}, True))
+        self.assertIn("Reported Police: Police", last["result"])
 
 
 class TestWazePhone(unittest.TestCase):

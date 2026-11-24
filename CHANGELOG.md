@@ -15,6 +15,21 @@ version's.
 
 ## [Unreleased]
 
+### Ask Grok to report to Waze
+
+*Car mode. Say "report police" or "there's a pothole".*
+
+- Grok can send Waze reports: police, crashes, hazards, traffic, blocked lanes, bad weather,
+  animals, map issues, and closures while driving.
+- It uses Waze's own Report screens out of sight. Waze's "Thanks!" shows on the car screen.
+- The kinds are the ones Waze offers right now. Each report shows in Settings > Grok.
+
+### Platform
+
+#### Fixed
+
+- The app's own Mesa is used only where a V3D GPU exists. In the Debian VM the car map was blank.
+
 ## [0.5.0] - 2026-11-24
 
 Grok in the car can now drive Waze: start and end navigation, search places and read the trip.

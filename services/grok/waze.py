@@ -184,6 +184,9 @@ class CarSession:
         self.trip = None
         self.template = None
         self.seen_trip = False
+        # the app's alerts (IAppHost.showAlert) and toasts that arrived while connected
+        self.alerts = []
+        self.toasts = []
         self._id = 0
         try:
             self._drain(STATE_QUIET_S, STATE_MAX_S)
@@ -207,6 +210,10 @@ class CarSession:
             self.seen_trip = True
         elif t == "template":
             self.template = m.get("template")
+        elif t == "alert" and isinstance(m.get("alert"), dict):
+            self.alerts.append(m["alert"])
+        elif t == "toast" and isinstance(m.get("text"), str):
+            self.toasts.append(m["text"])
         return m
 
     def _drain(self, quiet, most):
@@ -695,6 +702,241 @@ def navigate_result(rid, carapp=None, wait_s=START_WAIT_S):
     raise WazeError("Waze did not start driving to %s." % name)
 
 
+# ------------------------------------------------------------------ Waze's car reports
+#
+# Waze's car interface reports through its map's Report button (resource icon_report_button, in the
+# map action strip while the map follows the car): a grid of categories ("What do you see?"), then a
+# grid of the category's kinds; tapping a kind sends the report at the position the car had when the
+# Report button was tapped, and Waze shows an alert: a checkmark (car_lib_icon_outline_checkmark_
+# with_bg_36px) when it was reported, icon_report_error when it failed. A kind can ask one more
+# question (a closure: ahead or behind), answered with `option`. The categories and kinds are read
+# from Waze's screens each time (they change with Waze's version, region and state); their ids are
+# the icons' resource names (the same in every language), shortened.
+
+REPORT_ICON = re.compile(r"(^|_)report_button$|^icon_report_button")
+RECENTER_ICON = re.compile(r"recenter")
+REPORTED_ICON = "car_lib_icon_outline_checkmark_with_bg_36px"
+REPORT_ERROR_ICON = "icon_report_error"
+# Waze's diagnostics entry in the same grid (it sends Waze's logs, not a road report)
+NOT_A_REPORT = {"icon_report_debug"}
+REPORT_RESULT_S = 12.0
+TYPES_CACHE_S = 1800
+_types_cache = {"t": 0.0, "types": None}
+
+
+def report_id(res_name, title):
+    if res_name:
+        s = re.sub(r"^(icon_report_|car_report_menu_)", "", res_name)
+        return re.sub(r"(_vector(_with_lane)?)$", "", s)
+    return re.sub(r"[^a-z0-9]+", "_", (title or "").lower()).strip("_")
+
+
+def grid_items(model):
+    """The items of a grid screen (a GridTemplate, alone or as a MapWithContentTemplate's content):
+    [{title, id, res, cb}]."""
+    out = []
+    for d in walk(model):
+        if d.get("$") != "GridItem":
+            continue
+        res = ((((d.get("image") or {}).get("icon")) or {}).get("resName"))
+        title = plain(text_of(d.get("title")))
+        out.append({"title": title, "id": report_id(res, title), "res": res, "cb": cb_of(d)})
+    return out
+
+
+def is_report_grid(model):
+    items = grid_items(model)
+    return bool(items) and all((i["res"] or "").startswith(("icon_report_", "car_report_menu_")) for i in items)
+
+
+def pick(items, want, what):
+    """The item whose id or title is `want` (any case, spaces or underscores alike)."""
+    norm = lambda s: re.sub(r"[\s_-]+", " ", (s or "").strip().lower())
+    w = norm(want)
+    for i in items:
+        if w and (norm(i["id"]) == w or norm(i["title"]) == w):
+            return i
+    raise WazeError("Waze offers no %s %r now. It offers: %s." % (what, want, ", ".join("%s (%s)" % (i["title"], i["id"]) for i in items)))
+
+
+class HeldReports(HeldSearch):
+    """Waze's report screens worked out of the driver's sight, as HeldSearch does for search."""
+
+    def open_menu(self):
+        s = self.s
+        acts = lambda: [a for a in walk(s.inner()) if a.get("$") == "Action" and REPORT_ICON.search(icon_name(a) or "")]
+        if not acts():
+            # Waze shows its Report button only while its map follows the car; its own
+            # center-on-me button brings that back, as the driver would tap it
+            rc = [a for a in walk(s.inner()) if a.get("$") == "Action" and RECENTER_ICON.search(icon_name(a) or "")]
+            if rc:
+                t0 = s.template
+                s.click(cb_of(rc[0]))
+                s.wait(lambda x: x.template is not t0 and bool(acts()), 5)
+        if not acts():
+            raise WazeError("Waze's car screen offers no Report button now (Waze shows it on its map while the map "
+                            "follows the car, not over another screen or question).")
+        s.click(cb_of(acts()[0]))
+        s.wait_template(is_report_grid, 8, "its report menu")
+        s.settle(0.6, 3.0)
+        self.menu_stack = s.stack()
+        return [i for i in grid_items(s.inner()) if i["res"] not in NOT_A_REPORT]
+
+    def open_category(self, item):
+        """The category's kinds (a grid), or None when Waze answers the tap with a question of its own
+        (a closure while driving: "Report a closure on your route", Report or Cancel)."""
+        s = self.s
+        t0 = s.template
+        s.click(item["cb"])
+        s.wait_template(lambda m: s.template is not t0 and len(s.stack()) > len(self.menu_stack),
+                        8, "the kinds of %s" % item["title"])
+        s.settle(0.6, 3.0)
+        return grid_items(s.inner()) if is_report_grid(s.inner()) else None
+
+    def back_to_menu(self):
+        if not self.s.back_to(self.menu_stack, 8.0):
+            raise WazeError("Waze did not go back to its report menu.")
+        self.s.settle(0.5, 2.0)
+
+
+def report_types(args=None, mode=None, carapp=None, fresh=False):
+    """Waze's report categories and their kinds, as its car screens offer them now."""
+    if (mode or interface()) != "car":
+        raise WazeError("Reports need Car mode (Settings > Waze interface: Car). In Phone mode Waze's report "
+                        "screens are not reachable from outside the app.")
+    now = time.monotonic()
+    if not fresh and _types_cache["types"] is not None and now - _types_cache["t"] < TYPES_CACHE_S:
+        types = _types_cache["types"]
+    else:
+        h = HeldReports(carapp)
+        try:
+            types = []
+            order = [c["id"] for c in h.open_menu()]
+            for cid in order:
+                # the menu comes back with new callbacks after each back: read it again
+                cats = {c["id"]: c for c in grid_items(h.s.inner()) if c["res"] not in NOT_A_REPORT}
+                if cid not in cats:
+                    raise WazeError("Waze left its report menu.")
+                kinds = h.open_category(cats[cid])
+                entry = {"id": cid, "title": cats[cid]["title"], "kinds": [{"id": k["id"], "title": k["title"]} for k in kinds or []]}
+                if kinds is None:
+                    q, buttons = question_of(h.s.inner())
+                    entry["asks"] = {"question": q, "answers": [b["title"] for b in buttons]}
+                types.append(entry)
+                h.back_to_menu()
+        finally:
+            h.close()
+        _types_cache.update(t=time.monotonic(), types=types)
+    lines = ["%s (%s): %s" % (c["title"], c["id"], ", ".join("%s (%s)" % (k["title"], k["id"]) for k in c["kinds"])
+                              if c["kinds"] else "no kinds; Waze asks: %s (%s)" % (c["asks"]["question"], ", ".join(c["asks"]["answers"])))
+             for c in types]
+    return "Waze's report types (category: kinds; ids in brackets):\n" + "\n".join(lines), {"categories": types}
+
+
+def report(args, mode=None, carapp=None):
+    """Files a report through Waze's car report screens; Waze's own answer says whether it took it."""
+    category, kind, option = args.get("category"), args.get("kind"), args.get("option")
+    for name, v in (("category", category), ("kind", kind), ("option", option)):
+        if v is not None and (not isinstance(v, str) or len(v) > 80):
+            raise WazeError("%s must be a short text (a title or an id from report_types)" % name)
+    if not category or not category.strip():
+        raise WazeError("give the category (for example Police, Crash, Hazard, Traffic; report_types lists them)")
+    if (mode or interface()) != "car":
+        raise WazeError("Reports need Car mode (Settings > Waze interface: Car). In Phone mode Waze's report "
+                        "screens are not reachable from outside the app.")
+    h = HeldReports(carapp)
+    s = h.s
+    answered = None
+    try:
+        cat = pick(h.open_menu(), category, "report category")
+        before = len(s.alerts)
+        verdict = lambda x: [a for a in x.alerts[before:] if alert_icon(a) in (REPORTED_ICON, REPORT_ERROR_ICON)]
+        kinds = h.open_category(cat)
+        if kinds is None:
+            # the category is the report itself, and Waze asks to confirm it (a closure)
+            if kind and kind.strip():
+                pick([cat], kind, "kind of %s" % cat["title"])  # only the category itself fits
+            k = {"id": cat["id"], "title": cat["title"]}
+            answered = answer(s, option, cat["title"])
+            s.wait(lambda x: bool(verdict(x)), REPORT_RESULT_S)
+        else:
+            if kind and kind.strip():
+                k = pick(kinds, kind, "kind of %s" % cat["title"])
+            else:
+                same = [x for x in kinds if x["id"] == cat["id"] or (x["title"] or "").lower() == (cat["title"] or "").lower()]
+                if len(kinds) == 1:
+                    k = kinds[0]
+                elif same:
+                    k = same[0]
+                else:
+                    raise WazeError("Say which kind of %s: %s." % (cat["title"], ", ".join("%s (%s)" % (x["title"], x["id"]) for x in kinds)))
+            t0 = s.template
+            s.click(k["cb"])
+            # Waze answers with its alert (after leaving its report screens), or asks one more
+            # question on a screen of its own above the map first
+            asks = lambda x: x.template is not t0 and not is_report_grid(x.inner()) and depth(x.stack(), h.base) > 0
+            s.wait(lambda x: bool(verdict(x)) or asks(x), REPORT_RESULT_S)
+            if not verdict(s) and asks(s):
+                s.settle(0.5, 2.0)
+                answered = answer(s, option, k["title"])
+                s.wait(lambda x: bool(verdict(x)), REPORT_RESULT_S)
+        got = verdict(s)
+    finally:
+        h.close()
+    what = "%s: %s" % (cat["title"], k["title"]) + ((" (%s)" % answered) if answered and answered != "confirmed" else "")
+    st = {"category": cat["id"], "kind": k["id"], "title": what}
+    if not got:
+        st["reported"] = None
+        return ("Sent %s to Waze, but Waze did not confirm it within %d s." % (what, REPORT_RESULT_S)), st
+    a = got[0]
+    st["reported"] = alert_icon(a) == REPORTED_ICON
+    st["waze"] = plain(text_of(a.get("title")))
+    if not st["reported"]:
+        raise WazeError("Waze could not send the report (%s): %s" % (what, st["waze"] or "it reported an error"))
+    return "Reported %s. Waze: %s" % (what, st["waze"] or "reported"), st
+
+
+def question_of(model):
+    """A question screen of Waze's (a MessageTemplate or a pane): its text and its titled buttons
+    [{title, id, cb, primary}]."""
+    texts = []
+    for d in walk(model):
+        if d.get("$") in ("Header", "Row", "MessageTemplate", "LongMessageTemplate", "Pane"):
+            for x in (plain(text_of(d.get("title"))), plain(text_of(d.get("message")))):
+                if x and x not in texts:
+                    texts.append(x)
+    buttons = []
+    for a in walk(model):
+        t = plain(text_of(a.get("title"))) if a.get("$") == "Action" else None
+        if t and isinstance(cb_of(a), int):
+            # Action.FLAG_PRIMARY (1): the answer the app offers first
+            buttons.append({"title": t, "id": t, "cb": cb_of(a), "primary": bool((a.get("flags") or 0) & 1)})
+    return " ".join(texts), buttons
+
+
+def answer(s, option, label):
+    """Answers the question Waze asks before it sends a report: `option` by its title; without one,
+    Waze's primary button when it offers exactly one (its confirmation: the driver's request is the
+    confirmation); otherwise nothing is sent and the question goes back to the caller."""
+    q, buttons = question_of(s.inner())
+    if not buttons:
+        raise WazeError("Waze showed a screen this cannot answer after %s. Nothing was reported." % label)
+    if option and option.strip():
+        b = pick(buttons, option, "answer")
+    else:
+        primary = [b for b in buttons if b["primary"]]
+        if len(primary) != 1:
+            raise WazeError("Waze asks: %s Answer with option: %s. Nothing was reported." % (
+                q or "one more question.", ", ".join(b["title"] for b in buttons)))
+        b = primary[0]
+    s.click(b["cb"])
+    return b["title"] if option else "confirmed"
+
+
+def alert_icon(alert):
+    return ((((alert or {}).get("icon") or {}).get("icon")) or {}).get("resName")
+
+
 # ------------------------------------------------------------------ the tools
 
 def geo_uri(destination=None, lat=None, lon=None):
@@ -759,12 +1001,18 @@ def navigate_to(args, mode=None, carapp=None, intent=None, wait_s=START_WAIT_S):
             started = s.wait(lambda x: bool(x.navigating and isinstance(x.trip, dict)
                                             and x.trip.get("destinationTravelEstimates")), wait_s)
             st = summarize(s.trip, s.navigating)
+            # Waze may show the route first and wait for the driver (its route preview: Go now,
+            # Avoid ...): say what it waits for
+            waits = [b["title"] for b in question_of(s.inner())[1]] if not s.navigating else []
         finally:
             s.close()
         if started:
             return sentence(st), dict(st, sent=uri, mode="car")
         if s.navigating:
             return "Waze started navigating to %s; the trip details are not known yet." % label, dict(st, sent=uri, mode="car")
+        if waits:
+            return ("Sent %s to Waze. It shows the route and waits on the car screen for: %s." % (label, ", ".join(waits))), \
+                dict(st, sent=uri, mode="car", waitsFor=waits)
         return ("Sent %s to Waze, but it has not started navigating yet: it may be showing search results or "
                 "asking to pick one on the car screen." % label), dict(st, sent=uri, mode="car")
     uri = waze_uri(dest, lat, lon)

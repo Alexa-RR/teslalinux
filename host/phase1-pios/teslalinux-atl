@@ -122,9 +122,19 @@ unset LIBGL_ALWAYS_SOFTWARE GALLIUM_DRIVER MESA_GL_VERSION_OVERRIDE MESA_GLES_VE
 # tools/debvm/patches/mesa-*.patch) in front of the system's, for this process only: glvnd's libEGL
 # loads libEGL_mesa.so.0 by name, so the app's EGL, GL and GTK's renderer use it; tacomp and the rest
 # keep the system's. TESLALINUX_APP_MESA=system (atl.env) keeps the system's for the app too.
+# It has only the v3d and vc4 drivers, so it is used only where a V3D render node exists: elsewhere
+# (the Debian VM: llvmpipe) its EGL finds no screen and the app's map stays blank.
 APP_MESA="$ATL_PREFIX/mesa/lib"
+have_v3d=0
+for d in /sys/class/drm/renderD*/device/driver; do
+  [[ "$(basename "$(readlink -f "$d" 2>/dev/null)")" == v3d ]] && have_v3d=1
+done
 if [[ "${TESLALINUX_APP_MESA:-app}" != system && -f "$APP_MESA/libEGL_mesa.so.0" ]]; then
-  export LD_LIBRARY_PATH="$APP_MESA${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  if (( have_v3d )); then
+    export LD_LIBRARY_PATH="$APP_MESA${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  else
+    echo "teslalinux-atl: no V3D render node: the system's Mesa for the app (the app's Mesa drives V3D only)" >&2
+  fi
 fi
 
 # ---- ATL knobs proven in the VM ----
