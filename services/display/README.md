@@ -115,7 +115,7 @@ location arrow's transparent viewport (5.6 ms: 2 draws, but a full-size colour a
 map (22 ms, 200+ draws) and Godot's blit to the window (2.6 ms).
 
 Then the frame rate is Waze's: it holds its car map at 30 frames/s (Settings > Waze interface > Map
-frame rate: "Full" lifts that, verified Waze versions only, `tools/apps/waze-map-pacing.py`).
+frame rate: "Full" lifts that, for verified Waze versions and others with the same code, `tools/apps/waze-map-pacing.py`).
 
 Delivered frames a second (run 2 of 2, warmed up) / slowest tenth, Waze's own frames a second, the
 capture-to-published time in tacomp and the app's share of V3D's render queue; Pi 4 at stock clocks,

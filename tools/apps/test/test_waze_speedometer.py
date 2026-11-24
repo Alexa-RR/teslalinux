@@ -76,6 +76,96 @@ class ReadingClass(unittest.TestCase):
             self.assertEqual(data[start:start + 4], b"dex\n")
 
 
+# Waze's reading class and its construction site, written here (with the dex writer of
+# waze-map-pacing.py) under the names a build may give them, for the checks of other versions
+wspec = importlib.util.spec_from_file_location("waze_map_pacing", os.path.join(HERE, "..", "waze-map-pacing.py"))
+wp = importlib.util.module_from_spec(wspec)
+wspec.loader.exec_module(wp)
+CALLER = V["caller"][0]
+
+
+def waze_dexes(cls="Lcom/waze/qq/z;", fields=("p", "q", "r", "s"), getters=(("w", "speedKph"), ("x", "speedLimit"), ("y", "speed"), ("z", "units")),
+               null_check=("Lo/k/a;", "b", "(Ljava/lang/Object;Ljava/lang/String;)V"), order=(0, 1, 2, 3), flow="speedometerStateFlow"):
+    """[("classes.dex", Dex)] with the reading class CLS (its fields named FIELDS, in the order speed,
+    units, speedLimit, speedKph; its constructor storing them in ORDER) and the construction site"""
+    types = ("I", ws.STRING, "I", "D")
+    f = [("field", (cls, n, t)) for n, t in zip(fields, types)]
+    store = {0: [0x1259, f[0]], 1: [0x135b, f[1]], 2: [0x1459, f[2]], 3: [0x155a, f[3]]}  # iput v2..v5 into v1
+    ctor = [0x001a, ("string", "units"), 0x2071, ("method", null_check), 0x0003,  # const-string v0; invoke-static {v3,v0}
+            0x1070, ("method", (ws.OBJECT, "<init>", "()V")), 0x0001] + sum((store[i] for i in order), []) + [0x000e]
+    value = {"speed": 0, "units": 1, "speedLimit": 2, "speedKph": 3}
+    methods = [("<init>", ws.INIT_PROTO, 0x10001, (7, 6, 2, ctor))]
+    for name, what in getters:
+        i = value[what]
+        op, ret, regs = {"I": (0x52, 0x0f, 2), "D": (0x53, 0x10, 3), ws.STRING: (0x54, 0x11, 2)}[types[i]]
+        methods.append((name, "()" + types[i], 0x11, (regs, 1, 0, [op | ((regs - 1) << 12), f[i], ret])))
+    to_string = []  # const-string v0 LABEL; iget(-wide, -object) v1 v3 FIELD, for each field in order
+    for label, i in zip(V["toString"], range(4)):
+        to_string += [0x001a, ("string", label), {"I": 0x3152, "D": 0x3153, ws.STRING: 0x3154}[types[i]], f[i]]
+    methods += [("equals", "(Ljava/lang/Object;)Z", 0x11, (2, 2, 0, [0x0012, 0x000f])),
+                ("hashCode", "()I", 0x11, (1, 1, 0, [0x0012, 0x000f])),
+                ("toString", "()Ljava/lang/String;", 0x11, (4, 1, 0, to_string + [0x0011]))]
+    reading = {"class": cls, "access": 0x11, "super": ws.OBJECT, "interfaces": [],
+               "fields": [(n, t, 0x12) for n, t in zip(fields, types)], "methods": methods}
+    flow_field = ("field", (CALLER, flow, "Lo/k/b;"))
+    site = [0x0022, ("type", cls), 0x7101, 0x8207, 0x9301, 0xa404,  # new-instance v0; move v1..v5 from v7..v11
+            0x0676, ("method", (cls, "<init>", ws.INIT_PROTO)), 0x0000,  # invoke-direct/range {v0..v5}
+            0x6654, flow_field, 0x000e]  # iget-object v6 v6 the flow
+    caller = {"class": CALLER, "access": 0x1, "super": ws.OBJECT, "interfaces": [], "fields": [(flow, "Lo/k/b;", 0x12)],
+              "methods": [(V["caller"][1], ws.INIT_PROTO, 0x0, (12, 6, 6, site))]}
+    return [("classes.dex", ws.Dex(wp.write_dex([reading, caller])))]
+
+
+class OtherVersions(unittest.TestCase):
+    def test_verified_names(self):
+        # a build that kept the verified version's names: its entry fits as it is
+        dexes = waze_dexes(V["class"], [n for n, _t in V["fields"]], V["getters"], V["null_check"])
+        ws.check_dexes("base.apk", dexes, V)
+        self.assertEqual(ws.derive(dexes, V), V)
+
+    def test_own_names(self):
+        dexes = waze_dexes()
+        with self.assertRaises(ws.Mismatch):
+            ws.check_dexes("base.apk", dexes, V)  # the verified names are not there
+        v = ws.derive(dexes, V)
+        ws.check_dexes("base.apk", dexes, v)
+        self.assertEqual(v["class"], "Lcom/waze/qq/z;")
+        self.assertEqual(v["fields"], (("p", "I"), ("q", ws.STRING), ("r", "I"), ("s", "D")))
+        self.assertEqual(v["getters"], (("w", "speedKph"), ("x", "speedLimit"), ("y", "speed"), ("z", "units")))
+        self.assertEqual(v["null_check"], ("Lo/k/a;", "b", "(Ljava/lang/Object;Ljava/lang/String;)V"))
+        # the class made for it: the app's names, ATL's getters behind each
+        dex = ws.Dex(ws.reading_class_dex(v))
+        cls = dex.class_data(dex.class_def(v["class"])["data"])
+        code = {n: c for n, _p, _a, c in cls["virtual"]}
+        self.assertIn("getSpeedLimit", ws.disassemble(dex, dex.code(code["x"])[3])[0])
+        self.assertIn("getUnits", ws.disassemble(dex, dex.code(code["z"])[3])[0])
+        self.assertEqual(ws.reading_class_dex(v), ws.reading_class_dex(ws.derive(dexes, V)))  # the same bytes
+
+    def test_other_shapes_refused(self):
+        # the constructor stores the fields in another order: the getters' meaning is unknown
+        with self.assertRaises(ws.Mismatch):
+            dexes = waze_dexes(order=(0, 2, 1, 3))
+            ws.check_dexes("base.apk", dexes, ws.derive(dexes, V))
+        # a getter of the speed that returns the limit field instead... is the limit's getter: two of them
+        with self.assertRaises(ws.Mismatch):
+            dexes = waze_dexes(getters=(("w", "speedKph"), ("x", "speedLimit"), ("y", "speedLimit"), ("z", "units")))
+            ws.check_dexes("base.apk", dexes, ws.derive(dexes, V))
+        # no construction site
+        with self.assertRaises(ws.Mismatch):
+            ws.derive([("classes.dex", ws.Dex(wp.write_dex([{"class": "Lcom/example/A;", "access": 0x1, "super": ws.OBJECT,
+                                                               "interfaces": [], "fields": [], "methods": []}])))], V)
+
+    @unittest.skipUnless(os.environ.get("WAZE_APP_DIR"), "WAZE_APP_DIR names no installed Waze")
+    def test_installed_waze(self):
+        # any Waze: a listed version is verified; another is "unverified" when its code fits (exit 2 otherwise)
+        try:
+            vc, _vn, v, state = ws.check_any(os.environ["WAZE_APP_DIR"])
+        except ws.Mismatch as e:
+            self.skipTest("not found in this Waze: %s" % e)
+        self.assertEqual(state, "verified" if vc in ws.VERIFIED else "unverified")
+        ws.Dex(ws.reading_class_dex(v))
+
+
 class WazeSetting(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

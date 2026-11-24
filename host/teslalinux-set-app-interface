@@ -8,7 +8,7 @@
 #                                        draws the app's templates over it (/sockets/carapp)
 #   teslalinux-set-app-interface map graphite|muted|app
 #                                        the car map's colours: "graphite" has ATL serve the app its own
-#                                        map palette recoloured, for verified app versions only
+#                                        map palette recoloured, where it fits the app version
 #                                        (docs/MAP-COLOURS.md); "muted" recolours the stream in the car
 #                                        page; "app" leaves the app's colours alone
 #   teslalinux-set-app-interface pacing auto|app|full
@@ -17,8 +17,8 @@
 #                                        map moves (driving, panning, zooming, the car page's input) and
 #                                        its own rate while it is still; "app" is the app's own (Waze
 #                                        holds its car map at 30 frames/s); "full" is the display's 60
-#                                        frames/s all the time. "auto" and "full" are for verified app
-#                                        versions only (tools/apps/waze-map-pacing.py); others keep their
+#                                        frames/s all the time. "auto" and "full" need the frame limiter
+#                                        tools/apps/waze-map-pacing.py finds in the app; others keep their
 #                                        own. The app is restarted for a change, but not recompiled: the
 #                                        launcher loads the same classes for every choice
 # Writes /etc/teslalinux/interface.env (TESLALINUX_APP_INTERFACE, TESLALINUX_MAP_COLOURS and

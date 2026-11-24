@@ -177,7 +177,7 @@ ATL (GTK 4, GSK GL on V3D) -> wl_surface.commit
   `services/display/README.md` ("CMA output buffers").
 * What the car receives is then Waze's frame rate: on a Pi 4 at stock clocks ~29 frames/s at
   832x608 with Waze's own 30 cap, ~49 with Settings > Waze interface > Map frame rate "Full"
-  (verified Waze versions), and ~26 at 1184x928, where V3D is the limit
+  (where the pacing tool finds Waze's frame limiter), and ~26 at 1184x928, where V3D is the limit
   (`services/display/README.md`, "Waze's frame on the GPU").
 * Frames without damage are not encoded; newest-frame-wins when the encoder is busy.
 * Size, encoder and quality come from the frontend's display state (`POST /api/displayState` →

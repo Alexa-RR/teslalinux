@@ -250,8 +250,8 @@ version to have is the pinned one:
   from the page is the user's own choice and installs even past the pin.
 
 A changed pin starts a check at once (the API kicks the updater). Waze's servers may one day refuse
-an old version; then "Latest" brings it back to the newest, and the Map frame rate falls back to
-Waze's own until the pacing tool is verified for that version.
+an old version; then "Latest" brings it back to the newest, and the Map frame rate works if the
+pacing tool finds the same code in it ("may not work"), else falls back to Waze's own.
 
 ## Settings and status
 

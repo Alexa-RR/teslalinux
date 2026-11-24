@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Check an ATL file overlay manifest (host/appstyle/waze-map-graphite.json) against an installed app.
 
-The manifest's overlays apply only for the (versionCode, sha256 of the original) pairs listed under
-each entry's "verified" (ATL: src/api-impl-jni/file_overlays.c). This tool shows what ATL will do with
-the app as installed, previews the transformed files, and adds a checked version to the list.
+ATL applies the manifest's overlays only for the (versionCode, sha256 of the original) pairs listed
+under each entry's "verified" (ATL: src/api-impl-jni/file_overlays.c). This tool shows what ATL will
+do with the app as installed, previews the transformed files, adds a checked version to the list, and
+writes the manifest the launcher hands ATL, which also covers versions nobody checked.
 
   mapskin.py check    [--manifest M] [--data-dir D] [--version-code N]
         each overlay: the file's sha256, whether that pair is verified, whether every replacement
@@ -11,6 +12,11 @@ the app as installed, previews the transformed files, and adds a checked version
   mapskin.py preview  --out DIR [...]      the transformed files, as ATL would serve them (for diff)
   mapskin.py add      --version-name X [...]   add (versionCode, sha256) of every file whose
         replacements all apply to its entry's "verified" list (after checking the map: docs/MAP-COLOURS.md)
+  mapskin.py effective --out FILE [...]    the manifest for this start (the launcher's): the verified
+        list, and for the installed versionCode also every original verified for another version (a
+        new Waze often keeps its palette files byte for byte) and the file now on disk when every
+        replacement occurs in it exactly once. Such a pair is marked "unverified": the colours may
+        not be right. An entry whose replacements do not all occur gets nothing: Waze's own colours.
 
 Defaults: the installed manifest (/usr/local/lib/teslalinux/appstyle/) or the repo's, the app's data
 folder /var/lib/tesla/android/waze/base.apk_, and the versionCode from the app's installed.json
@@ -120,15 +126,55 @@ def inspect(manifest, data_dir, version_code):
     return rows
 
 
+def effective(manifest, data_dir, package, version_code, version_name=None):
+    """MANIFEST with pairs added for VERSION_CODE (see `effective` above); returns (the new manifest,
+    one (entry name, what was added) per overlay of PACKAGE)"""
+    out = json.loads(json.dumps(manifest))
+    report = []
+    for e in out.get("overlays", []):
+        if e.get("package") != package:
+            continue
+        pairs = [v for v in e.get("verified", []) if isinstance(v, dict)]
+        have = set(str(v.get("sha256", "")).lower() for v in pairs if v.get("versionCode") == version_code)
+        known = []
+        for v in pairs:
+            sha = str(v.get("sha256", "")).lower()
+            if v.get("versionCode") != version_code and sha not in have and sha not in known:
+                known.append(sha)
+        added = list(known)
+        try:
+            with open(file_path(data_dir, e), "rb") as f:
+                orig = f.read()
+        except OSError:
+            orig = None
+        if orig is not None:
+            sha = hashlib.sha256(orig).hexdigest()
+            r = replacements(manifest, e)
+            if sha not in have and sha not in added and ("contents" in e or (r and transform(orig, r)[0] is not None)):
+                added.append(sha)
+        for sha in added:
+            item = {"versionCode": version_code}
+            if version_name:
+                item["versionName"] = version_name
+            item.update({"sha256": sha, "unverified": True})
+            e.setdefault("verified", []).append(item)
+        sha = hashlib.sha256(orig).hexdigest() if orig is not None else None
+        report.append((e.get("name", e["path"]),
+                       "not unpacked yet" if sha is None else "verified" if sha in have else
+                       "applied, may not work" if sha in added else
+                       "Waze's own colours (the replacements do not all occur once)"))
+    return out, report
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=("check", "preview", "add"))
+    ap.add_argument("command", choices=("check", "preview", "add", "effective"))
     ap.add_argument("--manifest", default=next((m for m in MANIFESTS if os.path.exists(m)), MANIFESTS[-1]))
     ap.add_argument("--data-dir", default=DATA_DIR)
     ap.add_argument("--package", default="com.waze")
     ap.add_argument("--version-code", type=int)
     ap.add_argument("--version-name")
-    ap.add_argument("--out", help="preview: where to write the transformed files")
+    ap.add_argument("--out", help="preview: where to write the transformed files; effective: the manifest to write")
     a = ap.parse_args()
 
     manifest = load_manifest(a.manifest)
@@ -136,6 +182,17 @@ def main():
     vn = a.version_name or vn
     if vc is None:
         sys.exit("mapskin: no versionCode (no %s/%s/installed.json); pass --version-code" % (APPS_DIR, a.package))
+    if a.command == "effective":
+        if not a.out:
+            sys.exit("mapskin: effective needs --out FILE")
+        out, report = effective(manifest, a.data_dir, a.package, vc, vn)
+        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+        with open(a.out + ".tmp", "w", encoding="utf-8") as f:
+            f.write(dumps(out) + "\n")
+        os.replace(a.out + ".tmp", a.out)
+        for name, state in report:
+            print("mapskin: %s: %s" % (name, state), file=sys.stderr)
+        return 0
     manifest["overlays"] = [e for e in manifest.get("overlays", []) if e.get("package") == a.package]
     rows = inspect(manifest, a.data_dir, vc)
     print("%s versionCode %d%s, manifest %s" % (a.package, vc, " (%s)" % vn if vn else "", a.manifest))

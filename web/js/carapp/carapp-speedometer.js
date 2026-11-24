@@ -1,6 +1,6 @@
 // teslalinux: the app's speedometer, drawn by the car page over the app's map (Car mode). Where the
-// device supports it (Settings > Waze interface > Speedometer; tools/apps/waze-speedometer.py, the
-// verified Waze versions), the app's own speedometer is off and its readings arrive on
+// device supports it (Settings > Waze interface > Speedometer; tools/apps/waze-speedometer.py: the
+// verified Waze versions, and others with the same code), the app's own speedometer is off and its readings arrive on
 // /sockets/carapp as {"type":"speedometer","speed":S,"units":U,"speedLimit":L,"speedKph":K,
 // "miles":B} (docs/UPSTREAM-NOTES.md, "Car app templates"). Drawn here as the app drew it: the
 // current speed in a round bubble, the road's speed limit in a sign beside it (the round, red-ringed

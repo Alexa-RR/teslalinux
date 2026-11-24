@@ -1935,7 +1935,7 @@
           control: UI.toggle(set.autoUpdate !== false, (on) => saveSet(au, { autoUpdate: on }), "Update Waze automatically"),
         });
         // a version pin: download exactly this version and no newer one (the Map frame rates
-        // "Automatic" and "Full" work only on the Waze versions they are verified for)
+        // "Automatic" and "Full" are checked on the versions offered; others may not work)
         const pinCode = set.pinVersionCode || 0;
         const choices = (info.pinChoices || []).slice();
         if (pinCode && !choices.some((c) => c.versionCode === pinCode)) choices.push({ versionCode: pinCode, versionName: set.pinVersionName, reason: "" });
@@ -1944,7 +1944,7 @@
         const pacingNames = choices.filter((c) => c.reason === "mapPacing" && c.versionName).map((c) => c.versionName);
         const pinName = set.pinVersionName || "versionCode " + pinCode;
         const pinDetail = !pinCode
-          ? "Every new version." + (pacingNames.length ? " Automatic and Full map frame rates work on " + pacingNames.join(" and ") + " only." : "")
+          ? "Every new version." + (pacingNames.length ? " Map frame rates checked on " + pacingNames.join(" and ") + "; others may not work." : "")
           : installedCode > pinCode
             ? "The installed " + ver(info.installed) + " is newer than " + pinName + ", so no further updates. Waze is never taken back to an older version."
             : installedCode === pinCode
@@ -2557,13 +2557,13 @@
           ),
         });
         // the speedometer this page draws over the map (carapp-speedometer.js; the device sends the
-        // app's readings for the Waze versions it knows, and Waze's own stays off in all three)
+        // app's readings when it finds them in the installed Waze, and Waze's own stays off in all three)
         const speedSupport = (iface && iface.speedometerSupport) || look.speedometerSupport;
         const spd = UI.row({
           id: "waze.speedometer",
           title: "Speedometer",
           stack: true,
-          after: speedSupport && !speedSupport.supported ? UI.warnbox(this._speedometerUnavailable(speedSupport)) : null,
+          after: this._versionNote(speedSupport, "Waze draws its own."),
           control: UI.segmented(
             [
               { value: "both", label: "Speed and limit", caption: "default" },
@@ -2592,9 +2592,8 @@
         out.push(UI.group("Car interface look", [sr, dr, pr, spd, spp]));
 
         const skin = look.mapSkin;
-        const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
-        const checked = skin && Array.isArray(skin.verifiedVersions) ? skin.verifiedVersions.map(named).join(", ") : "";
         const unverified = Boolean(skin && !skin.supported);
+        const mayNotWork = Boolean(skin && skin.state === "unverified");
         const savedColours = look.mapColours;
         const mr = UI.row({
           id: "waze.mapcolours",
@@ -2603,11 +2602,15 @@
           chips: [UI.CHIP.custom("chip--restart", "restart_alt", "Graphite restarts Waze")],
           more: [
             "Graphite: Waze's own map recoloured when it starts, grey land, white roads by day and dark roads by night, a blue route. Muted: this screen tones Waze's map down (with the Graphite panels). Waze's own: as Waze draws it.",
-            checked ? "Graphite is checked per Waze version: " + checked + "." : "Graphite is checked per Waze version.",
           ],
           control: UI.tiles(
             [
-              { value: "graphite", label: "Graphite", svg: UI.SVG.colours("graphite"), caption: unverified ? "Not for this Waze" : "Recoloured by the device" },
+              {
+                value: "graphite",
+                label: "Graphite",
+                svg: UI.SVG.colours("graphite"),
+                caption: unverified ? "Not for this Waze" : mayNotWork ? "May not work with this Waze" : "Recoloured by the device",
+              },
               { value: "muted", label: "Muted", svg: UI.SVG.colours("muted"), caption: "Toned down here, default" },
               { value: "app", label: "Waze's own", svg: UI.SVG.colours("app"), caption: "As Waze draws it" },
             ],
@@ -2651,7 +2654,7 @@
           chips: [UI.CHIP.restart()],
           stack: true,
           detail: "Automatic is smooth while the map moves and lets the Pi rest while it is still; Full works the Pi hardest",
-          after: support && !support.supported ? UI.warnbox(this._pacingUnavailable(support)) : null,
+          after: this._versionNote(support, "Waze keeps its own rate."),
           control: UI.segmented(
             [
               { value: "auto", label: "Automatic", caption: "60 while moving, default" },
@@ -2681,8 +2684,9 @@
             { label: "Map sharpness" },
           ),
         });
-        const showSkinWarning = unverified && this._staged("mapcolours", savedColours) === "graphite";
-        out.push(UI.group("Map", [showSkinWarning ? UI.warnbox(this._skinUnavailable(look)) : null, mr, zr, pc, sh].filter(Boolean)));
+        const graphite = this._staged("mapcolours", savedColours) === "graphite";
+        const skinNote = graphite ? this._versionNote(skin, look.style === "graphite" ? "Waze's own colours, toned down here." : "Waze's own colours.") : null;
+        out.push(UI.group("Map", [skinNote, mr, zr, pc, sh].filter(Boolean)));
         out.push(UI.group("While driving", [this._typingWhileDrivingRow(car)]));
       }
       // Waze's own car settings, drawn from its settings screens (js/carapp/carapp-settings-view.js):
@@ -2742,47 +2746,26 @@
     }
 
     /**
-     * Graphite map colours apply only to the Waze versions they were checked with (the device's
-     * verified list, docs/MAP-COLOURS.md); for any other version Waze keeps its own palette and the
-     * page mutes it instead.
+     * One short line under a feature that depends on the installed Waze version (Graphite map
+     * colours, the speedometer, the map frame rate; /api/appInterface mapSkin, speedometerSupport,
+     * mapPacingSupport): nothing for a checked version, "May not work" for one nobody checked (the
+     * device found what it needs and the feature can be chosen), and why it is off otherwise, with
+     * FALLBACK (what Waze does instead).
      */
-    _skinUnavailable(look) {
-      const skin = look.mapSkin || {};
-      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
-      const installed = skin.versionCode ? "Waze " + named(skin) : "this Waze";
+    _versionNote(support, fallback) {
+      if (!support || support.state === "verified" || support.state === "pending") return null;
+      const installed = support.versionCode ? "Waze " + (support.versionName || "versionCode " + support.versionCode) : "this Waze";
+      if (support.state === "unverified" && (support.supported || support.checked === false)) {
+        return UI.warnbox("May not work with " + installed + ".", "info_outline");
+      }
+      if (support.supported) return null;
       const why =
         {
-          "unverified-files": "Graphite colours are not available: " + installed + " has map files that differ from the checked ones.",
-          "not-installed": "Graphite colours are not available: no installed Waze was found.",
-          "no-manifest": "Graphite colours are not available on this device (no verified list).",
-        }[skin.state] || "Graphite colours are not available for " + installed + ".";
-      return why + (look.style === "graphite" ? " Waze's own colours are used, toned down by this screen." : " Waze's own colours are used.");
-    }
-
-    /** the page's speedometer applies only to the Waze versions it was checked with (tools/apps/waze-speedometer.py) */
-    _speedometerUnavailable(support) {
-      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
-      const installed = support.versionCode ? "Waze " + named(support) : "this Waze";
-      const checked = (support.verifiedVersions || []).map(named).join(", ");
-      const why =
-        {
-          "not-installed": "This screen's speedometer is not available: no installed Waze was found.",
-          "no-tool": "This screen's speedometer is not available on this device.",
-        }[support.state] || "This screen's speedometer is not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".";
-      return why + " Waze draws its own on the map.";
-    }
-
-    /** the automatic and full map frame rates apply only to the Waze versions they were checked with (tools/apps/waze-map-pacing.py) */
-    _pacingUnavailable(support) {
-      const named = (v) => (v.versionName ? v.versionName : "versionCode " + v.versionCode);
-      const installed = support.versionCode ? "Waze " + named(support) : "this Waze";
-      const checked = (support.verifiedVersions || []).map(named).join(", ");
-      const why =
-        {
-          "not-installed": "Automatic and Full are not available: no installed Waze was found.",
-          "no-tool": "Automatic and Full are not available on this device.",
-        }[support.state] || "Automatic and Full are not available for " + installed + (checked ? " (checked for " + checked + ")" : "") + ".";
-      return why + " Waze keeps its own rate.";
+          "not-installed": "Not available: no Waze installed.",
+          "no-tool": "Not available on this device.",
+          "no-manifest": "Not available on this device.",
+        }[support.state] || "Not available for " + installed + ".";
+      return UI.warnbox(why + " " + fallback);
     }
 
     _localeName(code) {

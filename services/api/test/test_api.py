@@ -131,6 +131,7 @@ os.environ.update({
     "TESLALINUX_APP_DIR": os.path.join(TMP, "apps"),
     "ANDROID_APP_DATA_DIR": os.path.join(TMP, "appdata"),
     "TESLALINUX_MAP_SKIN_MANIFEST": os.path.join(TMP, "mapskin.json"),
+    "TESLALINUX_APP_OVERRIDE_DIR": os.path.join(TMP, "app-overrides"),
     "TESLALINUX_NETWORK": os.path.join(TMP, "network"),
     "TESLALINUX_WIFI_CONNECT_STATE": os.path.join(TMP, "wifi-connect.json"),
     "TESLALINUX_UPLINK_STATE": os.path.join(TMP, "uplink.json"),
@@ -381,12 +382,24 @@ class AppInterface(unittest.TestCase):
         self.assertEqual(st["mapSkin"]["verifiedVersions"], [{"versionCode": 1030736, "versionName": "5.25.0.1"}])
         self.skin(None)  # not unpacked yet: the app does it at its next start, ATL checks it then
         self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("pending", True))
-        self.skin(SKIN.replace(b"FAFCFA", b"FFFFFF"))  # same version, other contents
+        self.skin(SKIN.replace(b"FAFCFA", b"FFFFFF"))  # same version, other contents the replacement misses
+        self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("unverified-files", False))
+        self.skin(SKIN.replace(b"local", b"local  "))  # other contents with the replacement's text once: may not work
+        self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("unverified", True))
+        self.skin(SKIN + b"-- 0xFAFCFA\n")  # the replacement's text twice: ATL would not apply it
         self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("unverified-files", False))
         self.skin(SKIN)
-        self.installed(1030800)  # an update to a version nobody checked
+        self.installed(1030800)  # an update to a version nobody checked, with the checked file: may not work
         st = self.state()["mapSkin"]
-        self.assertEqual((st["state"], st["supported"], st["versionCode"]), ("unverified-version", False, 1030800))
+        self.assertEqual((st["state"], st["supported"], st["versionCode"]), ("unverified", True, 1030800))
+        self.skin(SKIN.replace(b"local", b"global"))  # its own file, the replacement's text once
+        self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("unverified", True))
+        self.skin(SKIN.replace(b"FAFCFA", b"FFFFFF"))  # a file the replacement misses: Waze's own colours
+        st = self.state()["mapSkin"]
+        self.assertEqual((st["state"], st["supported"]), ("unverified-version", False))
+        self.skin(None)  # not unpacked yet: the launcher adds the verified originals, ATL checks at the start
+        self.assertEqual((self.state()["mapSkin"]["state"], self.state()["mapSkin"]["supported"]), ("unverified", True))
+        self.skin(SKIN)
         os.unlink(os.path.join(TMP, "apps", "installed.json"))
         self.assertEqual(self.state()["mapSkin"]["state"], "not-installed")
         with open(os.path.join(TMP, "interface.env"), "w") as f:
@@ -422,9 +435,20 @@ class AppInterface(unittest.TestCase):
         with open(os.path.join(TMP, "interface.env"), "w") as f:
             f.write("TESLALINUX_APP_INTERFACE=car\nTESLALINUX_MAP_PACING=fast\n")
         self.assertEqual(self.state()["mapPacing"], "auto")  # not a choice: the default
-        self.installed(1030800)
+        self.installed(1030800)  # a version the tool does not list, before the launcher looked
         st = self.state()["mapPacingSupport"]
-        self.assertEqual((st["state"], st["supported"], st["modes"]), ("unverified-version", False, []))
+        self.assertEqual((st["state"], st["supported"], st["modes"], st["checked"]), ("unverified", False, [], False))
+        jar = os.path.join(TMP, "app-overrides", "com.waze-1030800-map-auto.jar")
+        os.makedirs(os.path.dirname(jar), exist_ok=True)
+        with open(jar, "wb") as f:  # the launcher's run found the same code: may not work
+            f.write(b"PK")
+        st = self.state()["mapPacingSupport"]
+        self.assertEqual((st["state"], st["supported"], st["modes"], st["checked"]), ("unverified", True, ["auto", "full"], True))
+        os.unlink(jar)
+        open(jar[:-4] + ".none", "w").close()  # it found nothing
+        st = self.state()["mapPacingSupport"]
+        self.assertEqual((st["state"], st["supported"], st["modes"], st["checked"]), ("not-found", False, [], True))
+        os.unlink(jar[:-4] + ".none")
         os.unlink(os.path.join(TMP, "apps", "installed.json"))
         self.assertEqual(self.state()["mapPacingSupport"]["state"], "not-installed")
 
@@ -454,7 +478,17 @@ class AppInterface(unittest.TestCase):
         self.assertEqual(self.state()["speedometerSupport"]["signStyle"], "world")
         self.installed(1030800)
         st = self.state()["speedometerSupport"]
-        self.assertEqual((st["state"], st["supported"]), ("unverified-version", False))
+        self.assertEqual((st["state"], st["supported"], st["checked"]), ("unverified", False, False))
+        jar = os.path.join(TMP, "app-overrides", "com.waze-1030800-speedometer.jar")
+        os.makedirs(os.path.dirname(jar), exist_ok=True)
+        with open(jar, "wb") as f:
+            f.write(b"PK")
+        st = self.state()["speedometerSupport"]
+        self.assertEqual((st["state"], st["supported"], st["checked"]), ("unverified", True, True))
+        os.unlink(jar)
+        open(jar[:-4] + ".none", "w").close()
+        self.assertEqual(self.state()["speedometerSupport"]["state"], "not-found")
+        os.unlink(jar[:-4] + ".none")
         os.unlink(os.path.join(TMP, "apps", "installed.json"))
         self.assertEqual(self.state()["speedometerSupport"]["state"], "not-installed")
         os.unlink(path)
