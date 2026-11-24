@@ -295,11 +295,44 @@
       this._viewportWatcherStarted = true;
 
       let lastViewport = utils.getViewportSize();
+      // teslalinux: while a keyboard is up (the device keyboard for the app's field, or one of the
+      // page's own fields), nothing about the picture changes: not its size, not the stream's, not its
+      // place. The car's browser shrinks the window for its keyboard; the stage keeps the height it had
+      // before (pinned in px, so the centred picture does not move up) and the keyboard simply covers
+      // the bottom of the picture. lastViewport keeps the size from before, so closing the keyboard
+      // changes nothing either, and a real window change made meanwhile is applied once it is down.
+      const stage = this.rendererManager.displayRoot ? this.rendererManager.displayRoot.parentElement : null;
+      let stagePinned = false;
+      const keyboardUp = () => !!(global.TLDeviceKeyboard && global.TLDeviceKeyboard.isOpen());
+      const pinStage = () => {
+        if (stagePinned || !stage) {
+          return;
+        }
+        stagePinned = true;
+        stage.style.bottom = "auto";
+        stage.style.height = String(lastViewport.height) + "px";
+      };
+      const unpinStage = () => {
+        if (!stagePinned || !stage) {
+          return;
+        }
+        stagePinned = false;
+        stage.style.bottom = "";
+        stage.style.height = "";
+      };
 
       const onPotentialResize = () => {
         if (this.isPaused) {
           return;
         }
+
+        if (keyboardUp()) {
+          if (!utils.sameSize(utils.getViewportSize(), lastViewport)) {
+            pinStage();
+          }
+          return;
+        }
+        unpinStage();
 
         const current = utils.getViewportSize();
         if (!utils.sameSize(current, lastViewport)) {

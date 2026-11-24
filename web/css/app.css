@@ -318,11 +318,12 @@
     }
 
 /* teslalinux: the device keyboard (js/keyboard/device-keyboard.js). The input that takes the device's
-   keyboard is invisible but focusable; 16px keeps iOS from zooming the page when it gets focus. */
+   keyboard is invisible but focusable; 16px keeps iOS from zooming the page when it gets focus. It sits
+   at the top: a keyboard never covers it there, so the browser has no reason to scroll the page up. */
 .teslalinux-kbd-input {
   position: fixed;
   left: 0;
-  bottom: 0;
+  top: 0;
   width: 1px;
   height: 1px;
   opacity: 0;
