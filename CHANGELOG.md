@@ -15,6 +15,11 @@ version's.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
+Teslalinux now updates itself from Settings. Grok can file Waze reports, Grok's setup takes one
+Cloudflare sign-in instead of an API token, and the backup Wi-Fi joins phone hotspots.
+
 ### Connect Cloudflare with one sign-in
 
 *Settings > Grok > Connect Cloudflare.*
@@ -1084,7 +1089,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.0...v0.3.1
