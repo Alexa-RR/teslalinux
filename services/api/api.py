@@ -6,9 +6,12 @@ so the vendored frontend in web/ runs unchanged:
 
 * GET  /api/configuration   flat JSON of the persist.tesla-android.* properties as numbers (cpp:394-421)
 * GET  /api/displayState    width/height/density/refreshRate/quality/resolutionPreset/renderer/
-                            isResponsive/isH264/isHeadless/isRearDisplay* as numbers (cpp:591-615)
-* POST /api/displayState    JSON with all eleven numeric fields, else 500 (cpp:617-669); then the
-                            display is reconfigured (configure_virtual_display, cpp:184-268)
+                            isResponsive/isH264/isHeadless/isRearDisplay* as numbers (cpp:591-615);
+                            isRearDisplayEnabled/isRearDisplayPrioritised are always 0 (see REAR_DISPLAY_FIELDS)
+* POST /api/displayState    JSON with the nine display fields as numbers, else 500 (cpp:617-669); the
+                            two rear-display fields may be left out and are not kept (a number
+                            when sent, as upstream checks); then the display is reconfigured
+                            (configure_virtual_display, cpp:184-268)
 * POST /api/<setting>       the raw text/plain body becomes the property value, reply "OK" (cpp:423-590)
 * GET  /api/deviceInfo      cpu_temperature, serial_number, device_model, is_modem_detected,
                             is_carplay_detected, release_type, ota_url (cpp:358-384)
@@ -82,8 +85,10 @@ The settings page's Status, Network and System update sections (new routes only)
                           Wi-Fi / Ethernet, address, bytes since boot, reachability), the LTE modem
                           (HiLink web API or ModemManager: operator, technology, signal), open car pages,
                           the last GPS fix, the app, and the system (OS, kernel, uptime, load, memory,
-                          disk, CPU temperature, Pi throttling, and system.boot: how long this start
-                          took, from host/teslalinux-boottime's file, with the last starts)
+                          disk, CPU temperature, Pi throttling, system.boot: how long this start
+                          took, from host/teslalinux-boottime's file, with the last starts, and
+                          system.teslalinux: the release and build installed, from the dist's MANIFEST,
+                          null without one)
 * GET  /api/network       hotspot name and country (the password never leaves the device), LTE settings
                           (APN, user, roaming, enabled; no password) from `teslalinux-network lte-state`
 * POST /api/network       JSON {when: "now"|"boot", hotspot: {ssid, psk, country}, lte: {apn, user,
@@ -180,6 +185,9 @@ AUDIO_DEFAULTS = {"output": "car", "volume": 80}
 # how long the device took to start (host/teslalinux-boottime writes it once per boot)
 BOOTTIME_STATE = os.environ.get("TESLALINUX_BOOTTIME_STATE", "/var/lib/teslalinux/state/boottime.json")
 BOOT_ID_FILE = os.environ.get("TESLALINUX_BOOT_ID", "/proc/sys/kernel/random/boot_id")
+# the Teslalinux release installed: the dist's MANIFEST (tools/debvm/pack-dist.sh), in the prefix
+# tools/pios/install.sh links to the active dist
+DIST_MANIFEST = os.environ.get("TESLALINUX_DIST_MANIFEST", "/opt/teslalinux/MANIFEST")
 # PalGate gates: services/gates/gates.py serves /api/gates* on loopback; this forwards them
 GATES_URL = os.environ.get("TESLALINUX_GATES_URL", "http://127.0.0.1:8082")
 
@@ -211,8 +219,11 @@ CONFIGURATION_KEYS = (tp.BAND_TYPE, tp.CHANNEL, tp.CHANNEL_WIDTH, tp.SOFTAP_ENAB
 DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", tp.VD_DENSITY),
                   ("resolutionPreset", tp.VD_PRESET), ("renderer", tp.VD_RENDERER),
                   ("isResponsive", tp.VD_RESPONSIVE), ("isH264", tp.VD_H264), ("refreshRate", tp.VD_REFRESH),
-                  ("quality", tp.VD_QUALITY), ("isRearDisplayEnabled", tp.VD_REAR),
-                  ("isRearDisplayPrioritised", tp.VD_REAR_PRIO))
+                  ("quality", tp.VD_QUALITY))
+# Upstream can show the app on a rear display (a second Android display the browser asks for once);
+# this device drives the car's main screen only, so displayState reports the rear display off and a
+# POST's values for it are checked but not kept
+REAR_DISPLAY_FIELDS = ("isRearDisplayEnabled", "isRearDisplayPrioritised")
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
               "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan",
               "gpuSpeed", "audioOutput"}
@@ -1617,7 +1628,26 @@ def system_status():
             "model": _read("/sys/firmware/devicetree/base/model") or os.uname().machine,
             "uptimeSeconds": uptime, "load": load, "cpuTemperature": cpu_temperature(), "cpus": os.cpu_count(),
             "memory": {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable")}, "disk": disk,
-            "throttled": throttled, "boot": boot_status()}
+            "throttled": throttled, "boot": boot_status(), "teslalinux": dist_info()}
+
+
+DIST_VALUE_RE = re.compile(r"[A-Za-z0-9._+-]{1,64}")
+
+
+def dist_info():
+    """status.system.teslalinux: the Teslalinux release installed, from the dist's MANIFEST
+    ("release=v0.4.0", the tag it was published under, empty for a local pack; "version=", the
+    dist's build name). None without a MANIFEST (an install from a repository copy, the Alpine
+    image), so the page says no version is recorded."""
+    text = _read(DIST_MANIFEST)
+    if text is None:
+        return None
+    out = {"release": None, "version": None}
+    for line in text.splitlines():
+        k, sep, v = line.partition("=")
+        if sep and k in out and out[k] is None and DIST_VALUE_RE.fullmatch(v.strip()):
+            out[k] = v.strip()
+    return out
 
 
 BOOT_KEYS = ("kernelSeconds", "userspaceSeconds", "hotspotSeconds", "pageSeconds", "appFrameSeconds", "appMapSeconds")
@@ -1998,6 +2028,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "displayState":
             ds = {name: tp.atoi(p.get(key)) for name, key in DISPLAY_FIELDS}
             ds["isHeadless"] = tp.atoi(p.get(tp.HEADLESS))
+            ds.update(dict.fromkeys(REAR_DISPLAY_FIELDS, 0))
             order = ("width", "height", "density", "refreshRate", "quality", "resolutionPreset", "renderer",
                      "isResponsive", "isH264", "isHeadless", "isRearDisplayEnabled", "isRearDisplayPrioritised")
             return self._json({k: ds[k] for k in order})
@@ -2175,6 +2206,10 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(v, bool) or not isinstance(v, (int, float)):
                     return self._error()
                 changes[key] = str(int(v))  # cJSON valueint truncates
+            for name in REAR_DISPLAY_FIELDS:
+                v = req.get(name)
+                if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))):
+                    return self._error()
             set_props(changes)
             self._ok()
             apply_display(props())

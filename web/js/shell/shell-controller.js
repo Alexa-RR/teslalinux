@@ -8,35 +8,24 @@
       this.apiClient = options.apiClient;
       this.displayController = options.displayController;
       this.settingsController = options.settingsController;
-      this.releaseNotesController = options.releaseNotesController;
 
+      // teslalinux: two pages, the map (#home-shell) and Settings (#page-settings); upstream's About,
+      // Release Notes and Donations pages and the bottom bar between them are gone
       this.homeShell = options.homeShell;
-      this.panelShell = options.panelShell;
-      this.panelViews = options.panelViews;
-      this.appTitle = options.appTitle;
-      this.navButtons = options.navButtons;
+      this.settingsPage = options.settingsPage;
       this.connectivityBanner = options.connectivityBanner;
       this.connectivityBannerText = options.connectivityBannerText || null;
 
-      this.currentPage = "home";
       this.connectivityState = "backendAccessible";
       this._timersStarted = false;
       this._connectivityCheckInFlight = false;
       this._requestedConnectivityTimerId = null;
       this._connectivityMessage =
         "Connection with Teslalinux services lost. The app will restart when it comes back.";
-
-      this.pageTitles = {
-        about: "About",
-        releaseNotes: "Release Notes",
-        donations: "Credits",
-        settings: "Settings",
-      };
     }
 
     initialize() {
-      this._wireNav();
-      this.setPage("home");
+      this.showMap();
       this._startConnectivityObservers();
     }
 
@@ -51,70 +40,20 @@
       }, 120);
     }
 
-    setPage(pageId) {
-      this.currentPage = pageId;
-      const isHome = pageId === "home";
-
-      this.homeShell.hidden = !isHome;
-      this.panelShell.hidden = isHome;
-      // teslalinux: Settings fills the panel itself, without the app bar and the bottom bar
-      // (css/settings.css); the other pages keep both
-      this.panelShell.classList.toggle("is-settings", pageId === "settings");
-      this.displayController.setPaused(!isHome);
-      // teslalinux: what the settings page opened in the app (Waze's own settings) closes with it
-      if (pageId !== "settings" && this.settingsController.onHidden) this.settingsController.onHidden();
-
-      this._renderNavSelection(pageId);
-
-      if (isHome) {
-        return;
-      }
-
-      this.appTitle.textContent = this.pageTitles[pageId] || "";
-
-      this._hideAllPanelViews();
-      if (pageId === "about") {
-        this.panelViews.about.hidden = false;
-      } else if (pageId === "releaseNotes") {
-        this.panelViews.releaseNotes.hidden = false;
-        this.releaseNotesController.render();
-      } else if (pageId === "donations") {
-        this.panelViews.donations.hidden = false;
-      } else if (pageId === "settings") {
-        this.panelViews.settings.hidden = false;
-        void this.settingsController.setActiveSection(this.settingsController.activeSectionId);
-      }
+    /** The map: the display streams again, and what the settings page opened in the app (Waze's own settings) closes */
+    showMap() {
+      this.homeShell.hidden = false;
+      this.settingsPage.hidden = true;
+      this.displayController.setPaused(false);
+      if (this.settingsController.onHidden) this.settingsController.onHidden();
     }
 
-    _wireNav() {
-      for (let index = 0; index < this.navButtons.length; index += 1) {
-        const button = this.navButtons[index];
-        button.addEventListener("click", () => {
-          const targetPage = button.getAttribute("data-page");
-          if (targetPage) {
-            this.setPage(targetPage);
-          }
-        });
-      }
-    }
-
-    _renderNavSelection(pageId) {
-      for (let index = 0; index < this.navButtons.length; index += 1) {
-        const button = this.navButtons[index];
-        const targetPage = button.getAttribute("data-page");
-        if (targetPage === pageId) {
-          button.classList.add("active");
-        } else {
-          button.classList.remove("active");
-        }
-      }
-    }
-
-    _hideAllPanelViews() {
-      this.panelViews.about.hidden = true;
-      this.panelViews.releaseNotes.hidden = true;
-      this.panelViews.donations.hidden = true;
-      this.panelViews.settings.hidden = true;
+    /** Settings over the whole page, in the section it showed last; the display pauses meanwhile */
+    showSettings() {
+      this.homeShell.hidden = true;
+      this.settingsPage.hidden = false;
+      this.displayController.setPaused(true);
+      void this.settingsController.setActiveSection(this.settingsController.activeSectionId);
     }
 
     _startConnectivityObservers() {

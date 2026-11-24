@@ -4,11 +4,6 @@
   const TAHtml = (global.TAHtml = global.TAHtml || {});
 
   TAHtml.constants = {
-    APP_VERSION: "2026.3.1",
-    DISPLAY_PREF_KEYS: [
-      "DisplayRepository_isPrimaryDisplaySharedPreferencesKey",
-      "flutter.DisplayRepository_isPrimaryDisplaySharedPreferencesKey",
-    ],
     DEFAULT_NON_RESPONSIVE_SIZE: { width: 1088, height: 832 },
     RESIZE_COOLDOWN_MS: 1000,
     NATIVE_RESOLUTION_PRESET: 5, // teslalinux: utils.nativeDisplaySize
@@ -75,7 +70,6 @@
     alignUp,
     delay,
     compareVersions,
-    parseBoolean,
     getViewportSize,
     normalizeSize,
     sameSize,
@@ -132,16 +126,6 @@
       }
     }
     return 0;
-  }
-
-  function parseBoolean(value) {
-    if (value === true || value === "true" || value === "1" || value === 1) {
-      return true;
-    }
-    if (value === false || value === "false" || value === "0" || value === 0) {
-      return false;
-    }
-    return null;
   }
 
   function getViewportSize() {

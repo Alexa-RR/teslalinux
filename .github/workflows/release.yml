@@ -73,7 +73,6 @@ jobs:
         run: |
           mkdir -p out-dist
           python3 tools/changelog/changelog.py notes "$TAG" --repo "$GITHUB_REPOSITORY" --require-date > out-dist/RELEASE-NOTES.md
-          python3 tools/changelog/changelog.py page --check
           wc -l out-dist/RELEASE-NOTES.md
 
       # sources (git clones of every pinned repo), the pinned r8.jar, cargo's registry and ccache:

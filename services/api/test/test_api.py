@@ -87,6 +87,7 @@ os.environ.update({
     "TESLALINUX_CERT_STATE": os.path.join(TMP, "tls.json"),
     "TESLALINUX_BOOTTIME_STATE": os.path.join(TMP, "boottime.json"),
     "TESLALINUX_BOOT_ID": os.path.join(TMP, "boot_id"),
+    "TESLALINUX_DIST_MANIFEST": os.path.join(TMP, "MANIFEST"),
 })
 with open(os.path.join(TMP, "boot_id"), "w") as f:
     f.write("b2\n")
@@ -144,12 +145,18 @@ class Upstream(unittest.TestCase):
         self.assertEqual(call("displayState", "POST", '{"width": 1088}', "application/json")[0], 500)
         self.assertEqual(call("displayState", "POST", "nonsense", "application/json")[0], 500)
         payload = {"width": 1280, "height": 768, "density": 175, "resolutionPreset": 1, "renderer": 1,
-                   "isResponsive": 1, "isH264": 1, "quality": 80, "refreshRate": 60,
-                   "isRearDisplayEnabled": 0, "isRearDisplayPrioritised": 0}
+                   "isResponsive": 1, "isH264": 1, "quality": 80, "refreshRate": 60}
+        # upstream's frontend also sends the rear-display fields: numbers are accepted and not kept
+        bad_rear = dict(payload, isRearDisplayEnabled="1")
+        self.assertEqual(call("displayState", "POST", json.dumps(bad_rear), "application/json")[0], 500)
+        upstream_payload = dict(payload, isRearDisplayEnabled=1, isRearDisplayPrioritised=1)
+        code, _, body = call("displayState", "POST", json.dumps(upstream_payload), "application/json")
+        self.assertEqual((code, body), (200, b"OK"))
         code, _, body = call("displayState", "POST", json.dumps(payload), "application/json")
         self.assertEqual((code, body), (200, b"OK"))
         ds = json.loads(call("displayState")[2])
         self.assertEqual((ds["width"], ds["height"], ds["renderer"], ds["quality"]), (1280, 768, 1, 80))
+        self.assertEqual((ds["isRearDisplayEnabled"], ds["isRearDisplayPrioritised"]), (0, 0))
         for _ in range(50):
             if os.path.exists(APPLY_LOG):
                 break
@@ -566,6 +573,20 @@ class Settings(unittest.TestCase):
         for k in ("system", "hotspot", "uplink", "internet", "modem", "displayViewers", "gps", "app"):
             self.assertIn(k, st)
         self.assertEqual(st["hotspot"]["ssid"], "Teslalinux")
+
+    def test_teslalinux_release(self):
+        path = os.environ["TESLALINUX_DIST_MANIFEST"]
+        sysst = lambda: json.loads(call("status")[2])["system"]["teslalinux"]  # noqa: E731
+        self.assertIsNone(sysst())  # no MANIFEST: an install from a repository copy
+        try:
+            with open(path, "w") as f:
+                f.write("# teslalinux dist\nformat=1\nversion=20261124-00a574a\nrelease=v0.4.0\nrelease=v9\n")
+            self.assertEqual(sysst(), {"release": "v0.4.0", "version": "20261124-00a574a"})
+            with open(path, "w") as f:
+                f.write("version=local build\nrelease=\n")  # a local pack: no tag; a value that is not a name
+            self.assertEqual(sysst(), {"release": None, "version": None})
+        finally:
+            os.remove(path)
 
     def test_network(self):
         st = json.loads(call("network")[2])

@@ -5,19 +5,27 @@ All notable changes to teslalinux, newest first. The format follows
 [Semantic Versioning](https://semver.org/).
 
 <!--
-This file is the one source of the release notes:
-- the car page's Release Notes (web/js/release-notes/release-notes-data.js) are generated from it by
-  `python3 tools/changelog/changelog.py page`, and tools/debvm/pack-dist.sh refuses to pack a stale
-  copy;
-- the GitHub Release of a tag v* is the section of that version (.github/workflows/release.yml).
-Each "### Topic" is one card on the car page; its first line, in italics, is the card's subtitle.
-"### Platform" is for developers and stays off the car page. Images are shown on GitHub only.
+This file is the one source of the release notes: the GitHub Release of a tag v* is the section of
+that version (`python3 tools/changelog/changelog.py notes`, .github/workflows/release.yml).
+Each "### Topic" starts with its summary, one line in italics. "### Platform" is for developers.
 Date a version's heading ("- YYYY-MM-DD" instead of "- Unreleased") when its tag is pushed.
-Changes not in a release yet go under "## [Unreleased]" (the car page shows it as "Unreleased")
-until that section becomes the next version's.
+Changes not in a release yet go under "## [Unreleased]" until that section becomes the next
+version's.
 -->
 
 ## [Unreleased]
+
+### Tesla Android's old pages are gone
+
+*The car page is the map and Settings.*
+
+- The About, Release Notes and Credits pages and the bar at the bottom are removed. The map's
+  settings button opens Settings, and "Map" goes back.
+- The "Display Type" question (main or rear display) is gone. The page always drives the car's
+  main screen.
+- Settings > Updates shows the Teslalinux version installed.
+- Settings > This device has one line with the version, the licence (GPL-3.0) and a link to the
+  source.
 
 ## [0.4.0] - 2026-11-24
 

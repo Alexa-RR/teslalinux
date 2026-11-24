@@ -140,24 +140,6 @@
   }
 }
 
-/* ---------- the panel shell without its own bar and bottom navigation while Settings shows ---------- */
-#panel-shell.is-settings {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-#panel-shell.is-settings > .app-bar,
-#panel-shell.is-settings > .bottom-nav {
-  display: none;
-}
-
-#panel-shell.is-settings > #panel-content {
-  overflow: hidden;
-}
-
-body:has(#panel-shell.is-settings:not([hidden])) {
-  --cert-warning-bottom: 12px;
-}
-
 /* ---------- base ---------- */
 #page-settings {
   height: 100%;
@@ -1523,26 +1505,11 @@ body:has(#panel-shell.is-settings:not([hidden])) {
   margin-top: 2px;
 }
 
-/* ---------- small credits at the end of This device ---------- */
-#page-settings .credits {
-  margin-top: 36px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-  font-size: 13px;
-  color: var(--ink-3);
-  max-width: 60ch;
-}
-
-#page-settings .credits p {
-  margin: 0;
-}
-
-#page-settings .credits p + p {
-  margin-top: 4px;
-}
-
-#page-settings .credits b {
-  color: var(--ink-2);
+/* ---------- This device > Teslalinux: the source link under the licence line ---------- */
+#page-settings .source-link {
+  color: var(--blue-ink);
+  font-weight: 600;
+  text-decoration: none;
 }
 
 /* ---------- lists, disclosures, package lists, progress, terminal ---------- */

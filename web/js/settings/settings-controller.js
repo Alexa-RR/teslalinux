@@ -18,9 +18,8 @@
       this.audioController = options.audioController;
       this.flavor = options.flavor;
       this.onSystemConfigurationChanged = options.onSystemConfigurationChanged;
-      // teslalinux: the page has no bottom bar: "Map" goes back to the display, "What's new" opens the release notes
+      // teslalinux: the page's only way out: "Map" goes back to the display
       this.onClose = options.onClose || null;
-      this.onOpenPage = options.onOpenPage || null;
 
       this.sidebar = options.sidebar;
       this.content = options.content;
@@ -104,7 +103,7 @@
           },
         },
         // teslalinux: Waze's own updates (GET/POST /api/appUpdate*), the operating system's
-        // (GET/POST /api/systemUpdate) and the release notes
+        // (GET/POST /api/systemUpdate) and the Teslalinux release installed (GET /api/status)
         {
           id: "updates",
           title: "Updates",
@@ -185,14 +184,14 @@
         ["upd.upload", "updates", "Upload an update", "upload apk apkm xapk file manual"],
         ["upd.play", "updates", "Google Play via a token dispenser", "google play dispenser advanced aurora"],
         ["upd.system", "updates", "System updates", "debian apt os system packages security kernel"],
-        ["upd.whatsnew", "updates", "What's new", "release notes changelog version new"],
+        ["upd.version", "updates", "Teslalinux version", "teslalinux version release installed what's new changelog"],
         ["dev.health", "device", "Health", "temperature cpu load memory storage power throttled voltage heat"],
         ["dev.boot", "device", "Start-up time", "boot start startup how long power on fast slow seconds", () => Boolean(this._bootShown())],
         ["dev.restartapp", "device", "Restart Waze", "restart waze frozen stuck reload"],
         ["dev.restart", "device", "Restart the device", "reboot restart pi power"],
         ["dev.info", "device", "Model and serial number", "model serial kernel os about hostname"],
         ["dev.emulate", "device", "Emulate the Model 3 screen", "debug test emulate model 3 tesla car screen resolution scaling pixel ratio dpr computer"],
-        ["dev.about", "device", "About Teslalinux", "about credits version licence license tesla android"],
+        ["dev.about", "device", "About Teslalinux", "about credits version licence license gpl source code github tesla android"],
         ["sound.output", "sound", "Where Waze's sound plays", "audio output speaker pi car both sound"],
         ["sound.pivolume", "sound", "Pi speaker volume", "volume loud quiet pi speaker usb jack", () => this.cache.audio && this.cache.audio.output !== "car"],
         ["sound.browser", "sound", "Sound in the car's browser", "browser audio bluetooth sound"],
@@ -1489,28 +1488,50 @@
      * /api/appUpdate, POST /api/appUpdateSettings, /api/appUpdateCheck, /api/appUpdateUpload), the
      * operating system underneath (apt on Pi OS, apk on Alpine: GET/POST /api/systemUpdate; while a
      * run goes on a progress bar follows the package manager and a terminal streams its output),
-     * and the release notes.
+     * and the Teslalinux release installed (GET /api/status system.teslalinux).
      */
     async _updatesSection(token) {
       const api = this.apiClient;
-      const [info, su] = await Promise.all([api.fetchAppUpdate().catch(() => null), api.fetchSystemUpdate().catch(() => null)]);
-      if (!info && !su) throw new Error("no answer");
+      const [info, su, st] = await Promise.all([
+        api.fetchAppUpdate().catch(() => null),
+        api.fetchSystemUpdate().catch(() => null),
+        api.fetchStatus().catch(() => null),
+      ]);
+      if (!info && !su && !st) throw new Error("no answer");
       if (info) this.cache.appUpdate = info;
       if (su) this.cache.sys = su;
+      if (st) this.cache.status = st;
       const out = [];
       if (info) out.push(...this._wazeUpdateGroups(token, info));
       if (su) out.push(this._systemUpdateGroup(token, su));
-      const notes = TAHtml.releaseNotesData && TAHtml.releaseNotesData.versions;
-      if (this.onOpenPage && notes && notes.length) {
-        const released = notes.find((v) => v.versionName !== "Unreleased") || notes[0];
-        const wn = UI.row({
-          id: "upd.whatsnew",
-          title: "What's new",
-          control: UI.tapValue("Teslalinux " + String(released.versionName).split(" · ")[0].replace(/^v/, ""), () => this.onOpenPage("releaseNotes")),
-        });
-        out.push(UI.group("Release notes", [wn]));
+      if (st) {
+        const v = this._teslalinuxVersion(st);
+        out.push(
+          UI.group("Teslalinux", [
+            UI.row({
+              id: "upd.version",
+              title: "Installed version",
+              detail: v.detail,
+              control: UI.value(v.text),
+            }),
+          ]),
+        );
       }
       return out;
+    }
+
+    /**
+     * The Teslalinux release on this device, from the dist's MANIFEST (GET /api/status
+     * system.teslalinux: release tag and build): {text, detail, short} where short is "0.4.0" or
+     * "" when the device runs a build that is not a release.
+     */
+    _teslalinuxVersion(st) {
+      const t = st && st.system && st.system.teslalinux;
+      const release = t && typeof t.release === "string" ? t.release.replace(/^v/, "") : "";
+      const build = t && typeof t.version === "string" ? t.version : "";
+      if (release) return { text: release, detail: build ? "Build " + build + "." : null, short: release };
+      if (build) return { text: "Build " + build, detail: "Not a release: built from the source.", short: "" };
+      return { text: "Not recorded", detail: "Installed without a release package, so no version is kept.", short: "" };
     }
 
     /** the Waze updates check by themselves (not uploads only, not Google Play while it is off) */
@@ -1826,8 +1847,8 @@
 
     /**
      * The device itself (GET /api/status, /api/deviceInfo, /api/appState): its health, how long it
-     * took to start (host/teslalinux-boottime), restarting Waze and the device, what it is, and the
-     * credits (the page has no bottom bar).
+     * took to start (host/teslalinux-boottime), restarting Waze and the device, what it is, and
+     * Teslalinux's version, licence and source.
      */
     async _deviceSection(token) {
       const api = this.apiClient;
@@ -1899,17 +1920,16 @@
       );
       out.push(this._debugGroup());
 
-      // the credits at the end of the page (no bottom bar on Settings; About and Credits stay for the other pages)
-      const notes = TAHtml.releaseNotesData && TAHtml.releaseNotesData.versions;
-      const released = notes && (notes.find((v) => v.versionName !== "Unreleased") || notes[0]);
-      const version = released ? String(released.versionName).split(" · ")[0].replace(/^v/, "") : "";
+      // what Teslalinux is, its licence (web/ is Tesla Android's frontend, GPL-3.0) and where its source is
+      const version = this._teslalinuxVersion(st).short;
       out.push(
-        h(
-          "footer",
-          { class: "credits", "data-id": "dev.about" },
-          h("p", null, h("b", null, "Teslalinux" + (version ? " " + version : "")), ". Waze in the car's browser, from a Raspberry Pi."),
-          h("p", null, "Based on Tesla Android (its web app, protocols and car integration). Apps run on the Android Translation Layer. Text in Inter (SIL Open Font License), icons from Material Icons (Apache License 2.0)."),
-        ),
+        UI.group("Teslalinux", [
+          UI.row({
+            id: "dev.about",
+            title: ["Teslalinux", version].filter(Boolean).join(" ") + " · GPL-3.0 · based on Tesla Android",
+            detail: h("a", { class: "source-link", href: "https://github.com/Alexa-RR/teslalinux", target: "_blank", rel: "noopener" }, "github.com/Alexa-RR/teslalinux"),
+          }),
+        ]),
       );
       return out;
     }
@@ -3006,8 +3026,6 @@
         isH264: utils.toInt(raw.isH264, 0),
         refreshRate: utils.toInt(raw.refreshRate, 30),
         quality: utils.toInt(raw.quality, 90),
-        isRearDisplayEnabled: utils.toInt(raw.isRearDisplayEnabled, 0),
-        isRearDisplayPrioritised: utils.toInt(raw.isRearDisplayPrioritised, 0),
       };
     }
 

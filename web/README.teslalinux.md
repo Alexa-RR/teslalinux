@@ -37,8 +37,8 @@ Changes from upstream:
   interface's Graphite panels (no Tesla assets), English only with an RTL-ready layout (logical
   properties). Upstream's settings routes are kept and used as before; the new routes are in
   `services/api/api.py`.
-  * The frame: no bottom bar on Settings (the map's gear opens it, "Map" goes back; the other pages
-    keep it); a sticky header with the section's title, search across every setting (by title and the
+  * The frame: Settings is the page's only page besides the map (see "Pages" below): the map's
+    settings button opens it, "Map" goes back; a sticky header with the section's title, search across every setting (by title and the
     words a driver might use; a result opens the section and highlights the row; settings of the other
     Waze interface are not offered), a busy line and a "Waze is restarting" pill; a rail with each
     section's live value and a dot where something needs the driver. The page follows the car
@@ -80,34 +80,36 @@ Changes from upstream:
     under Advanced; `GET /api/appUpdate`, `POST /api/appUpdateSettings`, `/api/appUpdateCheck`,
     `/api/appUpdateUpload?name=`, unbuffered in nginx), the system's (apt or apk: check, two-tap
     install, the package manager's progress and a terminal streaming the run, `?log=OFFSET`; restart
-    when needed; `GET/POST /api/systemUpdate`, `host/teslalinux-system-update`), and "What's new",
-    which opens the Release Notes page.
+    when needed; `GET/POST /api/systemUpdate`, `host/teslalinux-system-update`), and the Teslalinux
+    version installed (`system.teslalinux` in `GET /api/status`, from the dist's MANIFEST; "Not
+    recorded" for an install without a release package).
   * **This device**: health (temperature, power or heat problems, load, memory, storage, running time),
     the start-up (`system.boot` in `GET /api/status`, measured each boot by `host/teslalinux-boottime`:
     ready for the car, Waze's map ready, the phases on one time axis, the previous starts), restart
     Waze (`GET /api/appState`, `POST /api/appRestart`, `host/teslalinux-restart-app`) or the device,
-    what it is, and the credits.
+    what it is, and one Teslalinux row: the version, GPL-3.0 (the licence of this web app), "based
+    on Tesla Android", and the link to the source (github.com/Alexa-RR/teslalinux).
   * Removed: Rear Display (a navigation app on the main screen), the Device tiles CarPlay Module and
     Release type; Android wording in GPS.
   * The page's own text fields count as "keyboard open" for `js/keyboard/device-keyboard.js`: typing in
     them neither resizes the app's display nor hands the keyboard to the app.
 * Branding: the page is **Teslalinux**, a fork of Tesla Android, and says so. Title, favicon and
-  home-screen icon (`assets/teslalinux-logo.svg` + `.png`, our own mark; upstream's logo is removed),
-  the About page (what Teslalinux is, that it is a fork of Tesla Android and how it differs, and the
-  upstream web app version it is based on, in place of the 2nd-generation hardware notice), the
-  Donations tab renamed "Credits" (it credits Tesla Android and keeps upstream's donation QR, labelled
-  as supporting the original project), a line on the Release Notes page crediting Tesla Android
-  for the page, and "Teslalinux" in the user-facing strings of `index.html`,
-  `js/settings/settings-controller.js`, `js/shell/shell-controller.js` and the audio media session
-  title (`js/audio/audioplayback.js`). The Settings "Release type" note no longer points at
-  beta.teslaandroid.com. The `persist.tesla-android.*` configuration keys are protocol and stay.
-* Release Notes: the page, `js/release-notes/release-notes-controller.js` (unchanged) and its
-  styles are Tesla Android's; the data, `js/release-notes/release-notes-data.js`, now holds
-  Teslalinux's own releases instead of upstream's. It is generated from the repository's
-  `CHANGELOG.md` by `tools/changelog/changelog.py page` (one card per "###" topic, its italic first
-  line as the subtitle, plain text; the developers' "Platform" part and the images are left out),
-  and `tools/debvm/pack-dist.sh` refuses to pack a stale copy. Upstream's own release history is
-  at github.com/tesla-android.
+  home-screen icon (`assets/teslalinux-logo.png`, our own mark; upstream's logo is removed),
+  Settings > This device's Teslalinux row (above), and "Teslalinux" in the user-facing strings of
+  `index.html`, `js/settings/settings-controller.js`, `js/shell/shell-controller.js` and the audio
+  media session title (`js/audio/audioplayback.js`). The Settings "Release type" note no longer points
+  at beta.teslaandroid.com. The `persist.tesla-android.*` configuration keys are protocol and stay.
+* Pages: two, the map (`#home-shell`) and Settings (`#page-settings`); `js/shell/shell-controller.js`
+  `showMap()` / `showSettings()` switch them (the display pauses while Settings shows). Removed:
+  upstream's About, Release Notes and Donations pages, the app bar and the bottom bar between them,
+  their styles in `css/app.css`, `js/release-notes/`, `assets/donations-qr.svg` and
+  `TAHtml.constants.APP_VERSION`. Upstream's release history is at github.com/tesla-android.
+* Main display only: upstream's "Display Type" dialog (main or rear display, kept in `localStorage`)
+  and its rear-display sizing are removed from `js/display/display-controller.js` (with
+  `DISPLAY_PREF_KEYS` and `utils.parseBoolean` in `js/core/shared.js`); the page always sizes the
+  stream from its own window. `/api/displayState` still carries `isRearDisplayEnabled` and
+  `isRearDisplayPrioritised` for upstream's frontend, always 0; a POST may leave them out
+  (docs/UPSTREAM-NOTES.md).
 * No system update check: `js/home/home-controller.js` `checkForUpdates()` no longer compares the app
   version with the latest GitHub release of tesla-android/android-raspberry-pi (those are Tesla
   Android system images; Teslalinux updates apps from Settings > App updates), and

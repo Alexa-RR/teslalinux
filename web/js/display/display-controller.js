@@ -14,10 +14,6 @@
       this.onResizeModeChange =
         typeof options.onResizeModeChange === "function" ? options.onResizeModeChange : null;
 
-      this.dialog = options.dialog;
-      this.dialogMainButton = options.dialogMainButton;
-      this.dialogRearButton = options.dialogRearButton;
-
       this.remoteDisplayState = null;
 
       this.display = {
@@ -29,11 +25,9 @@
         mode: "initial",
         token: 0,
         timerId: null,
-        pendingViewSize: null,
         cooldownState: null,
       };
 
-      this._dialogWired = false;
       this._viewportWatcherStarted = false;
       this.isPaused = false;
 
@@ -41,8 +35,6 @@
     }
 
     async initialize() {
-      this._wireDialogEvents();
-
       const remoteDisplayState = this._normalizeRemoteDisplayState(
         await this.apiClient.fetchDisplayState(),
       );
@@ -118,7 +110,6 @@
       }
 
       const token = ++this.resize.token;
-      this.resize.pendingViewSize = viewSize;
 
       let remoteDisplayState;
       try {
@@ -136,45 +127,18 @@
 
       this.remoteDisplayState = remoteDisplayState;
 
-      const isRearDisplayEnabled = remoteDisplayState.isRearDisplayEnabled === 1;
-      const isRearDisplayPrioritised = remoteDisplayState.isRearDisplayPrioritised === 1;
-      const isPrimaryDisplay = isRearDisplayEnabled
-        ? this._readPrimaryDisplayPreference()
-        : true;
+      // teslalinux: the page is always the car's main display. Upstream asked once whether it runs
+      // on a rear display (the Display Type dialog) and then kept the device's size there; this
+      // device drives the main screen only (/api/displayState reports the rear display off)
+      const sizeForCalculation = remoteDisplayState.isResponsive === 1
+        ? viewSize
+        : constants.DEFAULT_NON_RESPONSIVE_SIZE;
 
-      if (isPrimaryDisplay === null && isRearDisplayEnabled) {
-        this._setResizeMode("display_type_selection");
-        this._showDisplayTypeSelectionDialog();
-        return;
-      }
-
-      this._hideDisplayTypeSelectionDialog();
-
-      let desiredSize;
-
-      if (isPrimaryDisplay === true || (isPrimaryDisplay === false && isRearDisplayPrioritised)) {
-        const sizeForCalculation = remoteDisplayState.isResponsive === 1
-          ? viewSize
-          : constants.DEFAULT_NON_RESPONSIVE_SIZE;
-
-        desiredSize = this._calculateOptimalSize(sizeForCalculation, {
-          resolutionPreset: remoteDisplayState.resolutionPreset,
-          isH264: remoteDisplayState.isH264 === 1,
-          isHeadless: (remoteDisplayState.isHeadless ?? 1) === 1,
-        });
-      } else {
-        desiredSize = {
-          width: remoteDisplayState.width,
-          height: remoteDisplayState.height,
-        };
-
-        this._setNormalState({
-          viewSize,
-          adjustedSize: desiredSize,
-          remoteDisplayState,
-        });
-        return;
-      }
+      const desiredSize = this._calculateOptimalSize(sizeForCalculation, {
+        resolutionPreset: remoteDisplayState.resolutionPreset,
+        isH264: remoteDisplayState.isH264 === 1,
+        isHeadless: (remoteDisplayState.isHeadless ?? 1) === 1,
+      });
 
       this._setResizeMode("resize_cooldown");
       this.resize.cooldownState = {
@@ -186,8 +150,6 @@
         isResponsive: remoteDisplayState.isResponsive === 1,
         quality: remoteDisplayState.quality,
         refreshRate: remoteDisplayState.refreshRate,
-        isRearDisplayEnabled,
-        isRearDisplayPrioritised,
       };
 
       this.resize.timerId = global.setTimeout(() => {
@@ -219,8 +181,6 @@
         isH264: isH264 ? 1 : 0,
         quality: cooldown.quality,
         refreshRate: cooldown.refreshRate,
-        isRearDisplayEnabled: cooldown.isRearDisplayEnabled ? 1 : 0,
-        isRearDisplayPrioritised: cooldown.isRearDisplayPrioritised ? 1 : 0,
       };
 
       try {
@@ -315,7 +275,6 @@
       this.isPaused = nextPaused;
 
       if (nextPaused) {
-        this._hideDisplayTypeSelectionDialog();
         this._clearResizeTimer();
         this.rendererManager.closeDisplaySocket();
       } else {
@@ -378,79 +337,6 @@
       global.requestAnimationFrame(rafCheck);
     }
 
-    _wireDialogEvents() {
-      if (this._dialogWired) {
-        return;
-      }
-      this._dialogWired = true;
-
-      if (this.dialogMainButton) {
-        this.dialogMainButton.addEventListener("click", () => {
-          this._onDisplayTypeSelectionFinished(true);
-        });
-      }
-
-      if (this.dialogRearButton) {
-        this.dialogRearButton.addEventListener("click", () => {
-          this._onDisplayTypeSelectionFinished(false);
-        });
-      }
-    }
-
-    _onDisplayTypeSelectionFinished(isPrimaryDisplay) {
-      this._storePrimaryDisplayPreference(isPrimaryDisplay);
-      this._hideDisplayTypeSelectionDialog();
-
-      const pendingViewSize = this.resize.pendingViewSize || utils.getViewportSize();
-      this.triggerResize(pendingViewSize);
-    }
-
-    _showDisplayTypeSelectionDialog() {
-      if (this.dialog) {
-        this.dialog.hidden = false;
-      }
-    }
-
-    _hideDisplayTypeSelectionDialog() {
-      if (this.dialog) {
-        this.dialog.hidden = true;
-      }
-    }
-
-    _readPrimaryDisplayPreference() {
-      for (let index = 0; index < constants.DISPLAY_PREF_KEYS.length; index += 1) {
-        const key = constants.DISPLAY_PREF_KEYS[index];
-        const raw = global.localStorage.getItem(key);
-        if (raw === null) {
-          continue;
-        }
-
-        const parsed = utils.parseBoolean(raw);
-        if (parsed !== null) {
-          return parsed;
-        }
-
-        try {
-          const parsedJson = JSON.parse(raw);
-          const parsedFromJson = utils.parseBoolean(parsedJson);
-          if (parsedFromJson !== null) {
-            return parsedFromJson;
-          }
-        } catch (_error) {
-          // no-op
-        }
-      }
-
-      return null;
-    }
-
-    _storePrimaryDisplayPreference(value) {
-      const encoded = value ? "true" : "false";
-      for (let index = 0; index < constants.DISPLAY_PREF_KEYS.length; index += 1) {
-        global.localStorage.setItem(constants.DISPLAY_PREF_KEYS[index], encoded);
-      }
-    }
-
     _normalizeRemoteDisplayState(raw) {
       return {
         width: Math.max(1, utils.toInt(raw.width, 1024)),
@@ -466,8 +352,6 @@
         isH264: utils.toInt(raw.isH264, 0),
         refreshRate: utils.toInt(raw.refreshRate, 30),
         quality: utils.toInt(raw.quality, 90),
-        isRearDisplayEnabled: utils.toInt(raw.isRearDisplayEnabled, 0),
-        isRearDisplayPrioritised: utils.toInt(raw.isRearDisplayPrioritised, 0),
       };
     }
 

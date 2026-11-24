@@ -215,6 +215,9 @@ GET `configuration`, `displayState`, `deviceInfo`, `health` (polled every 30 s o
 POST `displayState` `{width,height,density,resolutionPreset,renderer,isResponsive,isH264,quality,
 refreshRate,isRearDisplayEnabled,isRearDisplayPrioritised}`, `gpsState`, `browserAudioState`,
 `browserAudioVolume`, `softAp*`, `offlineMode*`, `overrideReleaseType`, `overrideOtaUrl`.
+Teslalinux drives the car's main screen only: GET `displayState` reports `isRearDisplayEnabled` and
+`isRearDisplayPrioritised` as 0, and a POST may leave them out (when sent they must be numbers, as
+upstream checks, and are not kept). Our page has no Display Type dialog.
 
 teslalinux only (no upstream counterpart): `/api/gates*` (PalGate gates, `docs/GATES.md`), JSON,
 forwarded by api.py to `services/gates/gates.py`: GET `gates`, `gatesLink`, `gatesEvents?after=N&wait=S`

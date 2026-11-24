@@ -17,14 +17,8 @@
       displayRoot: document.getElementById("display-root"),
       displayLoading: document.getElementById("display-loading"),
       touchLayer: document.getElementById("touch-layer"),
-      displayTypeDialog: document.getElementById("display-type-dialog"),
-      displayTypeMainButton: document.getElementById("main-display-button"),
-      displayTypeRearButton: document.getElementById("rear-display-button"),
 
       homeShell: document.getElementById("home-shell"),
-      panelShell: document.getElementById("panel-shell"),
-      appTitle: document.getElementById("app-title"),
-      navButtons: Array.from(document.querySelectorAll(".bottom-nav-button")),
       connectivityBanner: document.getElementById("connectivity-banner"),
       connectivityBannerText: document.getElementById("connectivity-banner-text"),
 
@@ -32,23 +26,10 @@
       homeUpdateButton: document.getElementById("home-update-button"),
       homeSettingsButton: document.getElementById("home-settings-button"),
 
-      releaseVersions: document.getElementById("release-versions"),
-      releaseDetails: document.getElementById("release-details"),
-
       settingsSidebar: document.getElementById("settings-sidebar"),
       settingsContent: document.getElementById("settings-content"),
-
-      pageAbout: document.getElementById("page-about"),
-      pageReleaseNotes: document.getElementById("page-release-notes"),
-      pageDonations: document.getElementById("page-donations"),
       pageSettings: document.getElementById("page-settings"),
-
-      appVersion: document.querySelectorAll("[data-app-version]"),
     };
-
-    for (let index = 0; index < elements.appVersion.length; index += 1) {
-      elements.appVersion[index].textContent = TAHtml.constants.APP_VERSION;
-    }
 
     const audioController = new TAHtml.AudioController({
       audioWebsocketUrl: flavor.audioWebSocket,
@@ -113,9 +94,6 @@
       apiClient,
       rendererManager,
       flavor,
-      dialog: elements.displayTypeDialog,
-      dialogMainButton: elements.displayTypeMainButton,
-      dialogRearButton: elements.displayTypeRearButton,
       onResizeModeChange: (mode) => {
         latestResizeMode = mode;
 
@@ -209,11 +187,6 @@
       touchscreenController.restartSocket();
     });
 
-    const releaseNotesController = new TAHtml.ReleaseNotesController({
-      versionsContainer: elements.releaseVersions,
-      detailsContainer: elements.releaseDetails,
-    });
-
     const homeController = new TAHtml.HomeController({
       apiClient,
       audioController,
@@ -221,9 +194,9 @@
       updateButton: elements.homeUpdateButton,
       settingsButton: elements.homeSettingsButton,
       onSettingsRequested: () => {
-        // teslalinux: the gear opens Settings (it has no bottom bar; its "Map" button comes back)
+        // teslalinux: the settings button opens Settings; its "Map" button comes back
         if (shellController) {
-          shellController.setPage("settings");
+          shellController.showSettings();
         }
       },
     });
@@ -237,10 +210,7 @@
       sidebar: elements.settingsSidebar,
       content: elements.settingsContent,
       onClose: () => {
-        if (shellController) shellController.setPage("home");
-      },
-      onOpenPage: (pageId) => {
-        if (shellController) shellController.setPage(pageId);
+        if (shellController) shellController.showMap();
       },
       onSystemConfigurationChanged: (configuration) => {
         homeController.applySystemConfiguration(configuration);
@@ -255,17 +225,8 @@
       apiClient,
       displayController,
       settingsController,
-      releaseNotesController,
       homeShell: elements.homeShell,
-      panelShell: elements.panelShell,
-      panelViews: {
-        about: elements.pageAbout,
-        releaseNotes: elements.pageReleaseNotes,
-        donations: elements.pageDonations,
-        settings: elements.pageSettings,
-      },
-      appTitle: elements.appTitle,
-      navButtons: elements.navButtons,
+      settingsPage: elements.pageSettings,
       connectivityBanner: elements.connectivityBanner,
       connectivityBannerText: elements.connectivityBannerText,
     });

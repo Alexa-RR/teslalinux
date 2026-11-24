@@ -145,8 +145,7 @@ def main():
                         ("/css/app.css", "text/css; charset=utf-8"),
                         ("/fonts/Roboto-Regular.ttf", "font/ttf"),
                         ("/fonts/MaterialIcons-Regular.otf", "font/otf"),
-                        ("/assets/donations-qr.svg", "image/svg+xml"),
-                        ("/assets/tesla-android-logo.png", "image/png")):
+                        ("/assets/teslalinux-logo.png", "image/png")):
         code, h, _ = request(path)
         check("%s -> %s" % (path, ctype), code == 200 and h.get("content-type") == ctype, "%s %s" % (code, h.get("content-type")))
 

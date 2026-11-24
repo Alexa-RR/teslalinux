@@ -28,8 +28,6 @@
   <script defer src="./js/gps/gps-controller.js"></script>
   <script defer src="./js/speech/speech.js"></script>
   <script defer src="./js/audio/audio-controller.js"></script>
-  <script defer src="./js/release-notes/release-notes-data.js"></script>
-  <script defer src="./js/release-notes/release-notes-controller.js"></script>
   <script defer src="./js/settings/settings-ui.js"></script>
   <!-- teslalinux: PalGate gates (the map button, its tray and notices; Settings > Gates; README.teslalinux.md) -->
   <link rel="stylesheet" href="./js/gates/gates.css" />
@@ -90,114 +88,22 @@
     </div>
   </section>
 
-  <section id="panel-shell" hidden>
-    <header class="app-bar">
-      <h1 id="app-title">About</h1>
-    </header>
-
-    <main id="panel-content">
-      <section id="page-about" class="panel-page">
-        <div class="page-center">
-          <div class="about-content">
-            <img class="about-logo" src="./assets/teslalinux-logo.svg" alt="Teslalinux logo" />
-            <div class="about-name">Teslalinux</div>
-            <div class="about-message">
-              Android apps in your Tesla's browser, served from a Raspberry Pi with an LTE modem.
-            </div>
-            <div class="about-fork">
-              Teslalinux is a fork of Tesla Android (github.com/tesla-android). Tesla Android runs
-              full Android on the Pi; Teslalinux runs Linux and runs each app under the Android
-              Translation Layer. This page, its display, touch, GPS and audio protocols come from
-              Tesla Android.
-            </div>
-            <div class="about-version-label">Based on the Tesla Android web app</div>
-            <div class="about-version-value" data-app-version></div>
-          </div>
+  <!-- teslalinux: the settings page, the page's only one besides the map (css/settings.css, js/settings/;
+       README.teslalinux.md): the map's settings button opens it, its "Map" button goes back -->
+  <section id="page-settings" hidden>
+    <div class="st-app" id="settings-app" data-view="section">
+      <header class="bar">
+        <button class="bar-back" id="settings-back" type="button"><span class="icon flip" aria-hidden="true">chevron_left</span><span>Map</span></button>
+        <h1 class="bar-title" id="settings-title">Settings</h1>
+        <div class="bar-end">
+          <span class="bar-state" id="settings-bar-state" role="status"><span class="spin"></span><span id="settings-bar-state-text">Waze is restarting</span></span>
+          <label class="search" id="settings-search"><span class="icon" aria-hidden="true">search</span><input id="settings-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search settings" aria-label="Search settings" /><button class="search-clear" id="settings-search-clear" type="button" aria-label="Clear"><span class="icon" aria-hidden="true">close</span></button></label>
         </div>
-      </section>
-
-      <section id="page-release-notes" class="panel-page" hidden>
-        <div class="release-upstream-note">
-          What changed in each Teslalinux release. This page comes from Tesla Android, the project Teslalinux is forked from.
-        </div>
-        <div class="release-layout">
-          <div id="release-versions"></div>
-          <div id="release-details"></div>
-        </div>
-      </section>
-
-      <section id="page-donations" class="panel-page" hidden>
-        <div class="page-center">
-          <div class="donation-content">
-            <div class="donation-text">
-              Teslalinux is built on Tesla Android (github.com/tesla-android): its web app, its
-              protocols and its car integration. To support the original project, donate to
-              Tesla Android:
-            </div>
-            <img
-              class="donation-qr"
-              alt="Tesla Android donations QR code"
-              src="./assets/donations-qr.svg"
-            />
-          </div>
-        </div>
-      </section>
-
-      <!-- teslalinux: the settings page (css/settings.css, js/settings/; README.teslalinux.md) -->
-      <section id="page-settings" class="panel-page" hidden>
-        <div class="st-app" id="settings-app" data-view="section">
-          <header class="bar">
-            <button class="bar-back" id="settings-back" type="button"><span class="icon flip" aria-hidden="true">chevron_left</span><span>Map</span></button>
-            <h1 class="bar-title" id="settings-title">Settings</h1>
-            <div class="bar-end">
-              <span class="bar-state" id="settings-bar-state" role="status"><span class="spin"></span><span id="settings-bar-state-text">Waze is restarting</span></span>
-              <label class="search" id="settings-search"><span class="icon" aria-hidden="true">search</span><input id="settings-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search settings" aria-label="Search settings" /><button class="search-clear" id="settings-search-clear" type="button" aria-label="Clear"><span class="icon" aria-hidden="true">close</span></button></label>
-            </div>
-            <div class="busyline" id="settings-busyline"></div>
-          </header>
-          <nav class="rail" id="settings-sidebar" aria-label="Settings sections"></nav>
-          <main class="pane" id="settings-pane"><div class="content" id="settings-content"></div></main>
-        </div>
-      </section>
-    </main>
-
-    <nav class="bottom-nav" aria-label="Main navigation">
-      <button class="bottom-nav-button" data-page="home" type="button">
-        <span class="material-symbols-rounded bottom-nav-icon">code</span>
-        <span class="bottom-nav-label">Teslalinux</span>
-      </button>
-      <button class="bottom-nav-button" data-page="about" type="button">
-        <span class="material-symbols-rounded bottom-nav-icon">info_outline</span>
-        <span class="bottom-nav-label">About</span>
-      </button>
-      <button class="bottom-nav-button" data-page="releaseNotes" type="button">
-        <span class="material-symbols-rounded bottom-nav-icon">notes</span>
-        <span class="bottom-nav-label">Release Notes</span>
-      </button>
-      <button class="bottom-nav-button" data-page="donations" type="button">
-        <span class="material-symbols-rounded bottom-nav-icon">favorite</span>
-        <span class="bottom-nav-label">Credits</span>
-      </button>
-      <button class="bottom-nav-button" data-page="settings" type="button">
-        <span class="material-symbols-rounded bottom-nav-icon">settings</span>
-        <span class="bottom-nav-label">Settings</span>
-      </button>
-    </nav>
-  </section>
-
-  <div id="display-type-dialog" hidden>
-    <div class="dialog-card">
-      <h2>Display Type</h2>
-      <p>
-        Are you using a rear display?<br />
-        Certain features won't function on the main screen in motion.<br />
-        You can change the selection in Teslalinux Settings.
-      </p>
-      <div class="dialog-actions">
-        <button id="main-display-button" class="primary" type="button">MAIN DISPLAY</button>
-        <button id="rear-display-button" type="button">REAR DISPLAY</button>
-      </div>
+        <div class="busyline" id="settings-busyline"></div>
+      </header>
+      <nav class="rail" id="settings-sidebar" aria-label="Settings sections"></nav>
+      <main class="pane" id="settings-pane"><div class="content" id="settings-content"></div></main>
     </div>
-  </div>
+  </section>
 </body>
 </html>
