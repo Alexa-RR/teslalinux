@@ -59,6 +59,10 @@ version's.
 - The pages the device shows after you allow Teslalinux on Cloudflare (choose a domain, set up,
   not set up) now use the settings page's own look, by day and by night: your domains as rows
   with a "Use this" button, and what the device set up as a list.
+- Settings > Grok > Connect works like linking PalGate: the code to scan with a phone on the car's
+  Wi-Fi, the steps, a countdown, and "New code" when it runs out. A spinner holds the code's place
+  while it is made, instead of an empty white box. "Continue with Cloudflare here" signs in on this
+  screen.
 
 ### Platform
 

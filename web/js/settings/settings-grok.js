@@ -75,10 +75,7 @@
     + CF(".grok-cf-btn:active:not(:disabled)") + "{background:#c85a0a;box-shadow:inset 0 2px 4px rgba(0,0,0,.25);transform:translateY(1px)}"
     + CF(".grok-cf-btn:focus-visible") + "{outline:3px solid #fbad41;outline-offset:3px}"
     + CF(".grok-cf-btn:disabled") + "{background:#b9b9b9;color:#fff;box-shadow:none;cursor:not-allowed}"
-    + CF(".grok-cf-btn.is-busy") + "{background:#c85a0a}"
-    + CF(".grok-cf-wait") + "{display:flex;gap:20px;align-items:center;margin-top:16px}"
-    + CF(".grok-cf-wait .gates-qr") + "{flex:0 0 auto;width:180px;height:180px}"
-    + CF(".grok-cf-wait[hidden]") + "{display:none}";
+    + CF(".grok-cf-btn.is-busy") + "{background:#c85a0a}";
 
   function cfButton(label, onClick, wide) {
     const doc = global.document;
@@ -94,29 +91,71 @@
    * sends the browser back to the device, which sets everything up and revokes the sign-in; this sheet
    * watches /api/grok for the result.
    */
+  // Laid out like Settings > Gates > Link (js/gates/gates.css: .gates-link, .gates-qr, .gates-steps,
+  // .gates-link-status, .gates-fine): the code to scan on the left, the steps and the sign-in's state on
+  // the right. The sign-in starts as the sheet opens; until its code arrives the code's place shows a
+  // spinner on the page's own colours, never an empty white box.
+  const QR_WAIT_STYLE = "#page-settings .gates-qr.grok-qr-wait{display:grid;place-items:center;background:var(--track);box-shadow:none}"
+    + "#page-settings .gates-qr.grok-qr-wait .spin{width:36px;height:36px;border-width:3.5px}"
+    + "#page-settings .grok-cf-here{margin-top:4px}";
+
   async function connectSheet(ctrl, token, st) {
-    const domainIn = h("input", { id: "grok-c-domain", type: "text", placeholder: "Any of your domains", class: "settings-field-input",
-      autocomplete: "off", spellcheck: "false", autocapitalize: "off", autocorrect: "off" });
-    const status = h("div", { class: "field-help", "aria-live": "polite" });
-    const qr = h("div", { class: "gates-qr", "aria-label": "Sign-in link for a phone" });
-    // the code and the waiting note appear once the sign-in has started, side by side
-    const wait = h("div", { class: "grok-cf-wait", hidden: "" }, qr, status);
-    const go = cfButton("Continue with Cloudflare", null, true);
+    const doc = global.document;
+    if (!doc.getElementById("grok-qr-style")) doc.head.append(h("style", { id: "grok-qr-style" }, QR_WAIT_STYLE));
+    const status = h("div", { class: "gates-link-status", role: "status", "aria-live": "polite" });
+    const qr = h("div", { class: "gates-qr", "aria-label": "Sign-in link for a phone on this car's Wi-Fi" });
+    const again = UI.button("New code", null, "btn--primary", "refresh");
+    again.hidden = true;
+    const here = cfButton("Continue with Cloudflare here", null, false);
+    here.classList.add("grok-cf-here");
+    here.disabled = true;
+    const steps = h(
+      "ol",
+      { class: "gates-steps" },
+      h("li", null, "Join this car's Wi-Fi with your phone."),
+      h("li", null, "Scan this code and sign in to Cloudflare."),
+      h("li", null, "Allow Teslalinux. The device sets everything up by itself."),
+    );
     const sheet = UI.openSheet({
       title: "Connect Cloudflare",
-      body: [
-        h("p", { class: "group-note" }, "Sign in to Cloudflare and allow Teslalinux. The device then makes the tunnel, the address and the "
-          + "Access sign-in on your domain, and gives the permission back right away: it keeps only the tunnel's token."),
-        h("div", { class: "field" }, h("label", { for: "grok-c-domain" }, "Domain (optional)"), domainIn,
-          h("div", { class: "field-help" }, "Empty: the only domain the sign-in allows, or you pick one after.")),
-        go, wait,
-      ],
-      actions: [h("button", { class: "btn", type: "button", onclick: () => sheet.finish(null) }, "Close")],
+      body: [h("div", { class: "gates-link" }, qr, h("div", null, steps, status, again, here)),
+        h("p", { class: "gates-fine" }, "Cloudflare lets the device in once: it makes the tunnel, the address and the Access sign-in on "
+          + "your domain, then gives the permission back. Only the tunnel's token stays on the device. With several domains, "
+          + "you pick one after signing in.")],
     });
     let timer = null;
-    const since = Date.now() / 1000;
+    let tick = null;
+    let url = null;
+    let deadline = 0;
+    let since = 0;
+    const stop = () => {
+      global.clearTimeout(timer);
+      global.clearInterval(tick);
+    };
+    const loading = (text) => {
+      qr.classList.add("grok-qr-wait");
+      qr.classList.remove("is-stale");
+      qr.replaceChildren(h("span", { class: "spin" }));
+      status.className = "gates-link-status is-wait";
+      status.replaceChildren(h("span", { class: "spin" }), h("span", null, text));
+    };
+    const failed = (text) => {
+      stop();
+      qr.classList.add("is-stale");
+      status.className = "gates-link-status is-err";
+      status.replaceChildren(icon("error_outline"), h("span", null, text));
+      again.hidden = false;
+      here.disabled = true;
+    };
+    const countdown = () => {
+      const s = Math.max(0, Math.round(deadline - Date.now() / 1000));
+      if (s === 0) return failed("The code expired. Make a new one.");
+      status.className = "gates-link-status is-wait";
+      status.replaceChildren(h("span", { class: "spin" }),
+        h("span", null, "Waiting for the sign-in… " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + " left"));
+    };
     const watch = async () => {
-      let s;
+      let s = null;
       try {
         s = await API.get();
       } catch (_e) {
@@ -124,38 +163,45 @@
       }
       const last = s && s.connect && s.connect.last;
       if (last && last.at >= since) {
-        status.textContent = last.message;
-        status.className = "field-help " + (last.ok ? "is-ok" : "field-err");
-        if (last.ok) return;
+        if (!last.ok) return failed(last.message);
+        stop();
+        status.className = "gates-link-status is-ok";
+        status.replaceChildren(icon("check_circle"), h("span", null, last.message));
+        global.setTimeout(() => sheet.finish(true), 1500);
+        return;
       }
       timer = global.setTimeout(watch, 2000);
     };
-    go.addEventListener("click", async () => {
-      go.disabled = true;
-      go.classList.add("is-busy");
+    const start = async () => {
+      stop();
+      again.hidden = true;
+      here.disabled = true;
+      loading("Making a code…");
       try {
-        const out = await API.post("grokOAuthStart", { domain: domainIn.value.trim() });
-        global.open(out.url, "_blank", "noopener");
-        qr.hidden = !out.qr;
+        const out = await API.post("grokOAuthStart", { domain: "" });
+        since = Date.now() / 1000 - 1;
+        url = out.url;
+        deadline = Date.now() / 1000 + (out.expiresIn || 600);
+        qr.classList.remove("grok-qr-wait");
         if (out.qr) qr.innerHTML = out.qr;
-        wait.hidden = false;
-        status.className = "field-help";
-        status.textContent = "Cloudflare's page opened. On a phone on this car's Wi-Fi, scan the code instead. "
-          + "The link works for " + Math.round(out.expiresIn / 60) + " minutes.";
-        go.textContent = "Continue with Cloudflare again";
-        global.clearTimeout(timer);
-        watch();
+        else qr.replaceChildren(h("span", { class: "gates-fine" }, "No code: use the button."));
+        here.disabled = false;
+        countdown();
+        tick = global.setInterval(countdown, 1000);
+        timer = global.setTimeout(watch, 2000);
       } catch (e) {
-        qr.hidden = true;
-        wait.hidden = false;
-        status.className = "field-help field-err";
-        status.textContent = e.userMessage || String(e.message || e);
+        qr.classList.remove("grok-qr-wait");
+        qr.replaceChildren();
+        failed(e.userMessage || String(e.message || e));
       }
-      go.classList.remove("is-busy");
-      go.disabled = false;
+    };
+    again.addEventListener("click", start);
+    here.addEventListener("click", () => {
+      if (url) global.open(url, "_blank", "noopener");
     });
+    start();
     await sheet;
-    global.clearTimeout(timer);
+    stop();
     if (token === ctrl._renderToken) ctrl._rerender();
   }
 
