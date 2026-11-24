@@ -590,6 +590,9 @@
         if (modem && modem.simProblem) {
           out.push({ icon: "sim_card_alert", title: "SIM card problem", detail: modem.simProblem, section: "connections", go: "net.internet" });
         }
+        if (this._stuckStick(modem, st.time)) {
+          out.push({ icon: "usb", title: "LTE stick stuck as a USB drive", detail: "The USB power is switched off and on to start it.", section: "connections", go: "net.internet" });
+        }
         const state = st.app && st.app.state;
         if (state && state !== "active" && APP_WORDS[state]) {
           out.push({
@@ -918,6 +921,23 @@
     }
 
     /**
+     * teslalinux-uplink found the LTE stick stuck in its USB storage mode (it starts as a USB drive and
+     * usb_modeswitch did not switch it): what happens about it, in plain words; null while it is not stuck
+     * (or only just appeared, when a good switch takes a second)
+     */
+    _stuckStick(m, now) {
+      const s = m && m.storageMode;
+      if (!s || (s.state === "waiting" && /^starting/.test(s.status || ""))) return null;
+      const head = "The LTE stick started as a USB drive and did not switch to its modem mode. ";
+      const times = s.cycles === 1 ? "once" : s.cycles + " times";
+      if (s.state === "blocked") return head + "It cannot be restarted: " + (s.status || "").replace(/^.*no USB power cycle: /, "") + ".";
+      if (s.state === "power-cycling") return head + "Switching the USB power off and on now; the backup Wi-Fi drops for a few seconds.";
+      if (s.state === "cycled") return head + "The USB power was switched off and on; waiting for it to start.";
+      const next = typeof s.nextCycleAt === "number" && now ? " Trying again in " + UI.fmt.dur(Math.max(0, s.nextCycleAt - now)) + "." : "";
+      return head + "The USB power was switched off and on " + times + "." + next;
+    }
+
+    /**
      * The internet now (GET /api/status, refreshed every 3 s): the uplink in use, the LTE modem
      * (operator, bars, this month's data), the backup uplinks' own checks, a note while another
      * uplink stands in for LTE or the SIM has a problem, and the modem's radio and recovery folded.
@@ -938,12 +958,17 @@
         notes.push(UI.warnbox("Using " + (kinds[fo.activeKind] || fo.activeKind) + " instead: " + why + (fo.since && st.time ? ", since " + fmt.dur(Math.max(0, st.time - fo.since)) : "") + ".", "alt_route"));
       }
       if (m && m.simProblem) notes.push(UI.warnbox("SIM card: " + m.simProblem, "sim_card_alert"));
+      const stuck = this._stuckStick(m, st.time);
+      if (stuck) notes.push(UI.warnbox(stuck, "usb"));
+      const storage = m && m.type === "storage-mode";
       const facts = [
         ["Internet", net.reachable ? "Online" + (typeof net.latencyMs === "number" ? ", " + net.latencyMs + " ms" : "") : "No internet", net.reachable ? "ok" : "bad"],
         up ? ["Through", (kindName[up.kind] || up.kind) + " (" + up.interface + ")"] : ["Through", "No route to the internet", "bad"],
         up && up.address ? ["Address", up.address + (up.gateway ? ", gateway " + up.gateway : "")] : null,
       ];
-      if (m) {
+      if (storage) {
+        facts.push(["LTE modem", stuck ? "Stuck as a USB drive" : "Starting", stuck ? "bad" : null]);
+      } else if (m) {
         const tech = m.networkType && m.technology && m.technology !== m.networkType ? m.networkType + " (" + m.technology + ")" : m.networkType || m.technology;
         facts.push(["Operator", [m.operator || "Unknown", tech, m.roaming ? "roaming" : ""].filter(Boolean).join(", ")]);
         if (typeof m.bars === "number") facts.push(["Signal", UI.signalBars(m.bars), m.bars >= 3 ? "ok" : m.bars >= 2 ? "warn" : "bad"]);
@@ -986,6 +1011,14 @@
             ? ["Last step", (actionNames[m.lastAction] || m.lastAction) + ", " + fmt.dur(Math.max(0, st.time - m.lastActionAt)) + " ago" + (m.lastResult && m.lastResult !== "done" ? " (" + m.lastResult + ")" : "")]
             : null,
           typeof m.nextActionAt === "number" && m.nextActionAt > st.time ? ["Next step", "in " + fmt.dur(m.nextActionAt - st.time)] : null,
+          m.storageCycle && typeof m.storageCycle.at === "number"
+            ? [
+                "USB restart",
+                fmt.dur(Math.max(0, st.time - m.storageCycle.at)) + " ago, the stick had stayed a USB drive" +
+                  (typeof m.storageCycle.switchedAfter === "number" ? "; it started " + fmt.dur(m.storageCycle.switchedAfter) + " later" : "") +
+                  (m.storageCycle.result && m.storageCycle.result !== "done" ? " (" + m.storageCycle.result + ")" : ""),
+              ]
+            : null,
         ]);
         const [b, body] = UI.disclosure("Modem details", details, this._modemOpen);
         b.addEventListener("click", () => (this._modemOpen = !body.hidden));

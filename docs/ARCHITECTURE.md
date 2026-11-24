@@ -125,6 +125,17 @@ Upstream has no RIL; modems are USB-Ethernet. Same here:
   is done. `LTE_RECOVERY=off` in `/etc/teslalinux/env` turns it off. The stick's state (signal bars,
   network type, operator, data used, SIM, the last step) is the `modem` object of
   `/run/teslalinux/uplink.json`, shown on the car page's Status.
+* **A stick stuck as a USB drive** (same daemon, its own thread): a HiLink stick starts as a
+  virtual CD-ROM (`12d1:1f01`) and `usb_modeswitch` normally switches it within a second or two.
+  On some boots the switch fails, the stick stays a USB drive and `usb_modeswitch` hangs ~100 s;
+  only a USB power cycle brings it back. Once a second the daemon looks for a device whose id the
+  installed usb-modeswitch-data switches from (configPack.tar.gz, `/etc/usb_modeswitch.d`) with only
+  mass-storage interfaces. Still like that 10 s after it appeared: it stops that device's
+  `usb_modeswitch@` instance and power-cycles USB with `uhubctl`, whatever `LTE_RECOVERY*` say and
+  whatever else is on USB (a Pi 4's backup Wi-Fi card drops for a few seconds). The next cycle comes
+  at least 20 s after the previous one ended, growing to 15 minutes while cycles do not help
+  (kept in `/run`, across service restarts). Not with LTE switched off in the settings or
+  `DisableSwitching=1`. Its state: `storageMode` / `storageCycle` in the `modem` object.
 
 ## 4. Data path
 

@@ -25,6 +25,7 @@ AP_SUBNET=172.16.0
 LTE_RECOVERY=on
 # The USB power cycle (uhubctl; a Pi 4 switches all four ports together):
 #   auto  only when the stick is the only USB device   on  always   off  never
+# (A stick stuck in its USB storage mode is power-cycled whatever this says: it cannot work otherwise.)
 LTE_RECOVERY_POWER_CYCLE=auto
 # Android display
 DISPLAY_W=1088

@@ -12,6 +12,11 @@
   step; login required (everything, or control only) -> the API steps are skipped; the USB power cycle
   only with the stick alone on USB (auto), never without uhubctl; working LTE resets the ladder; prefer
   "wifi" with a working Wi-Fi and LTE_RECOVERY=off -> nothing; the ModemManager ladder; the state JSON
+* a stick stuck in its USB storage mode (12d1:1f01 from a fake configPack.tar.gz, fake /proc, a fake
+  uhubctl that unplugs and re-plugs it): power cycle 10 s after it appeared with another USB device on
+  and LTE_RECOVERY_POWER_CYCLE=off, its usb_modeswitch stopped first; a good switch, a working stick and a
+  flash drive left alone; a cycle that helps; cycles that do not help back off (20, 60, 120, 300 s) also
+  across a restart; LTE switched off, DisableSwitching=1 or no uhubctl -> nothing
 """
 import http.server
 import importlib.machinery
@@ -21,6 +26,7 @@ import os
 import re
 import shutil
 import socket
+import tarfile
 import sys
 import tempfile
 import threading
@@ -568,6 +574,202 @@ class ModemManagerLadder(Base):
         r = self.recovery(sysfs=self.sysfs(), hosts=[], cmds=Commands(mm=None, have=("mmcli",)))
         r.hilink_hosts = None
         self.assertEqual(self.run_until(r, 1000 + 100), {90: "usb-reenumerate"})
+
+
+# ---------------------------------------------------------------- a stick stuck in its USB storage mode
+
+STICK = ("devices", "platform", "scb", "usb1", "1-1", "1-1.3")
+WIFI_CARD = [("1-1.2", "0bda", "c811", "00")]
+
+
+def stick_mode(sysfs, pid, devnum, classes):
+    """the stick at 1-1.3 enumerated (again) as 12d1:PID with these interface classes"""
+    d = os.path.join(sysfs, *STICK)
+    for x in os.listdir(d):
+        if x.startswith("1-1.3:"):
+            shutil.rmtree(os.path.join(d, x))
+    put(os.path.join(d, "idProduct"), pid)
+    put(os.path.join(d, "devnum"), str(devnum))
+    put(os.path.join(d, "busnum"), "1")
+    for i, cls in enumerate(classes):
+        put(os.path.join(d, "1-1.3:1.%d" % i, "bInterfaceClass"), cls)
+    link = os.path.join(sysfs, "bus", "usb", "devices", "1-1.3")
+    if not os.path.lexists(link):
+        os.symlink(d, link)
+
+
+STORAGE, MODEM = ["08"], ["02", "0a", "08"]
+
+
+class StickUSB(Commands):
+    """fake uhubctl that cuts and restores the stick: VBUS off unplugs it, on plugs it back as COMES_BACK[n]
+    (pid, interface classes); systemctl is recorded"""
+
+    def __init__(self, sysfs, comes_back, have=("uhubctl", "systemctl")):
+        super().__init__(have=have)
+        self.sysfs, self.comes_back, self.devnum = sysfs, list(comes_back), 4
+
+    def run(self, cmd, timeout=30):
+        if cmd[0] == "uhubctl" and cmd[-1] in ("3", "on") and cmd[-2] in ("-r", "-a"):
+            link = os.path.join(self.sysfs, "bus", "usb", "devices", "1-1.3")
+            if cmd[-1] == "3" and os.path.lexists(link):
+                os.unlink(link)
+            elif cmd[-1] == "on" and cmd[2] == "1-1" and self.comes_back:
+                self.devnum += 1
+                pid, classes = self.comes_back.pop(0)
+                stick_mode(self.sysfs, pid, self.devnum, classes)
+        return super().run(cmd, timeout)
+
+
+class StorageMode(Base):
+    def setUp(self):
+        super().setUp()
+        self.data = os.path.join(self.tmp, "usb_modeswitch")
+        self.local = os.path.join(self.tmp, "usb_modeswitch.d")
+        os.makedirs(self.local)
+        pack = os.path.join(self.tmp, "pack")
+        for name in ("12d1:1f01", "12d1:1f1d", "0af0:6971:sVe=Option", "19d2:0166:uPr=ZTE"):
+            put(os.path.join(pack, name), "TargetVendor=0x12d1\n")
+        os.makedirs(self.data)
+        with tarfile.open(os.path.join(self.data, "configPack.tar.gz"), "w:gz") as t:
+            for name in sorted(os.listdir(pack)):
+                t.add(os.path.join(pack, name), arcname=name)
+        put(os.path.join(self.local, "12d1.conf"), "DisableSwitching=0\n")  # not an id: ignored
+        self.conf = os.path.join(self.tmp, "usb_modeswitch.conf")
+        put(self.conf, "DisableSwitching=0\n")
+        self.state_path = os.path.join(self.tmp, "run", "usb-storage-mode.json")
+        self.proc = os.path.join(self.tmp, "proc")
+        os.makedirs(self.proc)
+        self.killed = []
+
+    def watch(self, extra=(), comes_back=(), have=("uhubctl", "systemctl"), start=("1f01", STORAGE)):
+        self.sysfs = make_sysfs(os.path.join(self.tmp, "sys"), extra_devices=extra, iface=None)
+        stick_mode(self.sysfs, start[0], 4, start[1])
+        self.cmds = StickUSB(self.sysfs, comes_back, have=have)
+        modem = up.ModemRecovery(sysfs=self.sysfs, env=self.env, lte_env=self.lte_env, clock=self.clock,
+                                 wall=lambda: self.clock.t + 1.7e9, sleep=self.advance, run=self.cmds.run,
+                                 which=self.cmds.which, log=self.logs.append, hilink_hosts=[])
+        return self.new_watch(modem)
+
+    def new_watch(self, modem):
+        return up.StorageModeWatch(modem, data=(self.data, self.local), conf=self.conf, state=self.state_path,
+                                   proc=self.proc, kill=lambda pid, sig: self.killed.append((pid, sig)))
+
+    def advance(self, s):
+        self.clock.t += s
+
+    def uhubctl(self):
+        return [c for c in self.cmds.calls if c[0] == "uhubctl"]
+
+    def cycles_at(self, w, end):
+        """tick once a second up to END s after the start; the times (s) at which a power cycle began"""
+        at, t0 = [], 1000
+        while self.clock.t - t0 <= end:
+            n = len(self.uhubctl())
+            begin = self.clock.t
+            w.tick()
+            if len(self.uhubctl()) > n:
+                at.append(int(begin - t0))
+            self.clock.t += 1
+        return at
+
+    def test_sources_from_the_installed_data(self):
+        w = self.watch()
+        put(os.path.join(self.local, "1e0e:f000"), "TargetVendor=0x1e0e\n")
+        self.assertEqual(w.switch_sources(), {("12d1", "1f01"), ("12d1", "1f1d"), ("0af0", "6971"), ("19d2", "0166"),
+                                              ("1e0e", "f000")})
+        self.assertEqual(up.modeswitch_id("12d1:1F01"), ("12d1", "1f01"))
+        self.assertIsNone(up.modeswitch_id("12d1.conf"))
+
+    def test_stuck_power_cycle_with_another_usb_device(self):
+        """LTE_RECOVERY_POWER_CYCLE=off (the Base env) and the Wi-Fi card on USB: cycled 10 s after it appeared"""
+        w = self.watch(extra=WIFI_CARD, comes_back=[("1f01", STORAGE)])
+        self.assertEqual(self.cycles_at(w, 12), [10])
+        self.assertEqual(self.uhubctl(), [
+            ["uhubctl", "-l", "1-1", "-a", "off", "-r", "3"], ["uhubctl", "-l", "2", "-a", "off", "-r", "3"],
+            ["uhubctl", "-l", "2", "-a", "on"], ["uhubctl", "-l", "1-1", "-a", "on"]])
+        self.assertIn(["systemctl", "stop", "usb_modeswitch@1-1.3:*.service"], self.cmds.calls)
+        self.assertLess(self.cmds.calls.index(["systemctl", "stop", "usb_modeswitch@1-1.3:*.service"]),
+                        self.cmds.calls.index(self.uhubctl()[0]))
+        msg = [m for m in self.logs if "USB power cycle" in m][0]
+        self.assertIn("1-1.3 (12d1:1f01) is still in its USB storage mode 10 s after it appeared", msg)
+        self.assertIn("the other USB devices drop for a few seconds (1-1.2 0bda:c811)", msg)
+        st = w.annotate({"type": "none", "status": "no LTE stick"})
+        self.assertEqual(st["storageMode"]["state"], "cycled")
+        w.tick()  # back, still a USB drive: the next cycle waits for the gap
+        st = w.annotate({"type": "none", "status": "no LTE stick"})
+        self.assertEqual((st["type"], st["usb"], st["storageMode"]["state"]), ("storage-mode", "1-1.3", "waiting"))
+        self.assertIn("USB power cycled once, next in", st["status"])
+        self.assertEqual((st["storageCycle"]["result"], st["storageCycle"]["cycles"], st["storageCycle"]["seconds"]), ("done", 1, 5))
+        json.dumps(st)
+
+    def test_good_switch_is_left_alone(self):
+        w = self.watch()
+        self.cycles_at(w, 1)
+        stick_mode(self.sysfs, "14dc", 5, MODEM)  # usb_modeswitch switched it within 2 s
+        self.assertEqual(self.cycles_at(w, 60), [])
+        self.assertTrue(any("switched from its USB storage mode (12d1:1f01) to 12d1:14dc" in m for m in self.logs))
+        self.assertIsNone(w.annotate({"type": "hilink"})["storageMode"])
+
+    def test_working_stick_and_flash_drive_are_left_alone(self):
+        w = self.watch(extra=[("1-1.4", "0781", "5583", "00")], start=("14dc", MODEM))
+        put(os.path.join(self.sysfs, *STICK[:-1], "1-1.4", "1-1.4:1.0", "bInterfaceClass"), "08")
+        self.assertEqual(self.cycles_at(w, 120), [])
+        self.assertEqual(self.cmds.calls, [])
+
+    def test_cycle_helps(self):
+        w = self.watch(comes_back=[("1f01", STORAGE)])
+        self.assertEqual(self.cycles_at(w, 11), [10])
+        stick_mode(self.sysfs, "14dc", 9, MODEM)  # this time usb_modeswitch switched it
+        self.assertEqual(self.cycles_at(w, 400), [])
+        self.assertTrue(any("in its modem mode again" in m for m in self.logs))
+        self.assertEqual(w.saved["fails"], 0)
+        self.assertIsNotNone(w.saved["switchedAfter"])
+        # found in storage mode again later (a re-plug): the short gap again
+        stick_mode(self.sysfs, "1f01", 12, STORAGE)
+        start = int(self.clock.t - 1000)
+        self.assertEqual(self.cycles_at(w, start + 11), [start + 10])
+
+    def test_cycle_does_not_help_backs_off(self):
+        w = self.watch(comes_back=[("1f01", STORAGE)] * 6)
+        at = self.cycles_at(w, 1000)
+        # 10 s after it appeared; then 20, 60, 120, 300 s after the previous cycle ended (5 s each)
+        self.assertEqual(at, [10, 35, 100, 225, 530])
+        self.assertEqual(w.saved["cycles"], 5)
+
+    def test_restart_keeps_the_gap(self):
+        w = self.watch(comes_back=[("1f01", STORAGE)] * 3)
+        self.assertEqual(self.cycles_at(w, 12), [10])
+        w2 = self.new_watch(w.modem)  # the service restarted
+        self.assertEqual(self.cycles_at(w2, 40), [35])
+
+    def test_lte_switched_off(self):
+        put(self.lte_env, "LTE_ENABLED='0'\n")
+        w = self.watch()
+        self.assertEqual(self.cycles_at(w, 120), [])
+        self.assertEqual(w.annotate({"type": "none"})["storageMode"]["state"], "blocked")
+        self.assertEqual(sum("LTE is switched off" in m for m in self.logs), 1)
+
+    def test_switching_disabled_and_no_uhubctl(self):
+        put(self.conf, "DisableSwitching=1\n")
+        w = self.watch()
+        self.assertEqual(self.cycles_at(w, 60), [])
+        put(self.conf, "DisableSwitching=0\n")
+        self.cmds.have.discard("uhubctl")
+        self.assertEqual(self.cycles_at(w, 120), [])
+        self.assertIn("uhubctl is not installed", w.annotate({"type": "none"})["status"])
+
+    def test_stops_modeswitch_without_systemd(self):
+        w = self.watch(have=("uhubctl",), comes_back=[("1f01", STORAGE)])
+        for pid, comm, args in (("101", "usb_modeswitch_", ["usb_modeswitch_dispatcher", "--switch-mode", "1-1.3:1.0"]),
+                                ("102", "usb_modeswitch", ["usb_modeswitch", "-W", "-b", "001", "-g", "004", "-v", "12d1"]),
+                                ("103", "usb_modeswitch", ["usb_modeswitch", "-b", "001", "-g", "009"]),
+                                ("104", "bash", ["bash", "1-1.3:1.0"])):
+            put(os.path.join(self.proc, pid, "comm"), comm + "\n")
+            put(os.path.join(self.proc, pid, "cmdline"), "\0".join(args) + "\0")
+        self.assertEqual(self.cycles_at(w, 11), [10])
+        self.assertEqual(self.killed, [(101, up.signal.SIGTERM), (102, up.signal.SIGTERM)])
+        self.assertFalse(any(c[0] == "systemctl" for c in self.cmds.calls))
 
 
 if __name__ == "__main__":

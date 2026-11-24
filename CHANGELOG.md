@@ -15,6 +15,14 @@ version's.
 
 ## [Unreleased]
 
+### LTE after a restart
+
+*Settings > Connections.*
+
+- On some starts the LTE stick stayed a USB drive and the device had no LTE until it was unplugged.
+  The device now notices within about 10 seconds and switches the USB power off and on, which
+  starts the stick properly. The backup Wi-Fi drops for a few seconds while that happens.
+
 ### Street names in their usual weight again
 
 *Car and phone map.*

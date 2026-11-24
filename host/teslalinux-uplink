@@ -38,6 +38,19 @@ After the whole ladder it waits 15 minutes and starts again; working LTE resets 
 waits. With prefer "wifi" and a working Wi-Fi/Ethernet uplink it does nothing. LTE_RECOVERY=off in
 /etc/teslalinux/env turns it off; LTE switched off in the settings (lte.env) too.
 
+A stick stuck in its USB storage mode: a HiLink stick starts as a virtual CD-ROM (12d1:1f01) and
+usb_modeswitch switches it to its modem id within a second or two of it appearing. On some boots the
+switch fails and wedges the stick; it stays a USB drive (usb_modeswitch hangs about 100 s) and only a
+USB power cycle brings it back. A second thread looks once a second for a device whose id
+usb-modeswitch-data lists as a switch source (configPack.tar.gz, /etc/usb_modeswitch.d) with nothing
+but mass-storage interfaces. Still like that 10 s after it appeared: it stops that device's
+usb_modeswitch (it would fight the switch of the re-plugged stick) and power-cycles USB with uhubctl,
+whatever LTE_RECOVERY and LTE_RECOVERY_POWER_CYCLE say and whatever else is on USB (the modem cannot
+work any other way; on a Pi 4 the backup Wi-Fi card drops for a few seconds). Again only 20 s after
+the previous cycle ended, growing to 15 minutes while cycles do not help, back to 20 s once the stick
+switched; kept in /run, so a restart of this service does not shorten it. Not with LTE switched off
+in the settings, nor with DisableSwitching=1 in /etc/usb_modeswitch.conf.
+
 Settings: /etc/teslalinux/wifi-client.json (written by teslalinux-network: enabled, prefer, iface, the
 networks), /etc/teslalinux/env (LTE_RECOVERY, LTE_RECOVERY_POWER_CYCLE), /etc/teslalinux/lte.env (APN).
 State for the settings page's Status: /run/teslalinux/uplink.json (with a "modem" object).
@@ -50,6 +63,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import tarfile
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -275,6 +289,14 @@ MM_TECH = (("5gnr", "5G"), ("lte", "4G"), ("hspa", "3G"), ("umts", "3G"), ("evdo
            ("gprs", "2G"), ("gsm", "2G"))
 LADDER = ("reconnect", "modem-reset", "usb-reenumerate", "usb-power-cycle")
 NM_LTE_PROFILE = "teslalinux-lte"
+# a stick stuck in its USB storage mode (module docstring)
+MODESWITCH_DATA = tuple(os.environ.get("TESLALINUX_MODESWITCH_DATA", "/usr/share/usb_modeswitch:/etc/usb_modeswitch.d").split(":"))
+MODESWITCH_CONF = "/etc/usb_modeswitch.conf"
+STORAGE_STATE = os.environ.get("TESLALINUX_STORAGE_STATE", "/run/teslalinux/usb-storage-mode.json")
+STORAGE_AFTER = 10     # s in storage mode after it appeared; a good switch takes 1-2 s
+STORAGE_GAPS = (20, 60, 120, 300, 900)  # s from the end of one power cycle to the next, while they do not help
+STORAGE_POLL = 1
+USB_POWER = threading.Lock()  # one uhubctl power cycle at a time (the ladder and the storage-mode watch)
 
 
 class HiLinkError(Exception):
@@ -840,21 +862,26 @@ class ModemRecovery:
             self.sleep(1)
             self.write(auth, "1")
 
+    def whole_usb(self):
+        """a power cycle cuts every USB device, not only the stick's port (a Pi 4)"""
+        return "Raspberry Pi 4" in (read(self.sys("firmware", "devicetree", "base", "model")) or "")
+
     def power_cycle(self, dev):
         """VBUS off and on with uhubctl. A Pi 4's VL805 switches all four ports together, and only when the
         USB 2 hub (1-1) and the USB 3 hub (2) are both off."""
-        if "Raspberry Pi 4" in (read(self.sys("firmware", "devicetree", "base", "model")) or ""):
+        if self.whole_usb():
             hubs = [["-l", "1-1"], ["-l", "2"]]
         else:
             hub, port = dev.rsplit(".", 1) if "." in dev else dev.split("-", 1)
             hubs = [["-l", hub, "-p", port]]
-        try:
-            for h in hubs:
-                self.cmd(["uhubctl"] + h + ["-a", "off", "-r", "3"], timeout=30)
-            self.sleep(5)
-        finally:
-            for h in reversed(hubs):
-                self.cmd(["uhubctl"] + h + ["-a", "on"], timeout=30)
+        with USB_POWER:
+            try:
+                for h in hubs:
+                    self.cmd(["uhubctl"] + h + ["-a", "off", "-r", "3"], timeout=30)
+                self.sleep(5)
+            finally:
+                for h in reversed(hubs):
+                    self.cmd(["uhubctl"] + h + ["-a", "on"], timeout=30)
 
     def decide(self, snap, cfg, o, now):
         """the status text; runs at most one step"""
@@ -957,6 +984,240 @@ class ModemRecovery:
         return dict(self.public)
 
 
+def modeswitch_id(name):
+    """("12d1", "1f01") from a usb-modeswitch-data entry name ("12d1:1f01", "0af0:6971:sVe=Option"), else None"""
+    m = re.match(r"^([0-9a-fA-F]{4}):([0-9a-fA-F]{4})(?::|$)", os.path.basename(name))
+    return (m.group(1).lower(), m.group(2).lower()) if m else None
+
+
+def arg_after(args, flag):
+    """the integer after FLAG in a command line ("-g 004" -> 4), else None"""
+    for a, b in zip(args, args[1:]):
+        if a == flag and b.isdigit():
+            return int(b)
+    return None
+
+
+class StorageModeWatch:
+    """Power-cycles USB when an LTE stick stays in its USB storage mode (module docstring). tick() runs once
+    a second in its own thread; sysfs, commands, the clocks and the log are the ModemRecovery's."""
+
+    def __init__(self, modem, data=MODESWITCH_DATA, conf=MODESWITCH_CONF, state=STORAGE_STATE, proc="/proc", kill=os.kill):
+        self.modem, self.data, self.conf, self.state_path = modem, data, conf, state
+        self.proc, self.kill = proc, kill
+        self.sources, self.sources_sig = set(), None
+        self.seen = {}           # USB device -> (vid:pid, devnum, monotonic time it was first seen stuck)
+        self.saved = self.load()  # the last power cycle: usb, id, at, end (monotonic), fails, cycles, reason, result
+        self.public = None
+        self.said = set()
+
+    def say_once(self, key, msg):
+        if key not in self.said:
+            self.said.add(key)
+            self.modem.log(msg)
+
+    def load(self):
+        try:
+            with open(self.state_path) as f:
+                s = json.load(f)
+        except (OSError, ValueError):
+            return None
+        # /run is empty after a reboot; a monotonic time from the future is from another boot
+        if not isinstance(s, dict) or not isinstance(s.get("end"), (int, float)) or s["end"] > self.modem.clock():
+            return None
+        return s
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+            tmp = self.state_path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.saved, f)
+            os.replace(tmp, self.state_path)
+        except OSError as e:
+            self.say_once("save", "storage-mode watch: cannot keep %s: %s" % (self.state_path, e))
+
+    def switch_sources(self):
+        """{(vid, pid)} that usb_modeswitch switches from: the entry names in configPack.tar.gz and the unpacked
+        or local config files; read again when the package or the local files change"""
+        sig = []
+        for d in self.data:
+            for p in (d, os.path.join(d, "configPack.tar.gz")):
+                try:
+                    sig.append(os.stat(p).st_mtime_ns)
+                except OSError:
+                    sig.append(None)
+        if tuple(sig) == self.sources_sig:
+            return self.sources
+        ids = set()
+        for d in self.data:
+            try:
+                names = os.listdir(d)
+            except OSError:
+                continue
+            for n in names:
+                if n.endswith(".tar.gz"):
+                    try:
+                        with tarfile.open(os.path.join(d, n)) as t:
+                            ids.update(i for i in map(modeswitch_id, t.getnames()) if i)
+                    except (OSError, tarfile.TarError) as e:
+                        self.say_once("pack-" + n, "storage-mode watch: cannot read %s: %s" % (os.path.join(d, n), e))
+                elif modeswitch_id(n):
+                    ids.add(modeswitch_id(n))
+        if not ids:
+            self.say_once("no-data", "storage-mode watch: no usb-modeswitch-data in %s" % ", ".join(self.data))
+        self.sources, self.sources_sig = ids, tuple(sig)
+        return ids
+
+    def stuck(self, usb, sources):
+        """{USB device: (vid:pid, devnum)} of the switch sources whose interfaces are all mass storage (08); a
+        modem in its modem mode has network or serial interfaces next to its TF card's"""
+        out = {}
+        for n, vid, pid, _ in usb:
+            if (vid.lower(), pid.lower()) not in sources:
+                continue
+            d = self.modem.sys("bus", "usb", "devices", n)
+            try:
+                intfs = [x for x in os.listdir(d) if x.startswith(n + ":")]
+            except OSError:
+                continue
+            classes = [(read(os.path.join(d, x, "bInterfaceClass")) or "").lower() for x in intfs]
+            if classes and all(c == "08" for c in classes):
+                out[n] = ("%s:%s" % (vid, pid), read(os.path.join(d, "devnum")) or "")
+        return out
+
+    def blocked(self):
+        if not self.modem.settings()["lteEnabled"]:
+            return "LTE is switched off in the settings"
+        if env_get(read(self.conf) or "", "DisableSwitching", "0").strip() == "1":
+            return "mode switching is off (DisableSwitching=1 in %s)" % self.conf
+        if not self.modem.which("uhubctl"):
+            return "uhubctl is not installed"
+        return None
+
+    def next_allowed(self):
+        s = self.saved
+        if not s:
+            return None
+        return s["end"] + STORAGE_GAPS[min(max(s.get("fails", 1) - 1, 0), len(STORAGE_GAPS) - 1)]
+
+    def tick(self):
+        now = self.modem.clock()
+        sources = self.switch_sources()
+        usb = self.modem.usb_devices()
+        present = {n: (vid.lower(), pid.lower()) for n, vid, pid, _ in usb}
+        stuck = self.stuck(usb, sources)
+        for dev in list(self.seen):
+            if stuck.get(dev, (None, None))[1] != self.seen[dev][1]:  # switched, gone, or enumerated again
+                ident = self.seen.pop(dev)[0]
+                if dev in present and present[dev] not in sources:
+                    self.modem.log("LTE: %s switched from its USB storage mode (%s) to %s:%s" % ((dev, ident) + present[dev]))
+        s = self.saved
+        if s and s.get("switchedAfter") is None and s.get("usb") in present and present[s["usb"]] not in sources:
+            self.saved = dict(s, fails=0, switchedAfter=int(max(0, now - s["end"])))
+            self.save()
+            self.modem.log("LTE: the stick is in its modem mode again, %d s after the USB power cycle" % self.saved["switchedAfter"])
+        for dev, (ident, devnum) in stuck.items():
+            self.seen.setdefault(dev, (ident, devnum, now))
+        if not stuck:
+            self.public = None
+            return
+        dev = min(stuck, key=lambda d: self.seen[d][2])
+        ident, devnum, since = self.seen[dev]
+        wall = self.modem.wall()
+        pub = {"usb": dev, "id": ident, "since": int(wall - (now - since)), "cycles": (self.saved or {}).get("cycles", 0)}
+        why = self.blocked()
+        nxt = max(since + STORAGE_AFTER, self.next_allowed() or 0)
+        if why:
+            self.say_once("blocked-" + why, "LTE: %s (%s) is in its USB storage mode; no USB power cycle: %s" % (dev, ident, why))
+            self.public = dict(pub, state="blocked", status="stuck in its USB storage mode; no USB power cycle: " + why)
+            return
+        if now < nxt:
+            pending = self.saved and self.saved.get("switchedAfter") is None
+            if now - since < STORAGE_AFTER and not pending:
+                status = "starting: still in its USB storage mode"
+            else:
+                status = "stuck in its USB storage mode: USB power cycled %s, next in %d s" % (
+                    "once" if pub["cycles"] == 1 else "%d times" % pub["cycles"], nxt - now)
+            self.public = dict(pub, state="waiting", status=status, nextCycleAt=int(wall + nxt - now))
+            return
+        self.said = {k for k in self.said if not k.startswith("blocked-")}
+        self.public = dict(pub, state="power-cycling", status="stuck in its USB storage mode: switching USB power off and on")
+        self.power_cycle(dev, ident, devnum, int(now - since))
+        self.public = dict(pub, state="cycled", cycles=self.saved["cycles"],
+                           status="stuck in its USB storage mode: USB power cycled, waiting for the stick to start")
+
+    def power_cycle(self, dev, ident, devnum, age):
+        others = ["%s %s:%s" % (n, vid, pid) for n, vid, pid, cls in self.modem.usb_devices() if cls != "09" and n != dev]
+        reason = "%s (%s) is still in its USB storage mode %d s after it appeared: usb_modeswitch did not switch it" % (dev, ident, age)
+        drop = "; the other USB devices drop for a few seconds (%s)" % ", ".join(others) if others and self.modem.whole_usb() else ""
+        prev = self.saved or {}
+        self.modem.log("LTE: %s; stopping its usb_modeswitch, then a USB power cycle%s" % (reason, drop))
+        self.stop_modeswitch(dev, devnum)
+        at, t0 = self.modem.wall(), self.modem.clock()
+        try:
+            self.modem.power_cycle(dev)
+            result = "done"
+        except (OSError, CommandFailed) as e:
+            result = "failed: %s" % e
+            self.modem.log("LTE: the USB power cycle failed: %s" % e)
+        end = self.modem.clock()
+        self.saved = {"usb": dev, "id": ident, "at": int(at), "end": end, "seconds": int(end - t0), "reason": reason,
+                      "result": result, "fails": prev.get("fails", 0) + 1, "cycles": prev.get("cycles", 0) + 1,
+                      "switchedAfter": None}
+        self.save()
+
+    def stop_modeswitch(self, dev, devnum):
+        """usb_modeswitch of this stick, hung on the wedged device (about 100 s), would fight the switch of the
+        re-plugged stick: the systemd instance (usb_modeswitch@1-1.3:1.0), and without systemd the processes
+        (usb_modeswitch_dispatcher --switch-mode 1-1.3:1.0, usb_modeswitch ... -b 1 -g 4)"""
+        if self.modem.which("systemctl"):
+            self.modem.run(["systemctl", "stop", "usb_modeswitch@%s:*.service" % dev], timeout=20)
+        bus = read(self.modem.sys("bus", "usb", "devices", dev, "busnum"))
+        try:
+            pids = sorted((p for p in os.listdir(self.proc) if p.isdigit()), key=int)
+        except OSError:
+            return
+        for p in pids:
+            if not (read(os.path.join(self.proc, p, "comm")) or "").startswith("usb_modeswitch"):
+                continue
+            try:
+                with open(os.path.join(self.proc, p, "cmdline"), "rb") as f:
+                    args = f.read().decode(errors="replace").split("\0")
+            except OSError:
+                continue
+            mine = any(a.startswith(dev + ":") for a in args) or (
+                bus and devnum and arg_after(args, "-b") == int(bus) and arg_after(args, "-g") == int(devnum))
+            if mine:
+                try:
+                    self.kill(int(p), signal.SIGTERM)
+                    self.modem.log("LTE: stopped %s (pid %s)" % (" ".join(a for a in args if a), p))
+                except OSError:
+                    pass
+
+    def annotate(self, st):
+        """the modem section of uplink.json with this watch in it: storageMode (a stick stuck now) and
+        storageCycle (the last power cycle); type "storage-mode" while no modem shows besides it"""
+        st = dict(st)
+        st["storageMode"] = self.public
+        s = self.saved
+        st["storageCycle"] = {k: s.get(k) for k in ("at", "usb", "id", "reason", "result", "seconds", "cycles", "switchedAfter")} if s else None
+        if self.public and st.get("type") in (None, "none"):
+            st.update(type="storage-mode", usb=self.public["usb"], status=self.public["status"])
+        return st
+
+    def start(self):
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            try:
+                self.tick()
+            except Exception as e:  # never let this take the daemon down
+                self.say_once("err-%r" % e, "storage-mode watch: %r" % e)
+            time.sleep(STORAGE_POLL)
+
+
 def write_state(st):
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     tmp = STATE + ".tmp"
@@ -971,6 +1232,8 @@ def main():
     active, since = None, time.time()
     wpa = Wpa()
     modem = ModemRecovery()
+    storage = StorageModeWatch(modem)
+    storage.start()
     managed = nm_running()
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -1059,7 +1322,7 @@ def main():
                            for i in ranked],
             "wifi": {"iface": wifi_if, "enabled": cfg.get("enabled", True), "ssid": ssid, "signalDbm": sig,
                      "managedBy": "networkmanager" if managed else ("wpa_supplicant" if wpa.pid() else None)},
-            "modem": modem.state(),
+            "modem": storage.annotate(modem.state()),
         })
         stop.wait(INTERVAL)
     clear_route()
