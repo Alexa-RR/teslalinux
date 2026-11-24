@@ -1079,7 +1079,8 @@ class TestConnectCloudflare(unittest.TestCase):
         self.st.more_zones = ["other.org"]
         out = self.start()
         page = self.back(self.st.consent(out["url"]))
-        self.assertIn("Which domain?", page)
+        self.assertIn("Choose a domain", page)
+        self.assertIn('href="/css/settings.css"', page)
         self.assertIn('value="other.org"', page)
         self.assertEqual(self.st.revoked, [], "kept for the choice")
         state = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(out["url"]).query))["state"]

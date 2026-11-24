@@ -52,6 +52,14 @@ version's.
 - A place's card no longer cuts its buttons short ("Add a s..."): two that do not fit side by side
   stack.
 
+### Connect Cloudflare's pages look like Settings
+
+*After the Cloudflare sign-in.*
+
+- The pages the device shows after you allow Teslalinux on Cloudflare (choose a domain, set up,
+  not set up) now use the settings page's own look, by day and by night: your domains as rows
+  with a "Use this" button, and what the device set up as a list.
+
 ### Platform
 
 - Connect Cloudflare asks for the narrower tunnel permission, Cloudflare One Connector: cloudflared

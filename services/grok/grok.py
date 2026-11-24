@@ -594,23 +594,61 @@ def post_oauth_start(req):
     return 200, out
 
 
-def page(title, body, ok=None):
-    """The small page the browser sees on the device after Cloudflare's sign-in."""
-    tone = "#1a7f37" if ok else "#b42318" if ok is False else "#333"
-    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            "<title>%s</title><style>body{font:18px/1.45 system-ui,sans-serif;margin:0;padding:24px;background:#f6f6f6;color:#222}"
-            "main{max-width:560px;margin:auto;background:#fff;border-radius:14px;padding:24px}h1{font-size:22px;color:%s}"
-            "button{font:inherit;padding:10px 18px;margin:6px 6px 0 0;border-radius:10px;border:1px solid #888;background:#fff}"
-            "li{margin:4px 0}.fine{color:#666;font-size:15px}</style></head><body><main><h1>%s</h1>%s"
-            "<p class=\"fine\">You can close this page. Settings &gt; Grok shows the result too.</p></main></body></html>"
-            % (html.escape(title), tone, html.escape(title), body)).encode()
+# The pages the browser sees on the device after Cloudflare's sign-in. They use the settings page's own
+# stylesheet and parts (web/css/settings.css: #page-settings, groups, rows, buttons; its day and night
+# follow the browser's colour scheme), so they look like Settings > Grok, where the sign-in started.
+PAGE_STYLE = ("html,body{margin:0;min-height:100%}#page-settings{min-height:100vh;height:auto}"
+              ".tl-cf{max-width:680px;margin:0 auto;padding:36px var(--gutter) 44px}"
+              ".tl-cf-head{display:flex;align-items:center;gap:14px;margin:0 0 26px}"
+              ".tl-cf-mark{flex:0 0 auto;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;"
+              "background:var(--track-strong);color:var(--ink-2);font-weight:700;font-size:22px}"
+              ".tl-cf-mark.ok{background:var(--green-soft);color:var(--green)}"
+              ".tl-cf-mark.err{background:var(--red-soft);color:var(--red)}"
+              ".tl-cf-title{margin:0;font-size:28px;font-weight:700;line-height:1.2}"
+              ".tl-cf-sub{margin:4px 0 0;color:var(--ink-2);font-size:16px}"
+              ".tl-cf-foot{margin:28px 0 0;color:var(--ink-3);font-size:14px}")
+
+
+def page(title, sub, body, ok=None):
+    mark = "<div class=\"tl-cf-mark%s\" aria-hidden=\"true\">%s</div>" % (
+        " ok" if ok else " err" if ok is False else "", "&#10003;" if ok else "!" if ok is False else "?")
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>%s</title>"
+            "<link rel=\"stylesheet\" href=\"/css/settings.css\"><style>%s</style></head>"
+            "<body><div id=\"page-settings\"><main class=\"tl-cf\">"
+            "<header class=\"tl-cf-head\">%s<div><h1 class=\"tl-cf-title\">%s</h1><p class=\"tl-cf-sub\">%s</p></div></header>"
+            "%s<p class=\"tl-cf-foot\">You can close this page. Settings &gt; Grok shows the result too.</p>"
+            "</main></div></body></html>"
+            % (html.escape(title), PAGE_STYLE, mark, html.escape(title), html.escape(sub), body)).encode()
+
+
+def group(title, rows, note=""):
+    note = "<p class=\"group-note\">%s</p>" % html.escape(note) if note else ""
+    return ("<section class=\"group\"><h2 class=\"group-title\">%s</h2>%s<div class=\"group-body\">%s</div></section>"
+            % (html.escape(title), note, "".join(rows)))
+
+
+def row(title, detail="", control=""):
+    detail = "<div class=\"row-detail\">%s</div>" % html.escape(detail) if detail else ""
+    control = "<div class=\"row-control\">%s</div>" % control if control else ""
+    return ("<div class=\"row\"><div class=\"row-main\"><div class=\"row-title\">%s</div>%s</div>%s</div>"
+            % (html.escape(title), detail, control))
 
 
 def result_page(res):
     d = res["done"]
-    items = "".join("<li>%s</li>" % html.escape(s) for s in d["steps"])
-    note = "<p>%s</p>" % html.escape(d["note"]) if d.get("note") else ""
-    return page("Grok remote control is set up", "<p>%s</p><ol>%s</ol>%s" % (html.escape(d["message"]), items, note), True)
+    body = group("What the device set up", [row(s) for s in d["steps"]], d.get("note") or "")
+    return page("Grok remote control is set up", d["message"], body, True)
+
+
+def choose_page(res):
+    rows = [row(z, "Grok reaches the device at mcp.%s" % z,
+                "<button class=\"btn btn--primary\" type=\"submit\" name=\"zone\" value=\"%s\">Use this</button>" % html.escape(z))
+            for z in res["choose"]]
+    body = ("<form method=\"post\" action=\"/api/grok/oauth/choose\"><input type=\"hidden\" name=\"state\" value=\"%s\">%s</form>"
+            % (html.escape(res["state"]), group("Your domains", rows,
+                                                "Grok's address goes on the one you pick. The others are not touched.")))
+    return page("Choose a domain", "Signed in to Cloudflare as %s" % res["email"], body)
 
 
 def oauth_callback(params, chosen=None):
@@ -622,12 +660,10 @@ def oauth_callback(params, chosen=None):
     except cfoauth.OAuthError as e:
         OAUTH.fail(str(e))
         log("connect cloudflare: " + str(e))
-        return page("Not set up", "<p>%s</p>" % html.escape(str(e)), False)
+        return page("Not set up", "Cloudflare's sign-in did not finish",
+                    group("What happened", [row(str(e), "Try again from Settings > Grok > Connect.")]), False)
     if "choose" in res:
-        opts = "".join("<button name=\"zone\" value=\"%s\">%s</button>" % (html.escape(z), html.escape(z)) for z in res["choose"])
-        return page("Which domain?", "<p>Signed in as %s. Which domain should Grok use (mcp.&lt;domain&gt;)?</p>"
-                    "<form method=\"post\" action=\"/api/grok/oauth/choose\"><input type=\"hidden\" name=\"state\" value=\"%s\">%s</form>"
-                    % (html.escape(res["email"]), html.escape(res["state"]), opts))
+        return choose_page(res)
     log("connect cloudflare: set up %s" % res["done"]["hostname"])
     return result_page(res)
 
@@ -669,7 +705,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             try:
                 return self._html(302, b"", OAUTH.authorize_url(params.get("s", "")))
             except cfoauth.OAuthError as e:
-                return self._html(410, page("Link expired", "<p>%s</p>" % html.escape(str(e)), False))
+                return self._html(410, page("Link expired", "This sign-in link can't be used any more",
+                                            group("What happened", [row(str(e), "Start again from Settings > Grok > Connect.")]),
+                                            False))
         if route == "/api/grok/oauth/callback":
             return self._html(200, oauth_callback(params))
         self._send(404, {"ok": False, "message": "not found"})
