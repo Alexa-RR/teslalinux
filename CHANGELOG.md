@@ -15,6 +15,15 @@ version's.
 
 ## [Unreleased]
 
+### The map no longer freezes while you move it
+
+*Car and phone map.*
+
+- Moving the map over new streets could freeze it for one or two seconds at a time, most of all
+  in the first minutes after Waze started. Each Hebrew or Arabic label made Waze's map look
+  through about twenty fonts before it found the right one. It now goes straight to it: on a
+  Pi 4, no frame over 100 ms while panning, where there were 15 a minute.
+
 ### A tidier Connect Cloudflare
 
 *Settings > Grok.*

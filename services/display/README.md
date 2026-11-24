@@ -273,6 +273,26 @@ Measured as above (Full unless named; Native = 1184x928).
   `build-dist.sh` step mesa into /opt/teslalinux/mesa (v3d and vc4, 22 MB, 3.8 MB in the dist) and
   the launcher puts it first on the app's library path (`TESLALINUX_APP_MESA=system` keeps Pi OS's).
 
+## Stalls while panning (Nov 24 2026)
+
+Panning the car map over streets not shown before froze the stream for 0.3 to 2.4 s at a time
+(`tools/debian/pan-bench.py --oneway`: a car-like drag every 1.4 s, every frame timed). Neither
+tacomp, the encoder, the GPU, GC nor the touch path: Waze's render thread was on the CPU the whole
+time (ftrace), 93% of it (perf, DWARF call chains) in Godot's text shaping, loading fonts. Godot's
+OS_Android picks a system fallback for text its own fonts lack (Hebrew, Arabic labels) from
+fonts.xml's script tags (`lang="und-Hebr"`), and keeps only a fallback that has the character.
+ATL's fonts.xml was the Lollipop one without those tags, so every label run walked about twenty
+fonts (a FreeType face and a HarfBuzz font each) before Noto Sans Hebrew. With AOSP's tags
+(ATL 18cbead8), Pi 4, 1088x832 H.264, Map frame rate Full, Waze restarted before each 60 s run:
+
+| | frame interval p50 / p95 / p99 | over 100 ms | slowest | frames/s |
+|---|---|---|---|---|
+| before | 17.0 / 27.8 / 62.1, 17.1 / 29.8 / 65.1 | 15, 15 | 1434, 1420 ms | 45.4, 45.2 |
+| after | 17.2 / 26.0 / 38.3, 17.2 / 26.6 / 37.5 | 0, 0 | 66, 53 ms | 51.7, 51.7 |
+
+Back-and-forth panning over streets already shown never stalled; the USB Wi-Fi card, the encoder's
+key frames and the frame limiter played no part.
+
 ## Touch path
 
 A second WebSocket server on `TACOMP_TOUCH_PORT` (9999) accepts the upstream text protocol
