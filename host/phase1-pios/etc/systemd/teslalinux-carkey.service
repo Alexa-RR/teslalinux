@@ -1,0 +1,29 @@
+[Unit]
+Description=teslalinux: the car's own state over Bluetooth with a read-only key (loopback 8086, behind /api/carLink; services/carkey)
+# BlueZ's GATT client: the car is reached through bluetoothd, which the app's beacon scanning shares
+After=bluetooth.service
+Wants=bluetooth.service
+# a dist built without Go has no binary: the unit stays quiet instead of failing every 5 s
+ConditionPathExists=/opt/teslalinux/bin/teslalinux-carkey
+
+[Service]
+# root: the car's VIN and the key, 0600 in a 0700 directory of root's (and BlueZ's GATT client over D-Bus)
+Environment=TESLALINUX_CARKEY_DIR=/var/lib/teslalinux/carkey
+Environment=TESLALINUX_CARKEY_BIND=127.0.0.1:8086
+# carGps (written by the API): the car's position read every second instead of every 5 s
+Environment=TESLALINUX_CARSYNC_SETTINGS=/var/lib/teslalinux/state/carsync.json
+UMask=0077
+ExecStart=/opt/teslalinux/bin/teslalinux-carkey
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/teslalinux/carkey
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

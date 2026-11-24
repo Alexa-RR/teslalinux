@@ -69,7 +69,7 @@ OWNED_DIRS=(/usr/share/teslalinux /usr/local/lib/teslalinux /usr/local/share/tes
 UNITS=(teslalinux-netconfig.service teslalinux-dbus.service teslalinux-uplink.service tacomp.service
   teslalinux-api.service teslalinux-gps.service teslalinux-audio.service teslalinux-pipewire.service
   teslalinux-wireplumber.service teslalinux-pipewire-pulse.service teslalinux-atl.service teslalinux-boottime.service
-  teslalinux-gates.service teslalinux-grok.service)
+  teslalinux-gates.service teslalinux-grok.service teslalinux-carkey.service teslalinux-carsync.service)
 # installed, never enabled here: teslalinux-set-grok enables it while Grok remote control is on
 OPTIONAL_UNITS=(teslalinux-cloudflared.service)
 APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.service teslalinux-api.service
@@ -550,6 +550,11 @@ step_files() {
   # PalGate gates (docs/GATES.md); the linked account lives in $STATE_DIR/gates, the service user's alone
   install -m 0644 "$P/services/gates/gates.py" "$P/services/gates/palgate.py" "$P/services/gates/tlqr.py" "$LIB/"
   install -d -m 0700 -o tesla -g tesla "$STATE_DIR/gates"
+  # the car's own link (docs/TESLA-LINK.md): teslalinux-carkey ($PREFIX/bin, root) keeps the car's VIN
+  # and the read-only key root-only; the follow service drives Waze with Grok's code ($LIB/grok)
+  install -d -m 0700 "$STATE_DIR/carkey"
+  install -m 0644 "$P/services/carsync/carsync.py" "$LIB/"
+  [[ -x "$PREFIX/bin/teslalinux-carkey" ]] || warn "teslalinux-carkey is not in this dist: Settings > Tesla stays unavailable"
   # Grok remote control (docs/GROK.md): the MCP service, its action log (the service user's alone),
   # and the root helper that stores its settings and the tunnel token (root-only)
   install -d -m 0755 "$LIB/grok"
@@ -1293,6 +1298,10 @@ doctor_static() {
   if nginx -t >/dev/null 2>&1; then ok "nginx -t"; else bad "nginx -t: $(nginx -t 2>&1 | tail -1)"; fi
   python3 -c 'import websockets' 2>/dev/null && ok "python3-websockets" || bad "python3 cannot import websockets"
   python3 -c 'import cryptography' 2>/dev/null && ok "python3-cryptography" || bad "python3 cannot import cryptography (PalGate gates, Grok's token check)"
+  [[ -x "$PREFIX/bin/teslalinux-carkey" ]] && ok "teslalinux-carkey installed" || meh "no $PREFIX/bin/teslalinux-carkey (Settings > Tesla cannot reach the car)"
+  if [[ -e "$STATE_DIR/carkey/private.pem" ]]; then
+    [[ "$(stat -c '%a %U' "$STATE_DIR/carkey/private.pem")" == "600 root" ]] && ok "car key root-only" || bad "$STATE_DIR/carkey/private.pem is not 0600 root"
+  fi
   [[ -x "$PREFIX/bin/cloudflared" ]] && ok "cloudflared $("$PREFIX/bin/cloudflared" --version 2>/dev/null | awk '{ print $3; exit }')" || meh "no $PREFIX/bin/cloudflared (Grok remote control cannot connect)"
   if [[ "$(sed -n 's/^TESLALINUX_GROK_ENABLED=//p' /etc/teslalinux/grok.env 2>/dev/null)" == 1 ]]; then
     [[ "$(stat -c '%a %U' /etc/teslalinux/grok/tunnel.env 2>/dev/null)" == "600 root" ]] && ok "Grok tunnel token root-only" || bad "Grok remote control is on but /etc/teslalinux/grok/tunnel.env is missing or not 0600 root"
@@ -1328,10 +1337,13 @@ doctor_live() {
   local u failed
   failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{ print $1 }' | tr '\n' ' ')
   [[ -z "${failed// }" ]] && ok "no failed units" || bad "failed units: $failed"
-  for u in teslalinux-ap-addr hostapd dnsmasq nftables nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-dbus teslalinux-gates teslalinux-grok; do
+  for u in teslalinux-ap-addr hostapd dnsmasq nftables nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-dbus teslalinux-gates teslalinux-grok teslalinux-carkey teslalinux-carsync; do
     [[ "$(systemctl is-active "$u" 2>/dev/null)" == active ]] || bad "$u is $(systemctl is-active "$u" 2>/dev/null)"
   done
   ok "core units checked"
+  local car
+  car=$(curl -s -m 3 http://127.0.0.1:8086/state 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["link"], "-", d["message"])' 2>/dev/null)
+  info "car link: ${car:-no answer from teslalinux-carkey}"
   local ap; ap=$(cfg AP_IFACE)
   local hs; hs=$(hostapd_cli -i "$ap" status 2>/dev/null | sed -n 's/^state=//p')
   [[ "$hs" == ENABLED ]] && ok "hotspot on $ap ($(hostapd_cli -i "$ap" status 2>/dev/null | sed -n 's/^ssid\[0\]=//p'))" || bad "hostapd on $ap: ${hs:-no answer}"

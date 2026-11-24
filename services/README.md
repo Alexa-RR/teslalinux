@@ -10,6 +10,8 @@ upstream port, so the browser frontend in `web/` is untouched.
 | `audio/` | 8080 | `audio.py`: PipeWire `android.monitor` → ffmpeg FLAC fMP4 → WebSocket with cached init segment | written, untested on hardware |
 | `api/` | 8081 | `api.py`: `/api/*` state + display re-configuration | written, untested on hardware |
 | `gates/` | 8082 (loopback, behind `/api/gates*`) | `gates.py`: PalGate gates as a linked device of the driver's account (`palgate.py`), the QR code (`tlqr.py`), auto-open from the GPS feed (`docs/GATES.md`) | tested against a local mock of the API |
+| `carkey/` | 8086 (loopback, behind `/api/carLink`) | `teslalinux-carkey` (Go, root): the car's own state over Bluetooth with a read-only key, Tesla's vehicle-command over BlueZ (`bluez.go`) (`docs/TESLA-LINK.md`) | runs on the CM4 against a Model 3 |
+| `carsync/` | none (reads carkey, drives Waze with `grok/waze.py`) | `carsync.py`: Waze follows the car's route; the car's GPS into `gps.py` (`docs/TESLA-LINK.md`) | unit tests; untested on hardware |
 | `grok/` | 8083 (loopback, MCP, cloudflared only), 8084 (loopback, behind `/api/grok*`) | `grok.py`: Grok remote control, a remote MCP server for Waze (`mcp.py`) behind a Cloudflare Tunnel and Access (`accessjwt.py` checks every request's Access JWT), the tools through ATL's car app and intent channels (`waze.py`), the automatic Cloudflare setup (`cfsetup.py`) (`docs/GROK.md`) | tested against local stand-ins; end to end in the Debian VM with Waze |
 
 Install location on the Pi: `/usr/local/lib/teslalinux/*.py`; tacomp in `/opt/teslalinux/tacomp`

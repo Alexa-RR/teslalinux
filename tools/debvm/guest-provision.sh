@@ -41,6 +41,8 @@ inst \
   "$JDK_PKG" dpkg-dev fakeroot
 # tlplay (tools/appupdate, Rust; build-dist.sh step tlplay)
 inst cargo rustc libssl-dev
+# teslalinux-carkey (services/carkey, Go 1.23+; build-dist.sh step carkey)
+inst golang-go
 # ccache: build-dist.sh puts every compiler call through it (art_standalone alone is ~1,200 sources)
 inst ccache
 if [ $MODE = vm ]; then inst doas; fi

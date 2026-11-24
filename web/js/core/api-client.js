@@ -61,6 +61,17 @@
       return this._postJson(this.apiBaseUrl + "/audioOutput", change);
     }
 
+    // teslalinux: the car's own link over Bluetooth and Waze following the car's route
+    // (services/carkey, services/carsync; docs/TESLA-LINK.md)
+    fetchCarLink() {
+      return this._fetchJson(this.apiBaseUrl + "/carLink");
+    }
+
+    // {vin} | {action: "pair"|"forget"} | {follow?, carGps?}: {ok, message}
+    setCarLink(request) {
+      return this._postJsonResult(this.apiBaseUrl + "/carLink", request);
+    }
+
     // teslalinux: a short chime from the Pi into the app's sink ({seconds, already, audio})
     playAudioTest() {
       return this._fetchJson(this.apiBaseUrl + "/audioTest", {

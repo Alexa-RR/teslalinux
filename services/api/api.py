@@ -122,6 +122,15 @@ The settings page's Status, Network and System update sections (new routes only)
 * POST /api/releaseUpdate JSON {action: "check"|"download"|"downloadMetered"|"installNow"|"goBack"} or
                           {autoUpdate: bool}: the helper (root, one sudoers rule) records it and runs; {ok, message}
 
+The car's own link (docs/TESLA-LINK.md), new routes only:
+* GET  /api/carLink       {"running": teslalinux-carkey answers, "car": its state (the VIN, "link":
+                          off|searching|connected|notPaired|asleep|error, "message", the car's route
+                          ("drive") and GPS ("location")) or null, "settings": {"follow", "carGps"},
+                          "sync": {"sent": the destination last handed to the app, "lastAction",
+                          "gpsFeeding"}}
+* POST /api/carLink       JSON {"vin": ...} | {"action": "pair"|"forget"} (to teslalinux-carkey) |
+                          {"follow"?: bool, "carGps"?: bool} (carsync.json): {ok, message, state}
+
 PalGate gates (services/gates/gates.py, docs/GATES.md), new routes only:
 * GET/POST /api/gates*    forwarded unchanged to teslalinux-gates on 127.0.0.1:8082 (TESLALINUX_GATES_URL):
                           the linked account (masked), the gates and their settings, linking with a QR
@@ -213,6 +222,12 @@ BOOT_ID_FILE = os.environ.get("TESLALINUX_BOOT_ID", "/proc/sys/kernel/random/boo
 DIST_MANIFEST = os.environ.get("TESLALINUX_DIST_MANIFEST", "/opt/teslalinux/MANIFEST")
 # PalGate gates: services/gates/gates.py serves /api/gates* on loopback; this forwards them
 GATES_URL = os.environ.get("TESLALINUX_GATES_URL", "http://127.0.0.1:8082")
+# the car's own link (services/carkey, root) and the follow service (services/carsync)
+CARKEY_URL = os.environ.get("TESLALINUX_CARKEY_URL", "http://127.0.0.1:8086")
+CARSYNC_SETTINGS = os.environ.get("TESLALINUX_CARSYNC_SETTINGS", "/var/lib/teslalinux/state/carsync.json")
+CARSYNC_STATUS = os.environ.get("TESLALINUX_CARSYNC_STATUS",
+                                os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/run/tesla"), "teslalinux-carsync.json"))
+CARSYNC_DEFAULTS = {"follow": True, "carGps": False}
 
 ENV = tp.load_env()
 _lock = threading.Lock()
@@ -249,10 +264,10 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
 REAR_DISPLAY_FIELDS = ("isRearDisplayEnabled", "isRearDisplayPrioritised")
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
               "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan",
-              "gpuSpeed", "audioOutput", "releaseUpdate", "wifiConnect"}
+              "gpuSpeed", "audioOutput", "carLink", "releaseUpdate", "wifiConnect"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
                                   "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed",
-                                  "audioOutput", "audioTest", "releaseUpdate", "wifiConnect"}
+                                  "audioOutput", "audioTest", "carLink", "releaseUpdate", "wifiConnect"}
 
 
 def props():
@@ -2229,6 +2244,73 @@ def gates_forward(method, path, body):
         conn.close()
 
 
+# ---------------------------------------------------------------------------- the car's own link
+
+def carkey_call(method, path, body=None, timeout=25):
+    """teslalinux-carkey (services/carkey, root): (status, JSON) or (None, None) when not running.
+    A pair request waits on the car (up to 20 s there)."""
+    import http.client
+    u = urllib.parse.urlsplit(CARKEY_URL)
+    conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+    try:
+        conn.request(method, path, body=json.dumps(body).encode() if body is not None else None,
+                     headers={"Content-Type": "application/json"} if body is not None else {})
+        r = conn.getresponse()
+        return r.status, json.loads(r.read() or b"null")
+    except (OSError, http.client.HTTPException, ValueError):
+        return None, None
+    finally:
+        conn.close()
+
+
+def carsync_settings():
+    s = dict(CARSYNC_DEFAULTS)
+    d = _read_json(CARSYNC_SETTINGS) or {}
+    for k in CARSYNC_DEFAULTS:
+        if isinstance(d.get(k), bool):
+            s[k] = d[k]
+    return s
+
+
+def car_link_state():
+    """GET /api/carLink: the car's own link (teslalinux-carkey's state, null while it does not run),
+    the follow settings, and what teslalinux-carsync did last"""
+    _, st = carkey_call("GET", "/state", timeout=3)
+    sync = _read_json(CARSYNC_STATUS) or {}
+    return {"running": isinstance(st, dict), "car": st if isinstance(st, dict) else None,
+            "settings": carsync_settings(),
+            "sync": {"sent": sync.get("sent"), "lastAction": sync.get("lastAction"),
+                     "gpsFeeding": bool(sync.get("gpsFeeding"))}}
+
+
+def set_car_link(req):
+    """POST /api/carLink: {"vin": "..."} | {"action": "pair"|"forget"} | {"follow"?: bool, "carGps"?: bool}
+    -> (ok, message); None for a request that is not one of those"""
+    if not isinstance(req, dict) or not req:
+        return None
+    if set(req) == {"vin"} and isinstance(req["vin"], str) and len(req["vin"]) <= 32:
+        code, res = carkey_call("POST", "/vin", {"vin": req["vin"]})
+    elif set(req) == {"action"} and req["action"] in ("pair", "forget"):
+        code, res = carkey_call("POST", "/" + req["action"], {})
+    elif req and not set(req) - set(CARSYNC_DEFAULTS) and all(isinstance(v, bool) for v in req.values()):
+        with _apply_lock:
+            s = carsync_settings()
+            s.update(req)
+            os.makedirs(os.path.dirname(CARSYNC_SETTINGS), exist_ok=True)
+            tmp = CARSYNC_SETTINGS + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(s, f)
+            # teslalinux-carkey (root) reads carGps from it too
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, CARSYNC_SETTINGS)
+        return True, "Saved"
+    else:
+        return None
+    if code is None:
+        return False, "The car link service is not running."
+    return bool(isinstance(res, dict) and res.get("ok")), (res or {}).get("message") or "No answer"
+
+
 # ---------------------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
@@ -2308,6 +2390,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(keyboard_state())
         if route == "audioOutput":
             return self._json(audio_output_state())
+        if route == "carLink":
+            return self._json(car_link_state())
         if route == "appInterface":
             return self._json(app_interface_state(with_map_skin=True))
         if route == "appUpdate":
@@ -2393,6 +2477,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error()
             set_gpu_speed(req["speed"])
             return self._json(gpu_speed_state())
+        if route == "carLink":
+            try:
+                req = json.loads(body.decode("utf-8") or "null")
+            except (ValueError, UnicodeDecodeError):
+                return self._error()
+            try:
+                res = set_car_link(req)
+            except OSError as e:
+                print("teslalinux-api: car link settings not written: %s" % e, flush=True)
+                return self._error()
+            if res is None:
+                return self._error()
+            return self._json({"ok": res[0], "message": res[1], "state": car_link_state()})
         if route == "audioOutput":
             try:
                 req = json.loads(body.decode("utf-8") or "null")

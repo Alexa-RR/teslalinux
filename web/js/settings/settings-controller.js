@@ -208,6 +208,8 @@
 
       // teslalinux: PalGate gates (js/settings/settings-gates.js): its section after Waze, and its search entries
       if (TAHtml.SettingsGates) TAHtml.SettingsGates.install(this);
+      // teslalinux: the car's own link (js/settings/settings-tesla.js, docs/TESLA-LINK.md): right after Waze
+      if (TAHtml.SettingsTesla) TAHtml.SettingsTesla.install(this);
       // teslalinux: Grok remote control (js/settings/settings-grok.js, docs/GROK.md)
       if (TAHtml.SettingsGrok) TAHtml.SettingsGrok.install(this);
 

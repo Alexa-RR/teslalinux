@@ -47,6 +47,7 @@ if [[ -n "${TL_REPO:-}" ]]; then
   BOOTCP="$TL_REPO/tools/atl-vm/patches/atl-waze/bootcp"
   TACOMP_SRC="$TL_REPO/services/display"
   TLPLAY_SRC="$TL_REPO/tools/appupdate"
+  CARKEY_SRC="$TL_REPO/services/carkey"
 else
   # the VM: the copies vm-deb.sh pushes (provision, push-patches, push-tacomp)
   VERSIONS_ENV="${VERSIONS_ENV:-$HOME/versions.env}"
@@ -56,6 +57,7 @@ else
   BOOTCP="$HOME/debvm-bootcp"
   TACOMP_SRC="$HOME/tacomp"
   TLPLAY_SRC="$HOME/appupdate"
+  CARKEY_SRC="$HOME/carkey"
 fi
 # shellcheck source=versions.env
 . "$VERSIONS_ENV"
@@ -468,6 +470,16 @@ step_tlplay() {
   install -m 0755 "$CARGO_TARGET_DIR/release/tlplay" "$PREFIX/bin/tlplay"
 }
 
+# --- teslalinux-carkey: the car's own link over Bluetooth (services/carkey, Go; docs/TESLA-LINK.md),
+# into $PREFIX/bin. go.sum pins every module; the build tree and module cache stay out of the source ---
+have_carkey_inputs() { command -v go >/dev/null 2>&1 && [[ -f "$CARKEY_SRC/go.mod" ]]; }
+step_carkey() {
+  have_carkey_inputs || die "teslalinux-carkey needs Go (apt-get install golang-go) and the source in $CARKEY_SRC"
+  export GOPATH="$B/go" GOCACHE="$B/go-cache" GOFLAGS=-mod=readonly GOTOOLCHAIN=local CGO_ENABLED=0
+  install -d "$PREFIX/bin"
+  (cd "$CARKEY_SRC" && go build -trimpath -ldflags='-s -w' -o "$PREFIX/bin/teslalinux-carkey" .)
+}
+
 # --- cloudflared: the Cloudflare Tunnel of Grok remote control (docs/GROK.md), Cloudflare's own
 # linux-arm64 release binary, checksummed, into $PREFIX/bin (teslalinux-cloudflared.service) ---
 step_cloudflared() {
@@ -482,7 +494,7 @@ step_cloudflared() {
   "$PREFIX/bin/cloudflared" --version
 }
 
-ALL=(vixl wolfssl bionic art libcored8 coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp mesa tlplay cloudflared)
+ALL=(vixl wolfssl bionic art libcored8 coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp mesa tlplay carkey cloudflared)
 pins_of() { # what a step's stamp records: its pins plus the hash of the patches it applies
   case "$1" in
     vixl) echo "$VIXL_URL $VIXL_MESON_PATCH_SHA256" ;;
@@ -514,6 +526,7 @@ pins_of() { # what a step's stamp records: its pins plus the hash of the patches
     # the patches too, and tacomp's wayland (its scanner generates part of the build)
     mesa) echo "$MESA_VERSION $MESA_SHA256 ${TL_CPU_CFLAGS:-} $WAYLAND_TAG $(cat "$DEBVM_PATCHES"/mesa-*.patch 2>/dev/null | sha256sum | cut -c1-16)" ;;
     tlplay) echo "${TL_RUST_TARGET_CPU:-} $(find "$TLPLAY_SRC/src" "$TLPLAY_SRC/Cargo.toml" "$TLPLAY_SRC/Cargo.lock" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum | cut -c1-16)" ;;
+    carkey) echo "$(find "$CARKEY_SRC" -maxdepth 1 -type f \( -name "*.go" -o -name go.mod -o -name go.sum \) 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum | cut -c1-16)" ;;
     cloudflared) echo "$CLOUDFLARED_VERSION $CLOUDFLARED_SHA256" ;;
   esac
 }
@@ -557,6 +570,7 @@ case "${1:-all}" in
     for s in "${ALL[@]}"; do
       # tlplay is optional in `all`: the VM has no Rust toolchain by default (the release build has one)
       if [[ $s == tlplay ]] && ! have_tlplay_inputs; then log "tlplay: skipped (no cargo or no source in $TLPLAY_SRC)"; continue; fi
+      if [[ $s == carkey ]] && ! have_carkey_inputs; then log "carkey: skipped (no Go or no source in $CARKEY_SRC)"; continue; fi
       run_step "$s" "$FORCE"
     done
     log "all steps done; prefix: $(du -sh "$PREFIX" | cut -f1)" ;;

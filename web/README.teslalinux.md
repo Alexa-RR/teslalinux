@@ -69,6 +69,10 @@ Changes from upstream:
     sound (`/api/audioTest`: a chime from the Pi into the sink Waze plays into, so it takes Waze's
     whole path; the press also starts the car's sound stream), the car's browser audio and its
     volume, and voice search (car interface only).
+  * **Tesla** (`js/settings/settings-tesla.js`, `/api/carLink`, docs/TESLA-LINK.md): the car's VIN,
+    pairing the device as a read-only key (the car's add-key prompt and the key card), the link's
+    state and the route on the car's screen, Waze following that route, and the car's GPS as Waze's
+    position.
   * **Connections** (replaces upstream's "Network"): the internet now (uplink, LTE operator and bars,
     data, the backup uplinks' own checks, failover and SIM notes, the modem's radio and recovery
     folded; `GET /api/status`, read from `host/teslalinux-uplink`), the hotspot (name, password, country,

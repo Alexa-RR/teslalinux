@@ -15,6 +15,16 @@ version's.
 
 ## [Unreleased]
 
+### Waze follows the car's own route
+
+*Settings > Tesla, new.*
+
+- Pair the device with the car once (the VIN, then your key card on the car's own prompt). It
+  becomes a read-only key of the car, read over Bluetooth: it cannot unlock or drive the car.
+- Start a route on the car's own map and Waze drives to the same place; when the car's route ends,
+  so does Waze's drive (car interface).
+- Optional: Waze uses the car's own GPS instead of the browser's position.
+
 ### A test sound in Settings > Sound
 
 *Hear whether the sound path works.*

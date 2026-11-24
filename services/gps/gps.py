@@ -7,6 +7,8 @@ Upstream contract (docs/UPSTREAM-NOTES.md, web/js/gps/gps-controller.js): one JS
 second, every value a string: {"latitude","longitude","speed","bearing","vertical_accuracy","timestamp"}.
 The browser's coords.speed and coords.heading are null when the car stands still or the fix has no
 course, and the frontend sends String(null), i.e. "null"; "vertical_accuracy" carries coords.accuracy.
+One more sender, ours: services/carsync/carsync.py sends the car's own GPS (read over Bluetooth) in
+the same format with "source": "car"; while those come, the browser's fixes are dropped.
 
 Feed (TESLALINUX_GPS_FEED_PORT, 9997): one line per fix,
   lat lon speed_mps bearing_deg accuracy_m timestamp_ms\n
@@ -29,8 +31,9 @@ WS_BIND = os.environ.get("TESLALINUX_GPS_WS_BIND", "127.0.0.1")
 FEED_PORT = int(os.environ.get("TESLALINUX_GPS_FEED_PORT", "9997"))
 FEED_BIND = os.environ.get("TESLALINUX_GPS_FEED_BIND", "127.0.0.1")
 STALE_S = 10.0
+CAR_PRIORITY_S = 3.0
 
-latest = {"line": None, "at": 0.0}
+latest = {"line": None, "at": 0.0, "carAt": -1e9}
 feed_clients: set = set()
 
 
@@ -95,7 +98,14 @@ async def ws_handler(ws, *_):
             line = to_line(msg)
             if line is None:
                 continue
-            latest["line"], latest["at"] = line, time.monotonic()
+            # the car's own GPS (services/carsync, Settings > Tesla) wins over the browser's while it
+            # comes: the browser's fixes are dropped until the car's stop for CAR_PRIORITY_S
+            now = time.monotonic()
+            if msg.get("source") == "car":
+                latest["carAt"] = now
+            elif now - latest["carAt"] < CAR_PRIORITY_S:
+                continue
+            latest["line"], latest["at"] = line, now
             broadcast(line)
     except websockets.ConnectionClosed:
         pass  # the car left the Wi-Fi without a close frame: normal, not an error

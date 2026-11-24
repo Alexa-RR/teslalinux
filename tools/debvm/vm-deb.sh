@@ -150,7 +150,9 @@ case "${1:-}" in
     # build-dist.sh's coreoj step (libcore boot classpath sources) and tlplay step (when cargo exists)
     mkdir -p "$tmp/debvm-bootcp" "$tmp/appupdate"; cp -R "$P/atl-waze/bootcp/." "$tmp/debvm-bootcp/"
     cp -R "$REPO/tools/appupdate/src" "$REPO/tools/appupdate/Cargo.toml" "$REPO/tools/appupdate/Cargo.lock" "$REPO/tools/appupdate/.cargo" "$tmp/appupdate/"
-    COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -C "$tmp" -cf - . | bash "$VMMAC" ssh 'rm -rf ~/atl-native-patches ~/debvm-patches ~/debvm-bootcp ~/appupdate && tar -xf - -C ~ && ls ~/atl-native-patches | wc -l'
+    # and its carkey step (services/carkey, when Go exists)
+    mkdir -p "$tmp/carkey"; cp "$REPO"/services/carkey/*.go "$REPO/services/carkey/go.mod" "$REPO/services/carkey/go.sum" "$tmp/carkey/"
+    COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -C "$tmp" -cf - . | bash "$VMMAC" ssh 'rm -rf ~/atl-native-patches ~/debvm-patches ~/debvm-bootcp ~/appupdate ~/carkey && tar -xf - -C ~ && ls ~/atl-native-patches | wc -l'
     log "pushed $(ls "$P"/atl-waze/native-*.sh | wc -l | tr -d ' ') native patch scripts + the bionic patch"
     ;;
   push-tacomp)

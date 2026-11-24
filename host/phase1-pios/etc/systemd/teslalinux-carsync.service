@@ -1,0 +1,26 @@
+[Unit]
+Description=teslalinux: Waze follows the car's own route, and the car's GPS as its position (services/carsync)
+After=teslalinux-carkey.service teslalinux-gps.service
+Wants=teslalinux-carkey.service
+
+[Service]
+User=tesla
+# its status for the API, next to the audio service's
+Environment=XDG_RUNTIME_DIR=/run/tesla
+Environment=TESLALINUX_CARKEY_URL=http://127.0.0.1:8086
+Environment=TESLALINUX_CARSYNC_SETTINGS=/var/lib/teslalinux/state/carsync.json
+Environment=TESLALINUX_CARSYNC_GPS_WS=ws://127.0.0.1:9998/
+# Waze is driven with Grok remote control's code (services/grok/waze.py, routes.py): the car app
+# channel (9995) in Car mode, ATL's intent channel (9993) in Phone mode
+Environment=PYTHONPATH=/usr/local/lib/teslalinux/grok:/usr/local/lib/teslalinux
+ExecStart=/usr/bin/python3 /usr/local/lib/teslalinux/carsync.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/tesla
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

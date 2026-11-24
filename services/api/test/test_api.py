@@ -72,7 +72,45 @@ AUDIO_TEST_WAV = os.path.join(TMP, "audiotest.wav")
 with open(os.path.join(TMP, "pw-play"), "w") as f:
     f.write('#!/bin/sh\necho "$@" > "%s"\ncat > "%s"\nsleep 1\n' % (AUDIO_TEST_LOG, AUDIO_TEST_WAV))
 os.chmod(os.path.join(TMP, "pw-play"), 0o755)
+# teslalinux-carkey's loopback API, faked: its state, and the requests it got
+from http.server import BaseHTTPRequestHandler as _BH, ThreadingHTTPServer as _TS  # noqa: E402
+CARKEY_GOT = []
+CARKEY_STATE = {"vin": "5YJ3E1EA0KF000001", "keyReady": True, "link": "connected", "message": "Reading the car",
+                "drive": {"at": 1, "destination": "Herzl St 10", "destLat": 31.7683, "destLon": 35.2137},
+                "location": None}
+
+
+class _FakeCarkey(_BH):
+    def log_message(self, *a):
+        pass
+
+    def _reply(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        self._reply(200, CARKEY_STATE)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"null")
+        CARKEY_GOT.append((self.path, body))
+        if self.path == "/vin" and body.get("vin") != "5YJ3E1EA0KF000001":
+            return self._reply(400, {"ok": False, "message": "a VIN has 17 letters and digits (no I, O or Q)"})
+        if self.path == "/pair":
+            return self._reply(200, {"ok": True, "message": "Sent. Tap your key card"})
+        self._reply(200, {"ok": True, "message": "Saved"})
+
+
+CARKEY = _TS(("127.0.0.1", 0), _FakeCarkey)
+threading.Thread(target=CARKEY.serve_forever, daemon=True).start()
 os.environ.update({
+    "TESLALINUX_CARKEY_URL": "http://127.0.0.1:%d" % CARKEY.server_address[1],
+    "TESLALINUX_CARSYNC_SETTINGS": os.path.join(TMP, "state", "carsync.json"),
+    "TESLALINUX_CARSYNC_STATUS": os.path.join(TMP, "carsync-status.json"),
     "TESLALINUX_AUDIO_TEST_PLAYER": os.path.join(TMP, "pw-play"),
     "TESLALINUX_SET_GPU_SPEED": os.path.join(REPO, "host", "teslalinux-set-gpu-speed"),
     "TESLALINUX_GPU_ENV": os.path.join(TMP, "gpu.env"),
@@ -516,6 +554,49 @@ class AudioOutput(unittest.TestCase):
             wav = f.read()
         self.assertEqual(wav[:4] + wav[8:16], b"RIFFWAVEfmt ")
         self.assertEqual(int.from_bytes(wav[24:28], "little"), 48000)
+
+
+class CarLink(unittest.TestCase):
+    """/api/carLink: teslalinux-carkey's state and requests, and the follow settings"""
+
+    def post(self, req):
+        code, _, body = call("carLink", "POST", json.dumps(req), "application/json")
+        return code, (json.loads(body) if code == 200 else None)
+
+    def test_state_settings_and_forwarding(self):
+        with open(os.path.join(TMP, "carsync-status.json"), "w") as f:
+            json.dump({"sent": {"name": "Herzl St 10", "lat": 31.7683, "lon": 35.2137},
+                       "lastAction": {"at": 1, "text": "Following", "ok": True}, "gpsFeeding": False}, f)
+        st = json.loads(call("carLink")[2])
+        self.assertTrue(st["running"])
+        self.assertEqual(st["car"]["link"], "connected")
+        self.assertEqual(st["settings"], {"follow": True, "carGps": False})
+        self.assertEqual(st["sync"]["sent"]["name"], "Herzl St 10")
+        code, res = self.post({"carGps": True})
+        self.assertEqual((code, res["ok"], res["state"]["settings"]), (200, True, {"follow": True, "carGps": True}))
+        self.assertEqual(oct(os.stat(os.path.join(TMP, "state", "carsync.json")).st_mode & 0o777), "0o644")
+        code, res = self.post({"vin": "5YJ3E1EA0KF000001"})
+        self.assertEqual((code, res["ok"]), (200, True))
+        code, res = self.post({"vin": "nope"})
+        self.assertEqual((code, res["ok"]), (200, False))
+        self.assertIn("17 letters", res["message"])
+        code, res = self.post({"action": "pair"})
+        self.assertEqual((res["ok"], res["message"]), (True, "Sent. Tap your key card"))
+        self.post({"action": "forget"})
+        self.assertEqual([p for p, _ in CARKEY_GOT[-4:]], ["/vin", "/vin", "/pair", "/forget"])
+        for bad in ({}, {"action": "unlock"}, {"follow": "yes"}, {"vin": 5}, {"follow": True, "action": "pair"}, []):
+            self.assertEqual(self.post(bad)[0], 500, bad)
+        self.post({"carGps": False})
+
+    def test_not_running(self):
+        saved = api.CARKEY_URL
+        api.CARKEY_URL = "http://127.0.0.1:9"
+        try:
+            st = json.loads(call("carLink")[2])
+            self.assertEqual((st["running"], st["car"]), (False, None))
+            self.assertEqual(self.post({"action": "pair"})[1]["message"], "The car link service is not running.")
+        finally:
+            api.CARKEY_URL = saved
 
 
 class BootTime(unittest.TestCase):

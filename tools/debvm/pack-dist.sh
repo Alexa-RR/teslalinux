@@ -121,6 +121,7 @@ PAYLOAD=(
   host/teslalinux-app-log-watch.py
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
   services/gates/gates.py services/gates/palgate.py services/gates/tlqr.py docs/GATES.md
+  services/carsync/carsync.py docs/TESLA-LINK.md
   services/grok/grok.py services/grok/mcp.py services/grok/accessjwt.py services/grok/waze.py services/grok/cfsetup.py services/grok/cfoauth.py
   services/grok/carlink.py services/grok/flows.py services/grok/stops.py services/grok/routes.py services/grok/controls.py
   services/grok/info.py services/grok/places.py services/grok/locate.py services/grok/maplinks.py services/grok/gatectl.py
