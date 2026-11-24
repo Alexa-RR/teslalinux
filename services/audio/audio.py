@@ -30,6 +30,7 @@ import os
 import signal
 import struct
 import tempfile
+import time
 
 import websockets
 
@@ -56,6 +57,7 @@ APP_SINK = SOURCE[:-len(".monitor")] if SOURCE.endswith(".monitor") else SOURCE
 OUTPUTS = ("car", "pi", "both")
 DEFAULT_SETTINGS = {"output": "car", "volume": 80}
 LOOPBACK = "teslalinux-speaker"  # pw-loopback's name: its streams are input.<name> and output.<name>
+CARD_SETTLE_S = 30.0  # after a card appears, a level below full is its power-up report, not the driver's
 
 
 def read_settings(path=SETTINGS):
@@ -116,6 +118,16 @@ class Graph:
 
     def node_state(self, oid):
         return ((self.objects.get(oid) or {}).get("info") or {}).get("state")
+
+    def node_volume(self, oid):
+        """the node's loudest channel volume (linear, 1.0 = full) from its Props, or None"""
+        params = (((self.objects.get(oid) or {}).get("info") or {}).get("params")) or {}
+        for p in params.get("Props") or []:
+            if isinstance(p, dict) and isinstance(p.get("channelVolumes"), list) and p["channelVolumes"]:
+                vols = [v for v in p["channelVolumes"] if isinstance(v, (int, float))]
+                if vols:
+                    return max(vols)
+        return None
 
     def speakers(self):
         """the Pi's own outputs (ALSA sinks of WirePlumber's monitor), the preferred one first: USB
@@ -189,7 +201,7 @@ class Speaker:
     def __init__(self):
         self.proc = None
         self.target = None
-        self.full = set()       # outputs already set to full volume since they appeared
+        self.full = {}          # output id -> when it was set to full volume after it appeared
         self.volume_set = None  # (loopback node id, volume) last applied
 
     def running(self):
@@ -225,11 +237,20 @@ class Speaker:
         self.target = target
         print("teslalinux-audio: the app's sound plays on %s too" % target, flush=True)
 
-    async def apply_volume(self, graph, volume, target_id):
-        if target_id is not None and target_id not in self.full:
-            # a card WirePlumber just found starts at its default (0.4); the speaker's level is the stream's
-            if await run_quiet("wpctl", "set-volume", str(target_id), "1.0") == 0:
-                self.full.add(target_id)
+    async def apply_volume(self, graph, volume, target_id, now=None):
+        # The card plays at full; the speaker's level is the loopback stream's (Settings > Sound). A
+        # card WirePlumber just found starts at its default (0.4), and a USB speaker with its own
+        # volume (a Jabra Speak2) reports that level again a few seconds after it powers up, after
+        # this set it to full, which WirePlumber then saved as the card's level (seen: every restart
+        # left the speaker at -18 dB). So during CARD_SETTLE_S after it appeared, a card below full
+        # is put back to full; later changes (the speaker's own volume buttons) are the driver's.
+        if target_id is not None:
+            now = time.monotonic() if now is None else now
+            first = self.full.get(target_id)
+            vol = graph.node_volume(target_id)
+            if first is None or (now - first < CARD_SETTLE_S and vol is not None and vol < 0.99):
+                if await run_quiet("wpctl", "set-volume", str(target_id), "1.0") == 0 and first is None:
+                    self.full[target_id] = now
         oid = graph.node_id("output." + LOOPBACK)
         if oid is None or self.volume_set == (oid, volume):
             return
@@ -266,7 +287,8 @@ async def router(graph, changed):
             await speaker.ensure(choice["name"] if choice else None)
             await speaker.apply_volume(graph, s["volume"], choice["id"] if choice else None)
             # forget cards that went away: one plugged in again starts at WirePlumber's default
-            speaker.full &= {sp["id"] for sp in speakers}
+            ids = {sp["id"] for sp in speakers}
+            speaker.full = {k: v for k, v in speaker.full.items() if k in ids}
             # the car's stream: only in "car" and "both"
             if car_stream_wanted():
                 if clients and (not state["task"] or state["task"].done()):
