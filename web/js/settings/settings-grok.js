@@ -118,10 +118,7 @@
     );
     const sheet = UI.openSheet({
       title: "Connect Cloudflare",
-      body: [h("div", { class: "gates-link" }, qr, h("div", null, steps, status, again, here)),
-        h("p", { class: "gates-fine" }, "Cloudflare lets the device in once: it makes the tunnel, the address and the Access sign-in on "
-          + "your domain, then gives the permission back. Only the tunnel's token stays on the device. With several domains, "
-          + "you pick one after signing in.")],
+      body: [h("div", { class: "gates-link" }, qr, h("div", null, steps, status, again, here))],
     });
     let timer = null;
     let tick = null;
