@@ -1,0 +1,31 @@
+[Unit]
+Description=teslalinux: Cloudflare Tunnel for Grok remote control (only while it is on; docs/GROK.md)
+After=network-online.target teslalinux-grok.service
+Wants=network-online.target
+# enabled and started by teslalinux-set-grok when remote control is on and a token is stored
+ConditionPathExists=/etc/teslalinux/grok/tunnel.env
+
+[Service]
+# the remotely managed tunnel's token (TUNNEL_TOKEN): systemd reads the root-only file, cloudflared
+# gets it in its environment and runs as a user of its own without any other access
+EnvironmentFile=/etc/teslalinux/grok/tunnel.env
+DynamicUser=yes
+# the tunnel's route (set on Cloudflare) sends the hostname to http://127.0.0.1:8083; the metrics
+# server's /ready says how many connections to Cloudflare are up (the settings page shows it)
+ExecStart=/opt/teslalinux/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:20241 run
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

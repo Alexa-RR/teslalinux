@@ -18,6 +18,17 @@ etag off;
 # max-age=1); upstream's URL regex is ^/api(/.*)?$
 location = /api { proxy_pass http://127.0.0.1:8081; include @NGINX_DIR@/teslalinux-api.inc; }
 location /api/  { proxy_pass http://127.0.0.1:8081; include @NGINX_DIR@/teslalinux-api.inc; }
+# teslalinux: Grok remote control's settings (services/grok/grok.py, docs/GROK.md); its MCP endpoint
+# (8083) is never routed here, only cloudflared reaches it. The setup waits on Cloudflare's API.
+location /api/grok {
+  proxy_pass http://127.0.0.1:8084;
+  proxy_http_version 1.1;
+  proxy_set_header Connection "";
+  proxy_set_header Host $host;
+  proxy_connect_timeout 5s;
+  proxy_read_timeout 90s;
+  expires 1s;
+}
 # teslalinux: an app bundle uploaded from Settings > App updates (services/api/api.py streams it into
 # teslalinux-appupdate receive-upload): up to 400 MB, passed through as it arrives (no buffering to disk
 # here), and the answer comes after the verification

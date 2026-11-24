@@ -1,0 +1,26 @@
+[Unit]
+Description=teslalinux: Grok remote control, Waze over MCP (loopback 8083 for the tunnel, 8084 behind /api/grok*; services/grok)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tesla
+Environment=TESLALINUX_GROK_BIND=127.0.0.1
+# the MCP endpoint: only cloudflared (teslalinux-cloudflared.service) sends requests here, and each
+# needs a valid Cloudflare Access token; nginx never routes to it
+Environment=TESLALINUX_GROK_MCP_PORT=8083
+# the settings page's routes (nginx /api/grok*)
+Environment=TESLALINUX_GROK_ADMIN_PORT=8084
+# the action log, 0600 in a 0700 directory of the service user
+Environment=TESLALINUX_GROK_DIR=/var/lib/teslalinux/grok
+Environment=PYTHONPATH=/usr/local/lib/teslalinux/grok
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/lib/teslalinux/grok/grok.py
+Restart=always
+RestartSec=2
+# no ProtectSystem / NoNewPrivileges: the settings go through teslalinux-set-grok (sudo, one
+# sudoers rule), which writes /etc/teslalinux and switches the tunnel unit, as teslalinux-api's do
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

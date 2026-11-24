@@ -69,7 +69,9 @@ OWNED_DIRS=(/usr/share/teslalinux /usr/local/lib/teslalinux /usr/local/share/tes
 UNITS=(teslalinux-netconfig.service teslalinux-dbus.service teslalinux-uplink.service tacomp.service
   teslalinux-api.service teslalinux-gps.service teslalinux-audio.service teslalinux-pipewire.service
   teslalinux-wireplumber.service teslalinux-pipewire-pulse.service teslalinux-atl.service teslalinux-boottime.service
-  teslalinux-gates.service)
+  teslalinux-gates.service teslalinux-grok.service)
+# installed, never enabled here: teslalinux-set-grok enables it while Grok remote control is on
+OPTIONAL_UNITS=(teslalinux-cloudflared.service)
 APP_UNITS=(teslalinux-atl.service teslalinux-audio.service teslalinux-gps.service teslalinux-api.service
   teslalinux-pipewire-pulse.service teslalinux-wireplumber.service teslalinux-pipewire.service tacomp.service teslalinux-dbus.service)
 # runtime packages next to the dist's MANIFEST list (tools/debian/carstack.sh, host/phase1-pios/provision.sh)
@@ -498,6 +500,13 @@ step_files() {
   # PalGate gates (docs/GATES.md); the linked account lives in $STATE_DIR/gates, the service user's alone
   install -m 0644 "$P/services/gates/gates.py" "$P/services/gates/palgate.py" "$P/services/gates/tlqr.py" "$LIB/"
   install -d -m 0700 -o tesla -g tesla "$STATE_DIR/gates"
+  # Grok remote control (docs/GROK.md): the MCP service, its action log (the service user's alone),
+  # and the root helper that stores its settings and the tunnel token (root-only)
+  install -d -m 0755 "$LIB/grok"
+  install -m 0644 "$P/services/grok/grok.py" "$P/services/grok/mcp.py" "$P/services/grok/accessjwt.py" \
+    "$P/services/grok/waze.py" "$P/services/grok/cfsetup.py" "$LIB/grok/"
+  install -d -m 0700 -o tesla -g tesla "$STATE_DIR/grok"
+  put_file "$P/host/teslalinux-set-grok" /usr/local/bin/teslalinux-set-grok 0755
   install -m 0644 "$P/tools/atl-vm/mk-android-tzdata.py" "$LIB/mk-android-tzdata.py"
   # the app's log on its way to the journal, and its start for the car page (GET /api/appState)
   install -m 0644 "$P/host/teslalinux-app-log-watch.py" "$LIB/app-log-watch.py"
@@ -509,9 +518,9 @@ step_files() {
   install -m 0755 "$P/tools/apps/install-app.sh" "$P/tools/apps/apk-info.py" "$P/tools/apps/waze-map-pacing.py" "$P/tools/apps/waze-speedometer.py" "$LIB/apps/"
   install -m 0644 "$P/tools/apps/apk_verify.py" "$LIB/apps/"
   install -m 0644 "$P/host/local/check.py" "$P/services/display/test/ws-client.py" "$LIB/check/"
-  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update, /usr/local/bin/teslalinux-set-gpu-speed\n'
+  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update, /usr/local/bin/teslalinux-set-gpu-speed, /usr/local/bin/teslalinux-set-grok\n'
   visudo -cq -f /etc/sudoers.d/teslalinux || die "sudoers check failed for /etc/sudoers.d/teslalinux"
-  for f in "${UNITS[@]}" teslalinux-tls-fetch.service teslalinux-tls-fetch.timer; do
+  for f in "${UNITS[@]}" "${OPTIONAL_UNITS[@]}" teslalinux-tls-fetch.service teslalinux-tls-fetch.timer; do
     put_file "$P/host/phase1-pios/etc/systemd/$f" "/etc/systemd/system/$f" 0644
   done
   put_file "$P/host/phase1-pios/etc/NetworkManager/90-teslalinux-tls" /etc/NetworkManager/dispatcher.d/90-teslalinux-tls 0755
@@ -1207,7 +1216,11 @@ doctor_static() {
   [[ -e /dev/video11 ]] && ok "V4L2 M2M encoder /dev/video11" || meh "no /dev/video11 (bcm2835-codec; tacomp falls back to CPU JPEG)"
   if nginx -t >/dev/null 2>&1; then ok "nginx -t"; else bad "nginx -t: $(nginx -t 2>&1 | tail -1)"; fi
   python3 -c 'import websockets' 2>/dev/null && ok "python3-websockets" || bad "python3 cannot import websockets"
-  python3 -c 'import cryptography' 2>/dev/null && ok "python3-cryptography" || bad "python3 cannot import cryptography (PalGate gates)"
+  python3 -c 'import cryptography' 2>/dev/null && ok "python3-cryptography" || bad "python3 cannot import cryptography (PalGate gates, Grok's token check)"
+  [[ -x "$PREFIX/bin/cloudflared" ]] && ok "cloudflared $("$PREFIX/bin/cloudflared" --version 2>/dev/null | awk '{ print $3; exit }')" || meh "no $PREFIX/bin/cloudflared (Grok remote control cannot connect)"
+  if [[ "$(sed -n 's/^TESLALINUX_GROK_ENABLED=//p' /etc/teslalinux/grok.env 2>/dev/null)" == 1 ]]; then
+    [[ "$(stat -c '%a %U' /etc/teslalinux/grok/tunnel.env 2>/dev/null)" == "600 root" ]] && ok "Grok tunnel token root-only" || bad "Grok remote control is on but /etc/teslalinux/grok/tunnel.env is missing or not 0600 root"
+  fi
   if [[ -f "$ENVF" ]]; then
     [[ "$(stat -c '%a %U:%G' "$ENVF")" == "640 root:tesla" ]] && ok "$ENVF mode 0640 root:tesla" || meh "$ENVF is $(stat -c '%a %U:%G' "$ENVF") (0640 root:tesla expected)"
     [[ "$(cfg AP_PSK)" != changeit ]] && ok "hotspot password set" || bad "AP_PSK is the placeholder 'changeit'"
@@ -1231,7 +1244,7 @@ doctor_live() {
   local u failed
   failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{ print $1 }' | tr '\n' ' ')
   [[ -z "${failed// }" ]] && ok "no failed units" || bad "failed units: $failed"
-  for u in teslalinux-ap-addr hostapd dnsmasq nftables nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-dbus teslalinux-gates; do
+  for u in teslalinux-ap-addr hostapd dnsmasq nftables nginx tacomp teslalinux-api teslalinux-gps teslalinux-audio teslalinux-pipewire teslalinux-wireplumber teslalinux-dbus teslalinux-gates teslalinux-grok; do
     [[ "$(systemctl is-active "$u" 2>/dev/null)" == active ]] || bad "$u is $(systemctl is-active "$u" 2>/dev/null)"
   done
   ok "core units checked"
@@ -1366,6 +1379,10 @@ cmd_uninstall() {
   local pk; pk=$(manifest_get packages)
   stop_stack
   systemctl stop teslalinux-tls-fetch.timer hostapd dnsmasq 2>/dev/null || true
+  # Grok remote control: its tunnel (enabled by teslalinux-set-grok, not by an install run), its
+  # settings and the root-only token
+  systemctl disable --now "${OPTIONAL_UNITS[@]}" teslalinux-grok.service 2>/dev/null || true
+  rm -rf /etc/teslalinux/grok /etc/teslalinux/grok.env
   # every backup set, oldest first: the first record of a path or unit is its state before teslalinux
   declare -gA DONE_PATH=() DONE_UNIT=()
   local set d b sets=()

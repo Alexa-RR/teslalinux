@@ -25,6 +25,10 @@ Tesla browser ──Wi-Fi──> hostapd / dnsmasq / nftables ──> nginx (TLS
    │  /sockets/audio       <── audio.py (8080) <── PipeWire null sink <── ALSA <── ATL AudioTrack
    │                                (and/or pw-loopback ──> the Pi's USB card or 3.5 mm jack)
    └  /api/*               <─> api.py (8081)
+
+Grok (optional, off by default; docs/GROK.md):
+   grok.com ──> Cloudflare Access (the driver's domain) ──> Tunnel ──> cloudflared ──> grok.py (8083, MCP)
+                                                     grok.py ──> ATL car app channel (9995) / intent channel (9993)
 ```
 
 ## 2. The app runtime: ATL

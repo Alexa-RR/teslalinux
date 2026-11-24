@@ -274,6 +274,12 @@ Changes from upstream:
   sections after Waze: link with a QR code, unlink, the gates shown and their order, per gate its
   name, output, Open now and auto-open). The tray and notices follow the Rounded and Graphite
   looks, day and night.
+* `js/settings/settings-grok.js` (new): Settings > Grok, Grok remote control (`docs/GROK.md`,
+  `/api/grok*`), installed into SettingsController's sections after Gates: the on/off switch, the
+  tunnel's state, the connector address, the last request, the automatic Cloudflare setup (domain,
+  hostname, email, API token; the token is sent once and not kept), the manual settings (tunnel
+  token, Access team domain, AUD tag, hostname) and the log of what Grok asked for. Hooks: one
+  `<script>` in `index.html`, one `install` line in `settings-controller.js`.
 * `404.html` (new): the page nginx serves for unknown paths (upstream's lighttpd names
   `/404.html` as its 404 handler but ships none).
 * `online/status.html`, `online/connectivity_check.txt`: byte-for-byte copies of upstream's

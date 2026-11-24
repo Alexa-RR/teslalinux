@@ -17,6 +17,9 @@ frontend in `web/` works unchanged.
 | `/sockets/keyboard` | 127.0.0.1:9996 | teslalinux only: device keyboard (tacomp) |
 | `/sockets/carapp` | 127.0.0.1:9995 | teslalinux only: the app's car templates, JSON text (ATL's car-app host) |
 | `/sockets/speech` | 127.0.0.1:9994 | teslalinux only: speech recognition by the page for the app, JSON text (ATL) |
+| `/api/grok*` | 127.0.0.1:8084 | teslalinux only: Grok remote control's settings (`services/grok`, `docs/GROK.md`) |
+| (none) | 127.0.0.1:8083 | teslalinux only: Grok's MCP endpoint, reached by cloudflared only, never routed by nginx |
+| (none) | 127.0.0.1:9993 | teslalinux only: ATL's intent channel (view intents from outside the app), never routed |
 
 Headers upstream sends: `Cross-Origin-Embedder-Policy: credentialless`,
 `Cross-Origin-Opener-Policy: same-origin` (SharedArrayBuffer/wasm for Broadway), `Cache-Control: no-store`
@@ -126,6 +129,14 @@ Host to page:
   reading equal to the last is not sent again (the app makes one per position, about once a
   second). The sign style and the over-the-limit offset are the app's settings, in
   `/api/appInterface` (`speedometerSupport.signStyle`, `.alertOffset`).
+- `{"type":"trip","trip":T}`: the app's trip (`NavigationManager.updateTrip`: its `Trip` model as
+  above: `destinations` with `name` and `address`, `destinationTravelEstimates` with
+  `remainingDistance`, `remainingTimeSeconds`, `arrivalTimeAtDestination`, `steps` with `cue`,
+  `maneuver`, `road`, `stepTravelEstimates`, `currentRoad`), its icons sent first; `null` when
+  navigation ends. State, sent to every new page (after the icons); a trip equal to the last is
+  not sent again.
+- `{"type":"navigateResult"|"stopNavigationResult"|"holdResult","id":N,"ok":B,"error":S}`: the
+  answer to a request that carried an `id`, to the page that sent it only (`error` when not `ok`).
 - `{"type":"toast","text":S,"long":B}`: `CarToast` (2 s, or 3.5 s when long).
 - `{"type":"alert","alert":A}`: an `Alert` (car API 5), its callbacks valid until the next alert;
   `{"type":"alertDismiss","id":N}`: the app took it back (`AppManager.dismissAlert`).
@@ -158,7 +169,23 @@ Page to host:
   free, inside their margins (display pixels), passed to the app as its visible and stable areas
   (the app keeps its car and route in it; the page's speedometer stands at its bottom right, where
   the app drew its own).
-- `{"type":"stopNavigation"}`: the end-drive control (`NavigationManagerCallback.onStopNavigation`).
+- `{"type":"stopNavigation","id":N?}`: the end-drive control (`NavigationManagerCallback.onStopNavigation`).
+  With an `id`, answered with `stopNavigationResult` (not `ok` when the app is not navigating).
+- `{"type":"navigate","uri":GEO,"id":N?}`: a destination for the app, as a car's host hands over
+  the one its assistant was asked for: `ICarApp.onNewIntent` with `CarContext.ACTION_NAVIGATE`
+  (`androidx.car.app.action.NAVIGATE`) and the `geo:` URI, `geo:0,0?q=ADDRESS` or
+  `geo:LAT,LON?q=LAT,LON`; the app's `Session.onNewIntent` gets it (Waze searches the query and
+  starts driving). Answered with `navigateResult` when it carries an `id` (not `ok` for a URI that
+  is not `geo:`, or before the app's car session runs).
+- `{"type":"hold","on":B,"id":N?}`: the page works on the app's screens out of the driver's sight
+  (Grok's `search_places`, `services/grok/waze.py`): while it holds, new templates go to it alone
+  and every other page keeps the template it shows (a page that connects meanwhile gets that one).
+  The app's screen stack when it took the hold is remembered as for the app's settings: a page that
+  goes away (socket closed, or silent) while holding has the screens it pushed popped back by the
+  host before the other pages see the current template again. Released with `on` false (the
+  screens are left as they are: the page popped them itself, or a drive it started is on screen),
+  then every page gets the current template. One page holds at a time, and none while a page shows
+  the app's settings; answered with `holdResult`. A runtime without it ignores the message.
 - `{"type":"alertCancel","cb":ID,"reason":R}` / `{"type":"alertDismiss","cb":ID}`: an alert timed out
   (R 1) or was closed (R 2), or went away after one of its actions (`AlertCallback`).
 - `{"type":"dayNight","mode":"day"|"night"|"auto"}`: the driver's day or night choice; "auto" (the
@@ -208,6 +235,21 @@ In the car interface the page is the car's host, and the host's microphone butto
 field) does voice search itself: it listens the same way and sends the text as the template's
 `search` message, with no app involvement.
 
+## Intent channel (127.0.0.1:9993; teslalinux only, never routed by nginx)
+
+How a program on the device hands the app a view intent, as Android's `am start -a ACTION -d URI`
+does (ATL's `android/atl/ATLIntentChannel`, on while `ATL_INTENT_CHANNEL_PORT` is set;
+`teslalinux-atl` sets 9993). One request per TCP connection, a line of JSON each way:
+
+- in: `{"type":"startActivity","action":"android.intent.action.VIEW","data":URI,"mimeType":T?}`
+- out: `{"ok":true,"activity":"com.waze.FreeMapAppActivity"}` (the app's activity its own intent
+  filters resolve it to; started as `Context.startActivity` starts it: an existing
+  singleTask/singleInstance activity gets `onNewIntent`), or `{"ok":false,"error":S}` (no activity
+  takes it, the app is not up yet, or the app runs its car interface, where it shows no phone
+  activities: its car session takes intents through the car app channel's `navigate`).
+
+Grok remote control uses it in Phone mode for Waze's deep links (`waze://?q=...&navigate=yes`).
+
 ## Config API (`/api`, port 8081)
 
 GET `configuration`, `displayState`, `deviceInfo`, `health` (polled every 30 s online / 5 s offline;
@@ -223,6 +265,13 @@ teslalinux only (no upstream counterpart): `/api/gates*` (PalGate gates, `docs/G
 forwarded by api.py to `services/gates/gates.py`: GET `gates`, `gatesLink`, `gatesEvents?after=N&wait=S`
 (a long poll, at most 25 s); POST `gatesLink {action: start|cancel}`, `gatesUnlink`, `gatesRefresh`,
 `gatesSettings`, `gatesPosition {id}`, `gatesOpen {id, output?}` (`{ok, message, event}`).
+
+teslalinux only: `/api/grok*` (Grok remote control, `docs/GROK.md`), JSON, served by
+`services/grok/grok.py` on 127.0.0.1:8084 (its own nginx location, not api.py): GET `grok`
+(settings without secrets, the tunnel's state, the last request, the last actions, the connector
+address, the API token's permissions); POST `grokSettings {enabled?, hostname?, teamDomain?, aud?}`,
+`grokToken {token}` or `{clear: true}`, `grokSetup {domain, hostname?, email, apiToken,
+redirectUris?}` (answers `{ok, message, steps, note?, settings}`; the API token is not kept).
 
 ## Network scheme
 

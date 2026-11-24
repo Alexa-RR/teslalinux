@@ -105,6 +105,8 @@ if [[ $STRIP == 1 ]]; then
   # tacomp's RUNPATH was set by patchelf, which strip can corrupt; it is small anyway
   for f in "${ELFS[@]}"; do
     [[ "$f" == "$D/tacomp/bin/tacomp" ]] && continue
+    # Cloudflare's release binary stays byte for byte the one its checksum names (versions.env)
+    [[ "$f" == "$D/bin/cloudflared" ]] && continue
     chmod u+w "$f"; strip --strip-debug "$f"
   done
 fi
@@ -118,6 +120,8 @@ PAYLOAD=(
   host/teslalinux-app-log-watch.py
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
   services/gates/gates.py services/gates/palgate.py services/gates/tlqr.py docs/GATES.md
+  services/grok/grok.py services/grok/mcp.py services/grok/accessjwt.py services/grok/waze.py services/grok/cfsetup.py
+  host/teslalinux-set-grok docs/GROK.md
   services/display/test/ws-client.py
   web
   tools/apps/install-app.sh tools/apps/apk-info.py tools/apps/apk_verify.py tools/apps/waze-map-pacing.py tools/apps/waze-speedometer.py

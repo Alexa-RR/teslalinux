@@ -5,6 +5,7 @@
 #   build-dist.sh [all]          every step in order, skipping steps already done for the same pins
 #   build-dist.sh STEP...        only these: vixl wolfssl bionic art libcored8 coreoj wolfjsse opensles atl
 #                                wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp mesa tlplay
+#                                cloudflared
 #   build-dist.sh --force STEP   redo a step although its stamp says done
 #   build-dist.sh status         which steps are done, for which pins
 # Then tools/debvm/pack-dist.sh packs the prefix for tools/pios/install.sh.
@@ -467,7 +468,21 @@ step_tlplay() {
   install -m 0755 "$CARGO_TARGET_DIR/release/tlplay" "$PREFIX/bin/tlplay"
 }
 
-ALL=(vixl wolfssl bionic art libcored8 coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp mesa tlplay)
+# --- cloudflared: the Cloudflare Tunnel of Grok remote control (docs/GROK.md), Cloudflare's own
+# linux-arm64 release binary, checksummed, into $PREFIX/bin (teslalinux-cloudflared.service) ---
+step_cloudflared() {
+  local t="$B/cloudflared-$CLOUDFLARED_VERSION-linux-arm64"
+  if [[ ! -f "$t" ]] || [[ "$(sha256sum "$t" | cut -d' ' -f1)" != "$CLOUDFLARED_SHA256" ]]; then
+    curl -fsSL --retry 3 -o "$t.tmp" "$CLOUDFLARED_URL"
+    [[ "$(sha256sum "$t.tmp" | cut -d' ' -f1)" == "$CLOUDFLARED_SHA256" ]] || die "cloudflared checksum mismatch"
+    mv "$t.tmp" "$t"
+  fi
+  install -d "$PREFIX/bin"
+  install -m 0755 "$t" "$PREFIX/bin/cloudflared"
+  "$PREFIX/bin/cloudflared" --version
+}
+
+ALL=(vixl wolfssl bionic art libcored8 coreoj wolfjsse boringssl conscrypt opensles atl wayland wayland-protocols libdrm pixman xkbcommon wlroots tacomp mesa tlplay cloudflared)
 pins_of() { # what a step's stamp records: its pins plus the hash of the patches it applies
   case "$1" in
     vixl) echo "$VIXL_URL $VIXL_MESON_PATCH_SHA256" ;;
@@ -499,6 +514,7 @@ pins_of() { # what a step's stamp records: its pins plus the hash of the patches
     # the patches too, and tacomp's wayland (its scanner generates part of the build)
     mesa) echo "$MESA_VERSION $MESA_SHA256 ${TL_CPU_CFLAGS:-} $WAYLAND_TAG $(cat "$DEBVM_PATCHES"/mesa-*.patch 2>/dev/null | sha256sum | cut -c1-16)" ;;
     tlplay) echo "${TL_RUST_TARGET_CPU:-} $(find "$TLPLAY_SRC/src" "$TLPLAY_SRC/Cargo.toml" "$TLPLAY_SRC/Cargo.lock" -type f 2>/dev/null | sort | xargs cat 2>/dev/null | sha256sum | cut -c1-16)" ;;
+    cloudflared) echo "$CLOUDFLARED_VERSION $CLOUDFLARED_SHA256" ;;
   esac
 }
 run_step() {

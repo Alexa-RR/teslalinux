@@ -129,6 +129,13 @@ install -m 0644 "$REPO/services/gps/gps.py" "$REPO/services/audio/audio.py" "$RE
 # PalGate gates (docs/GATES.md): the service and its state directory, the service user's alone
 install -m 0644 "$REPO/services/gates/gates.py" "$REPO/services/gates/palgate.py" "$REPO/services/gates/tlqr.py" /usr/local/lib/teslalinux/
 install -d -m 0700 -o tesla -g tesla /var/lib/teslalinux/gates
+# Grok remote control (docs/GROK.md): the MCP service, its action log, the root helper for its
+# settings and tunnel token; cloudflared itself comes with the dist (tools/pios/install.sh)
+install -d /usr/local/lib/teslalinux/grok
+install -m 0644 "$REPO/services/grok/grok.py" "$REPO/services/grok/mcp.py" "$REPO/services/grok/accessjwt.py" \
+  "$REPO/services/grok/waze.py" "$REPO/services/grok/cfsetup.py" /usr/local/lib/teslalinux/grok/
+install -d -m 0700 -o tesla -g tesla /var/lib/teslalinux/grok
+install -m 0755 "$REPO/host/teslalinux-set-grok" /usr/local/bin/teslalinux-set-grok
 install -m 0755 "$HERE/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display
 # the ATL launcher (teslalinux-atl.service starts it once /opt/teslalinux holds the ATL prefix and
 # the app is installed)
@@ -147,7 +154,7 @@ install -m 0644 "$REPO/host/teslalinux-app-log-watch.py" /usr/local/lib/teslalin
 install -d /usr/local/lib/teslalinux/appstyle
 install -m 0644 "$REPO/host/appstyle/waze-map-graphite.json" /usr/local/lib/teslalinux/appstyle/
 install -m 0755 "$REPO/tools/appstyle/mapskin.py" /usr/local/lib/teslalinux/appstyle/
-echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update' > /etc/sudoers.d/teslalinux
+echo 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update, /usr/local/bin/teslalinux-set-grok' > /etc/sudoers.d/teslalinux
 chmod 0440 /etc/sudoers.d/teslalinux
 # tacomp is written against wlroots 0.20; Debian trixie ships 0.18 (see docs/CAR-STACK-READINESS.md,
 # "Pi OS blockers"): a binary built for this system is installed when one exists
@@ -161,7 +168,7 @@ systemctl daemon-reload
 systemctl enable teslalinux-netconfig.service teslalinux-tls-fetch.timer \
   teslalinux-pipewire.service teslalinux-wireplumber.service teslalinux-pipewire-pulse.service \
   teslalinux-dbus.service tacomp.service teslalinux-atl.service teslalinux-api.service teslalinux-gps.service \
-  teslalinux-audio.service teslalinux-uplink.service teslalinux-gates.service
+  teslalinux-audio.service teslalinux-uplink.service teslalinux-gates.service teslalinux-grok.service
 
 # ---------------------------------------------------------------------------------------------
 log "6/9 audio: PipeWire for tesla in /run/tesla with a null sink the app plays into"

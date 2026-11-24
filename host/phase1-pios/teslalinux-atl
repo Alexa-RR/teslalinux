@@ -134,6 +134,10 @@ export ATL_DENSITY_DPI="$DENSITY"
 # the app's speech recognizer is the car page's browser (its microphone and speech recognition):
 # ATL serves /sockets/speech here (nginx route), the page answers the app's requests with the text
 export ATL_SPEECH_CHANNEL_PORT="${ATL_SPEECH_CHANNEL_PORT:-9994}"
+# view intents from outside the app (ATL's intent channel, loopback only, never routed by nginx):
+# Grok remote control (services/grok) hands Waze's phone activities a destination with it, as
+# `am start -a VIEW -d URI` does on Android
+export ATL_INTENT_CHANNEL_PORT="${ATL_INTENT_CHANNEL_PORT:-9993}"
 # the VM's debug knobs stay off in the car; TESLALINUX_ATL_DEBUG=1 in /etc/teslalinux/atl.env keeps the
 # ATL_DEBUG_* / ANDROID_LOG_TAGS set there (view dumps, touch traces: tools/atl-vm/tap.sh-style debugging)
 if [[ "${TESLALINUX_ATL_DEBUG:-0}" != 1 ]]; then

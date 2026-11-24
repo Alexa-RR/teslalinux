@@ -10,6 +10,7 @@ upstream port, so the browser frontend in `web/` is untouched.
 | `audio/` | 8080 | `audio.py`: PipeWire `android.monitor` → ffmpeg FLAC fMP4 → WebSocket with cached init segment | written, untested on hardware |
 | `api/` | 8081 | `api.py`: `/api/*` state + display re-configuration | written, untested on hardware |
 | `gates/` | 8082 (loopback, behind `/api/gates*`) | `gates.py`: PalGate gates as a linked device of the driver's account (`palgate.py`), the QR code (`tlqr.py`), auto-open from the GPS feed (`docs/GATES.md`) | tested against a local mock of the API |
+| `grok/` | 8083 (loopback, MCP, cloudflared only), 8084 (loopback, behind `/api/grok*`) | `grok.py`: Grok remote control, a remote MCP server for Waze (`mcp.py`) behind a Cloudflare Tunnel and Access (`accessjwt.py` checks every request's Access JWT), the tools through ATL's car app and intent channels (`waze.py`), the automatic Cloudflare setup (`cfsetup.py`) (`docs/GROK.md`) | tested against local stand-ins; end to end in the Debian VM with Waze |
 
 Install location on the Pi: `/usr/local/lib/teslalinux/*.py`; tacomp in `/opt/teslalinux/tacomp`
 (from the release dist, `tools/pios/install.sh`). All daemons run as the unprivileged `tesla` user;

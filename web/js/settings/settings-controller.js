@@ -203,6 +203,8 @@
 
       // teslalinux: PalGate gates (js/settings/settings-gates.js): its section after Waze, and its search entries
       if (TAHtml.SettingsGates) TAHtml.SettingsGates.install(this);
+      // teslalinux: Grok remote control (js/settings/settings-grok.js, docs/GROK.md)
+      if (TAHtml.SettingsGrok) TAHtml.SettingsGrok.install(this);
 
       this.activeSectionId = "overview";
       this._pollTimer = null;

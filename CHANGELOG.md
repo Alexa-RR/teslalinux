@@ -15,6 +15,19 @@ version's.
 
 ## [Unreleased]
 
+### Ask Grok to drive Waze
+
+*Settings > Grok. Off until you turn it on.*
+
+- Grok in the car can start navigation, search places with Waze, tell you the arrival time and
+  the next turn, and end the drive.
+- It reaches the device through a Cloudflare Tunnel on your own domain. Only you can sign in.
+- The device can set up Cloudflare for you with an API token it uses once and does not keep.
+- Settings > Grok shows the connection and everything Grok asked for.
+- Searching keeps the car screen's panels as they are. Waze's map may show the results for a few
+  seconds.
+- Phone mode: navigation only. Search, trip and stop need Car mode.
+
 ### Tesla Android's old pages are gone
 
 *The car page is the map and Settings.*
@@ -26,6 +39,19 @@ version's.
 - Settings > Updates shows the Teslalinux version installed.
 - Settings > This device has one line with the version, the licence (GPL-3.0) and a link to the
   source.
+
+### Platform
+
+#### Added
+
+- `services/grok`: a remote MCP server for Waze (Streamable HTTP, revisions 2025-03-26 to
+  2026-07-28) on loopback, behind a Cloudflare Tunnel and Access with Managed OAuth. Every request
+  needs a valid Access JWT. Tests in `services/grok/test/`, docs in `docs/GROK.md`.
+- cloudflared 2026.10.7 in the dist (`build-dist.sh cloudflared`), run by
+  `teslalinux-cloudflared.service` only while remote control is on. The tunnel token is root-only.
+- ATL: the car app channel takes `navigate` (a NAVIGATE intent for the car session) and `hold`
+  (screens worked on out of sight), and sends the trip. A loopback intent channel starts view
+  intents in Phone mode, as `am start` does.
 
 ## [0.4.0] - 2026-11-24
 
