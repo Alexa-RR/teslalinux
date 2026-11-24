@@ -15,6 +15,11 @@ version's.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-24
+
+Grok can do what Waze's car screen does, the map no longer freezes while you move it, and the LTE
+stick comes up after every restart.
+
 ### LTE after a restart
 
 *Settings > Connections.*
@@ -25,12 +30,15 @@ version's.
   off and on; the backup Wi-Fi drops for a few seconds while that happens.
 - Modem details say so when this board cannot switch its USB power off and on.
 
-### Street names in their usual weight again
+### The map no longer freezes while you move it
 
 *Car and phone map.*
 
-- Since 0.6.2, Hebrew and Arabic names on Waze's map were drawn in bold. They are back to the
-  regular letters they had before, and moving the map stays smooth.
+- Moving the map over new streets could freeze it for one or two seconds at a time, most of all
+  in the first minutes after Waze started. Each Hebrew or Arabic label made Waze's map look
+  through about twenty fonts before it found the right one. It now goes straight to it: on a
+  Pi 4, no frame over 100 ms while panning, where there were 15 a minute. The labels keep their
+  usual letters.
 
 ### Grok does what Waze's car screen does
 
@@ -62,10 +70,11 @@ version's.
 - A place's card no longer cuts its buttons short ("Add a s..."): two that do not fit side by side
   stack.
 
-### Connect Cloudflare's pages look like Settings
+### A tidier Connect Cloudflare
 
-*After the Cloudflare sign-in.*
+*Settings > Grok > Connect, and the pages after the Cloudflare sign-in.*
 
+- The Connect button is Cloudflare orange and sits in its row like the other buttons.
 - The pages the device shows after you allow Teslalinux on Cloudflare (choose a domain, set up,
   not set up) now use the settings page's own look, by day and by night: your domains as rows
   with a "Use this" button, and what the device set up as a list.
@@ -78,28 +87,6 @@ version's.
 
 - Connect Cloudflare asks for the narrower tunnel permission, Cloudflare One Connector: cloudflared
   Write. The OAuth client in the dashboard must carry it.
-
-## [0.6.2] - 2026-11-24
-
-The map no longer freezes while you move it, and a tidier Connect Cloudflare.
-
-### The map no longer freezes while you move it
-
-*Car and phone map.*
-
-- Moving the map over new streets could freeze it for one or two seconds at a time, most of all
-  in the first minutes after Waze started. Each Hebrew or Arabic label made Waze's map look
-  through about twenty fonts before it found the right one. It now goes straight to it: on a
-  Pi 4, no frame over 100 ms while panning, where there were 15 a minute.
-
-### A tidier Connect Cloudflare
-
-*Settings > Grok.*
-
-- The Connect button is Cloudflare orange again and sits in its row like the other buttons. The
-  page's own button style had turned it grey.
-- The sign-in sheet shows the phone code only once the sign-in has started, next to what it is
-  waiting for, instead of an empty white box.
 
 ## [0.6.1] - 2026-11-24
 
@@ -1188,8 +1175,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.2...HEAD
-[0.6.2]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.1...v0.6.2
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.1...v0.6.3
 [0.6.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.4.0...v0.5.0
