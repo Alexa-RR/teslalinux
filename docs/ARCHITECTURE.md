@@ -247,12 +247,19 @@ each frame) with a generated one that extends ATL's `ATLFrameRateLimiter`, whose
 hold, and for 5 s after ATL saw the map move (a location fix of a moving car, a touch on the car map,
 any message from the car page, a different car template) frames may come at the display's refresh
 rate; "Full" (`display`): the display's rate all the time; "Waze's own" (`app`), and the phone
-interface: Waze's limiter exactly. The class comes from `tools/apps/waze-map-pacing.py` (listed
-versions only; it checks the limiter's code instruction by instruction and every reference to it in
-the APK, and that this ATL has the class it extends; the APK and its signing block are untouched) and
-goes to ATL as `ATL_APP_CLASS_OVERRIDES`, which loads it in front of the app's own classes, with the
-speedometer class (`tools/apps/waze-speedometer.py`). They are kept in the `tesla` user's cache and
-made again after an app, tool or ATL update; for an unlisted version the app keeps its own rate.
+interface: Waze's limiter exactly. The same jar carries Waze's map loop class (`com.waze.map.de`,
+which has the map engine prepare each frame and waits 33 ms before the next, 17 ms within 5 s of a
+touch), copied from the installed APK with one change: the 33 ms is a static field its class
+initialiser sets from ATL's policy, Waze's own 17 ms under `display` and Waze's 33 under the others
+(as the earlier whole-dex "Full" copy changed the literal, and the automatic mode never did; at 33 ms
+"Full" drew 2% fewer frames on a still map). The classes come from `tools/apps/waze-map-pacing.py`
+(listed versions only; it checks the limiter's code instruction by instruction, the map loop's by the
+sha256 of its text, and every reference to either in the APK, and that this ATL has the class and
+policy fields they use; the APK and its signing block are untouched) and go to ATL as
+`ATL_APP_CLASS_OVERRIDES`, which loads them in front of the app's own classes, on the same class
+loader (the loop uses package-private members of its package), with the speedometer class
+(`tools/apps/waze-speedometer.py`). They are kept in the `tesla` user's cache and made again after an
+app, tool or ATL update; for an unlisted version the app keeps its own rate.
 
 The launcher loads both override classes whatever the interface and the frame rate, and only the
 policy and the car host change at run time. The overrides are part of the app's class loader context,

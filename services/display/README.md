@@ -177,7 +177,7 @@ Waze's car render thread (`com.waze.bq.e`, "RenderThread") asks one object befor
 whether it may draw: its frame limiter (`com.waze.bq.a`, under `com.waze.map.opengl.m`), 30 frames
 a second, 60 for 5 s after a pan, zoom or tap the car host hands its SurfaceCallback (Waze boosts
 that itself), never for driving. "Automatic", the default, replaces that class
-(`tools/apps/waze-map-pacing.py`: a one-class dex made on the device, the original's
+(`tools/apps/waze-map-pacing.py`: a dex made on the device, the original's
 fields, methods and code checked instruction by instruction and every reference to it in the APK's
 ten dexes checked to be one the new class provides) with one that extends ATL's
 `ATLFrameRateLimiter`: Waze's rate and its own boosts as before, and the display's frame interval for
@@ -204,6 +204,13 @@ At Native (1184x928, dist 20261123-5944352d) the GPU decides, whatever the choic
 26.3 / 22, 26.5 / 22, Waze's own 26.1 / 20, 26.0 / 21, Automatic 25.6 / 22, 26.1 / 23; still, about
 29 frames/s at 88% of V3D's render queue for all three (Waze's own 30 already nearly fills the GPU
 there), Waze's CPU 49-50%.
+
+Waze's map loop (`com.waze.map.de`: the map engine prepares a frame, then the loop waits 33 ms, 17
+within 5 s of a touch) also sets how often the map moves on: with the limiter alone, "Full" drew a
+still map at 41.9 frames/s against 42.75 with the earlier whole-dex copy, which also shortened that
+wait. The same jar now carries the loop class, copied from the APK with its 33 ms read from a static
+field set from ATL's policy (17 ms under `display` only, Waze's own otherwise): Pi 4, 1088x832,
+still 43.1 (Waze's CPU 62.6%, as with the old copy), moving 21.1 (GPU-bound there, as before).
 
 ## What else Waze's map costs (Nov 23 2026)
 

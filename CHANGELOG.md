@@ -302,9 +302,14 @@ In ATL (the fork):
 - One class path for every start: the launcher loads the speedometer and frame limiter overrides
   whatever the interface and Map frame rate (they are part of the app's class loader context, so a
   different list made ART compile Waze again), the frame rate is ATL's `ATL_FRAME_RATE` policy at run
-  time (`boost`, `display`, `app`), `waze-map-pacing.py` makes only the limiter class (its whole-dex
-  "full" copy is gone), and `teslalinux-atl --compile` compiles with the same overrides (ATL's
-  `TlPrewarm`). `ClassLoaderContext ... mismatch` no longer appears after a switch.
+  time (`boost`, `display`, `app`), `waze-map-pacing.py` makes one small dex instead of its
+  whole-dex "full" copy, and `teslalinux-atl --compile` compiles with the same overrides (ATL's
+  `TlPrewarm`). `ClassLoaderContext ... mismatch` no longer appears after a switch. The dex holds
+  the limiter class and Waze's map loop class (`com.waze.map.de`, copied from the installed APK
+  when its text has the verified sha256; `--dump` prints it), whose 33 ms wait between frames is a
+  static field set from ATL's policy when the class loads: 17 ms under `display`, as the old "full"
+  copy had it, so Full keeps its frame rate (Pi 4, 1088x832, still map: 43.1 frames/s, 41.9 with
+  the limiter alone, 42.75 with the old copy).
 - `GET /api/appState` `start` (and `?wait=SEQ` long polls): the app's start for the car page's
   overlay, from `host/teslalinux-app-log-watch.py` (the launcher's log filter, its state file in
   `/run/tesla`) and the app's dex2oat in /proc, whose CPU time against the last complete compile of

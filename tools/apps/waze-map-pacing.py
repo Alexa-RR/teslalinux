@@ -2,43 +2,58 @@
 """teslalinux: Waze's car map on the display's 60 frames/s schedule (verified Waze versions only).
 
   waze-map-pacing.py APP_DIR OUT.jar [--atl API_IMPL_JAR]
-                                            make the class override (APP_DIR: an installed app,
+                                            make the class overrides (APP_DIR: an installed app,
                                             /var/lib/teslalinux/apps/com.waze); exit 2: not this version
                                             (with --atl: and only if this ATL has ATLFrameRateLimiter)
   waze-map-pacing.py --check APP_DIR [--atl API_IMPL_JAR]
                                             report only: is this version known and the code as expected
+  waze-map-pacing.py --dump APP_DIR         print the classes read, as they are read, with the sha256
+                                            of the map loop's (to verify a new version by hand)
 
 Waze 5.27.5 holds its car map at 30 frames/s in two places, both meant to save a phone's battery and
 both lifted to 60 only for 5 s after a touch on the phone's map view (or, in the car interface, a pan,
 zoom or tap the car host hands its SurfaceCallback):
-  - the map loop (com.waze.map.de.run(), on Waze's native looper) draws a frame and posts itself
-    again 17 ms later after a touch, else 33 ms later. (On a phone the first touch unlocks 60 for
-    good: the touch time is wall-clock time and the comparison uses uptime.)
+  - the map loop (com.waze.map.de.run(), on Waze's native looper) has the map engine prepare a frame
+    (NativeCanvasRenderer.DrawNTV) and posts itself again 17 ms later after a touch, else 33 ms
+    later. (On a phone the first touch unlocks 60 for good: the touch time is wall-clock time and
+    the comparison uses uptime.)
   - the map renderer's frame limiter (com.waze.bq.a, the base of com.waze.map.opengl.m) skips a frame
     that comes less than 1000/30 ms after the last one; a touch sets it to 60 (opengl.m.a()) and,
     5 s later (opengl.l, through opengl.m.b()), back to 30. The car interface's render thread
     (com.waze.bq.e, "RenderThread") asks only this limiter before each frame.
 So the car's map draws at 30 frames/s while the car drives, whatever the hardware does.
 
-OUT.jar holds one class written here: the frame limiter class of the same name, extending ATL's
-android.atl.ATLFrameRateLimiter, with the limiter's methods (each calling ATL's for the same thing)
-and Waze's own starting rate. Before writing it, every reference to the class in every dex of the
-APK is checked to be to one of those methods, the class's own code to be the limiter it is known to
-be, and its subclasses to be the one known.
+OUT.jar holds one dex with two classes, both made here:
+  - the frame limiter class of the same name, written from the names below, extending ATL's
+    android.atl.ATLFrameRateLimiter, with the limiter's methods (each calling ATL's for the same
+    thing) and Waze's own starting rate. Before writing it, every reference to the class in every
+    dex of the APK is checked to be to one of those methods, the class's own code to be the limiter
+    it is known to be, and its subclasses to be the one known.
+  - the map loop class of the same name, copied from the installed APK (its fields, methods and
+    code, references renumbered for the new dex; no debug information), with one change: the 33 ms
+    the loop waits while Waze's own touch boost is off is a static field the class sets when it is
+    initialised, from ATL's policy: 17 ms (Waze's own boosted wait) under "display", Waze's 33
+    under the others. The class must be exactly the one read for this version (the sha256 of its
+    text below, `--dump` prints it), defined once, final, and referred to elsewhere only for
+    members it has.
 
-The one class serves every choice of Settings > Waze interface > Map frame rate: ATL's class reads
-the policy when the app starts (ATL_FRAME_RATE, which the launcher sets from the choice):
+The one jar serves every choice of Settings > Waze interface > Map frame rate: ATL's class reads the
+policy when the app starts (ATL_FRAME_RATE, which the launcher sets from the choice), and so does
+the map loop class:
   Automatic (boost): Waze's rate and its own boosts, and frames at the display's rate for 5 s after
     ATL saw the map move (the car host's map surface touched, the car page's input, a new car
     template, a location fix of a moving car): 60 frames/s while the map moves, 30 while it is still.
-  Full (display): the display's rate all the time.
-  Waze's own (app): exactly Waze's limiter; also what the phone interface runs with.
+    The map loop keeps Waze's own waits, as the automatic mode always did.
+  Full (display): the display's rate all the time, and the map loop at Waze's own boosted 17 ms all
+    the time (what the earlier whole-dex "full" mode did by changing the literal).
+  Waze's own (app): exactly Waze's limiter and loop; also what the phone interface runs with.
 The launcher loads the jar whichever is chosen, so the app's class loader context, and with it the
 code ART compiled for the app, stays the same when the choice changes.
 
-ATL puts OUT.jar in front of the app's own classes (ATL_APP_CLASS_OVERRIDES), so the class in it is
-loaded from it; the APK itself is never changed (Google APIs check its signing block). Nothing of
-Waze is in this repository: the jar is made on the device from the installed APK.
+ATL puts OUT.jar in front of the app's own classes (ATL_APP_CLASS_OVERRIDES), on the same class
+loader, so the classes in it are loaded from it (and the map loop stays in its package for the
+package-private members it uses); the APK itself is never changed (Google APIs check its signing
+block). Nothing of Waze is in this repository: the jar is made on the device from the installed APK.
 
 Only a Waze version listed in VERIFIED_AUTO, whose code holds exactly what is expected, gets the
 jar; anything else exits 2 and writes nothing.
@@ -46,6 +61,7 @@ jar; anything else exits 2 and writes nothing.
 import hashlib
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -58,7 +74,7 @@ APK_INFO = os.path.join(HERE, "apk-info.py")
 
 # versionCode -> the frame limiter as it was read in that version (by hand, from its dex): its
 # class and fields, its methods with their code (the disassembly below, references resolved), the
-# subclasses that extend it, and Waze's starting rate.
+# subclasses that extend it, and Waze's starting rate; and the map loop class ("loop").
 LIMITER_5_27_5 = "Lcom/waze/bq/a;"
 VERIFIED_AUTO = {
     1030750: {  # Waze 5.27.5.0
@@ -121,6 +137,16 @@ VERIFIED_AUTO = {
                 "iput-wide v1 v0 Lcom/waze/bq/a;->a:J",
                 "return-void"]),
         },
+        # the map loop: copied from the APK when its text (class_text) has this sha256; in METHOD the
+        # one const-wide/16 of STILL ms (the wait without Waze's touch boost) becomes the policy's
+        # wait, FAST ms (Waze's boosted wait, also there exactly once) under "display"
+        "loop": {
+            "class": "Lcom/waze/map/de;",
+            "sha256": "281ac067b0c8c4b123938347c3e7bb0e37d8993a451a3852f637d6ff53651840",
+            "method": ("run", "()V"),
+            "still": 33,
+            "fast": 17,
+        },
     },
 }
 # the version names, for the settings page (services/api/api.py map_pacing_status)
@@ -128,6 +154,10 @@ VERIFIED_NAMES = {1030750: "5.27.5.0"}
 
 ATL_LIMITER = "Landroid/atl/ATLFrameRateLimiter;"
 OBJECT = "Ljava/lang/Object;"
+# ATL's policy fields the map loop class reads (public static final int, set when ATL's class loads)
+ATL_POLICY_FIELDS = (("POLICY", "I"), ("POLICY_DISPLAY", "I"))
+# the map loop class's own static field, the wait it uses where Waze's has STILL
+LOOP_FIELD = ("atl$stillWaitMs", "J", 0x1a)  # private static final
 
 
 class Mismatch(Exception):
@@ -164,13 +194,15 @@ class Dex:
     def type_name(self, idx):
         return self.string(struct.unpack_from("<I", self.d, self.type_ids_off + 4 * idx)[0])
 
+    def type_list(self, off):
+        if not off:
+            return []
+        n = struct.unpack_from("<I", self.d, off)[0]
+        return [self.type_name(struct.unpack_from("<H", self.d, off + 4 + 2 * k)[0]) for k in range(n)]
+
     def proto(self, idx):
         _shorty, ret, params_off = struct.unpack_from("<III", self.d, self.proto_ids_off + 12 * idx)
-        params = []
-        if params_off:
-            n = struct.unpack_from("<I", self.d, params_off)[0]
-            params = [self.type_name(struct.unpack_from("<H", self.d, params_off + 4 + 2 * k)[0]) for k in range(n)]
-        return "(" + "".join(params) + ")" + self.type_name(ret)
+        return "(" + "".join(self.type_list(params_off)) + ")" + self.type_name(ret)
 
     def method_name(self, idx):
         _cls, _proto, name = struct.unpack_from("<HHI", self.d, self.method_ids_off + 8 * idx)
@@ -201,6 +233,17 @@ class Dex:
             out.append((self.type_name(class_idx), access,
                         self.type_name(super_idx) if super_idx != 0xFFFFFFFF else None, ifaces, data_off))
         return out
+
+    def class_def(self, descriptor):
+        """the class_def of DESCRIPTOR as a dict (None: not defined here)"""
+        for i in range(self.class_defs_size):
+            off = self.class_defs_off + 32 * i
+            class_idx, access, super_idx, ifaces, src, ann, data_off, sv = struct.unpack_from("<8I", self.d, off)
+            if self.type_name(class_idx) == descriptor:
+                return {"access": access, "super": self.type_name(super_idx) if super_idx != 0xFFFFFFFF else None,
+                        "interfaces": self.type_list(ifaces), "annotations_off": ann, "data": data_off,
+                        "static_values_off": sv}
+        return None
 
     def methods(self, class_data_off):
         """(name, code_off) of the class's direct and virtual methods"""
@@ -250,6 +293,9 @@ class Dex:
         regs, ins, _outs, tries, _dbg, n = struct.unpack_from("<HHHHII", self.d, code_off)
         return regs, ins, tries, struct.unpack_from("<%dH" % n, self.d, code_off + 16)
 
+    def code_outs(self, code_off):
+        return struct.unpack_from("<H", self.d, code_off + 4)[0]
+
     def method_refs(self):
         """(class, name, proto) of every method id"""
         return [self.method(i) for i in range(self.method_ids_size)]
@@ -268,61 +314,100 @@ def app_info(app_dir):
     return base, info, int(info["versionCode"])
 
 
-
 def s16(u):
     return struct.unpack("<h", struct.pack("<H", u))[0]
 
 
-def disassemble(dex, units):
-    """The instructions of a method as text with every reference resolved, for the opcodes the
-    limiter's methods use; any other refuses, so an unexpected method never passes."""
+_BINOPS = ["add-int", "sub-int", "mul-int", "div-int", "rem-int", "and-int", "or-int", "xor-int",
+           "shl-int", "shr-int", "ushr-int", "add-long", "sub-long", "mul-long", "div-long", "rem-long",
+           "and-long", "or-long", "xor-long", "shl-long", "shr-long", "ushr-long", "add-float",
+           "sub-float", "mul-float", "div-float", "rem-float", "add-double", "sub-double", "mul-double",
+           "div-double", "rem-double"]
+_UNOPS = ["neg-int", "not-int", "neg-long", "not-long", "neg-float", "neg-double", "int-to-long",
+          "int-to-float", "int-to-double", "long-to-int", "long-to-float", "long-to-double",
+          "float-to-int", "float-to-long", "float-to-double", "double-to-int", "double-to-long",
+          "double-to-float", "int-to-byte", "int-to-char", "int-to-short"]
+_IFZ = {0x38: "if-eqz", 0x39: "if-nez", 0x3a: "if-ltz", 0x3b: "if-gez", 0x3c: "if-gtz", 0x3d: "if-lez"}
+_IF = {0x32: "if-eq", 0x33: "if-ne", 0x34: "if-lt", 0x35: "if-ge", 0x36: "if-gt", 0x37: "if-le"}
+_CMP = {0x2d: "cmpl-float", 0x2e: "cmpg-float", 0x2f: "cmpl-double", 0x30: "cmpg-double", 0x31: "cmp-long"}
+_FIELDS = ["iget", "iget-wide", "iget-object", "iget-boolean", "iget-byte", "iget-char", "iget-short",
+           "iput", "iput-wide", "iput-object", "iput-boolean", "iput-byte", "iput-char", "iput-short"]
+_SFIELDS = [f.replace("i", "s", 1) for f in _FIELDS]
+
+
+def decode(dex, units):
+    """The instructions of a method: (text with every reference resolved, width in code units, refs),
+    refs being (unit within the instruction, kind, reference) for each index the instruction holds
+    (kind "type", "field" or "method"; a field or method as (class, name, type or proto)). Only the
+    opcodes listed here are known; any other refuses, so an unexpected method never passes (and no
+    switch or array payload, whose data a copy would have to carry, ever does)."""
     out, pc = [], 0
-    binop_2addr = {0xbb: "add-long/2addr", 0xbc: "sub-long/2addr", 0xbd: "mul-long/2addr", 0xbe: "div-long/2addr"}
-    ifz = {0x38: "if-eqz", 0x39: "if-nez", 0x3a: "if-ltz", 0x3b: "if-gez", 0x3c: "if-gtz", 0x3d: "if-lez"}
-    fields = ["iget", "iget-wide", "iget-object", "iget-boolean", "iget-byte", "iget-char", "iget-short",
-              "iput", "iput-wide", "iput-object", "iput-boolean", "iput-byte", "iput-char", "iput-short"]
-    sfields = [f.replace("i", "s", 1) for f in fields]
     while pc < len(units):
         u = units[pc]
         op, aa = u & 0xFF, u >> 8
         a, b = aa & 0xF, aa >> 4
+        refs = []
         if op == 0x0e:
-            out.append("return-void"); pc += 1
+            text, w = "return-void", 1
+        elif op in (0x01, 0x04, 0x07):
+            text, w = "%s v%d v%d" % ({0x01: "move", 0x04: "move-wide", 0x07: "move-object"}[op], a, b), 1
         elif op in (0x0f, 0x10, 0x11):
-            out.append("%s v%d" % ({0x0f: "return", 0x10: "return-wide", 0x11: "return-object"}[op], aa)); pc += 1
+            text, w = "%s v%d" % ({0x0f: "return", 0x10: "return-wide", 0x11: "return-object"}[op], aa), 1
         elif op in (0x0a, 0x0b, 0x0c):
-            out.append("%s v%d" % ({0x0a: "move-result", 0x0b: "move-result-wide", 0x0c: "move-result-object"}[op], aa)); pc += 1
+            text, w = "%s v%d" % ({0x0a: "move-result", 0x0b: "move-result-wide", 0x0c: "move-result-object"}[op], aa), 1
         elif op == 0x12:
-            out.append("const/4 v%d %d" % (a, b - 16 if b > 7 else b)); pc += 1
+            text, w = "const/4 v%d %d" % (a, b - 16 if b > 7 else b), 1
         elif op == 0x13:
-            out.append("const/16 v%d %d" % (aa, s16(units[pc + 1]))); pc += 2
+            text, w = "const/16 v%d %d" % (aa, s16(units[pc + 1])), 2
         elif op == 0x16:
-            out.append("const-wide/16 v%d %d" % (aa, s16(units[pc + 1]))); pc += 2
-        elif op == 0x22:
-            out.append("new-instance v%d %s" % (aa, dex.type_name(units[pc + 1]))); pc += 2
-        elif op == 0x31:
-            out.append("cmp-long v%d v%d v%d" % (aa, units[pc + 1] & 0xFF, units[pc + 1] >> 8)); pc += 2
-        elif op in ifz:
-            out.append("%s v%d %+d" % (ifz[op], aa, s16(units[pc + 1]))); pc += 2
-        elif op == 0x81:
-            out.append("int-to-long v%d v%d" % (a, b)); pc += 1
-        elif op in binop_2addr:
-            out.append("%s v%d v%d" % (binop_2addr[op], a, b)); pc += 1
+            text, w = "const-wide/16 v%d %d" % (aa, s16(units[pc + 1])), 2
+        elif op in (0x1c, 0x1f, 0x22):
+            t = dex.type_name(units[pc + 1])
+            text, w = "%s v%d %s" % ({0x1c: "const-class", 0x1f: "check-cast", 0x22: "new-instance"}[op], aa, t), 2
+            refs.append((1, "type", t))
+        elif op == 0x28:
+            text, w = "goto %+d" % (aa - 256 if aa > 127 else aa), 1
+        elif op == 0x29:
+            text, w = "goto/16 %+d" % s16(units[pc + 1]), 2
+        elif op in _CMP:
+            text, w = "%s v%d v%d v%d" % (_CMP[op], aa, units[pc + 1] & 0xFF, units[pc + 1] >> 8), 2
+        elif op in _IF:
+            text, w = "%s v%d v%d %+d" % (_IF[op], a, b, s16(units[pc + 1])), 2
+        elif op in _IFZ:
+            text, w = "%s v%d %+d" % (_IFZ[op], aa, s16(units[pc + 1])), 2
         elif 0x52 <= op <= 0x5f:
-            cls, name, typ = dex.field(units[pc + 1])
-            out.append("%s v%d v%d %s->%s:%s" % (fields[op - 0x52], a, b, cls, name, typ)); pc += 2
+            f = dex.field(units[pc + 1])
+            text, w = "%s v%d v%d %s->%s:%s" % ((_FIELDS[op - 0x52], a, b) + f), 2
+            refs.append((1, "field", f))
         elif 0x60 <= op <= 0x6d:
-            cls, name, typ = dex.field(units[pc + 1])
-            out.append("%s v%d %s->%s:%s" % (sfields[op - 0x60], aa, cls, name, typ)); pc += 2
+            f = dex.field(units[pc + 1])
+            text, w = "%s v%d %s->%s:%s" % ((_SFIELDS[op - 0x60], aa) + f), 2
+            refs.append((1, "field", f))
         elif 0x6e <= op <= 0x72:
             kind = ["invoke-virtual", "invoke-super", "invoke-direct", "invoke-static", "invoke-interface"][op - 0x6e]
             count, g = aa >> 4, aa & 0xF
             regs = [units[pc + 2] & 0xF, (units[pc + 2] >> 4) & 0xF, (units[pc + 2] >> 8) & 0xF, units[pc + 2] >> 12, g][:count]
-            cls, name, proto = dex.method(units[pc + 1])
-            out.append("%s {%s} %s->%s%s" % (kind, ",".join("v%d" % r for r in regs), cls, name, proto)); pc += 3
+            m = dex.method(units[pc + 1])
+            text, w = "%s {%s} %s->%s%s" % ((kind, ",".join("v%d" % r for r in regs)) + m), 3
+            refs.append((1, "method", m))
+        elif 0x7b <= op <= 0x8f:
+            text, w = "%s v%d v%d" % (_UNOPS[op - 0x7b], a, b), 1
+        elif 0x90 <= op <= 0xaf:
+            text, w = "%s v%d v%d v%d" % (_BINOPS[op - 0x90], aa, units[pc + 1] & 0xFF, units[pc + 1] >> 8), 2
+        elif 0xb0 <= op <= 0xcf:
+            text, w = "%s/2addr v%d v%d" % (_BINOPS[op - 0xb0], a, b), 1
         else:
             raise Mismatch("opcode 0x%02x not expected" % op)
+        if pc + w > len(units):
+            raise Mismatch("an instruction runs past the method's end")
+        out.append((text, w, refs))
+        pc += w
     return out
+
+
+def disassemble(dex, units):
+    """The instructions of a method as text with every reference resolved (decode)"""
+    return [text for text, _w, _r in decode(dex, units)]
 
 
 def expect(what, got, want):
@@ -398,8 +483,83 @@ def check_references(dexes, v):
     return defining
 
 
+def class_text(dex, cls):
+    """The class as read, as text: its definition, its fields, and each method's header and code with
+    every reference resolved. Its sha256 identifies the map loop of a verified version."""
+    d = dex.class_def(cls)
+    lines = ["class %s access 0x%x super %s interfaces %s annotations %s static-values %s"
+             % (cls, d["access"], d["super"], ",".join(d["interfaces"]) or "-",
+                "yes" if d["annotations_off"] else "no", "yes" if d["static_values_off"] else "no")]
+    for n, t, a in dex.class_fields(d["data"]):
+        lines.append("field %s:%s 0x%x" % (n, t, a))
+    for n, p, a, code_off in dex.class_methods(d["data"]):
+        if not code_off:
+            lines.append("method %s%s 0x%x no code" % (n, p, a))
+            continue
+        regs, ins, tries, units = dex.code(code_off)
+        lines.append("method %s%s 0x%x registers %d ins %d outs %d tries %d"
+                     % (n, p, a, regs, ins, dex.code_outs(code_off), tries))
+        lines += ["  " + t for t in disassemble(dex, units)]
+    return "\n".join(lines) + "\n"
+
+
+def check_loop(dexes, lv):
+    """The map loop class is the one read for this version (its text's sha256), defined in one dex,
+    final (nothing extends it), with no annotations, static values or exception handlers to carry;
+    every reference to it elsewhere names a member it has; its METHOD holds STILL and FAST once each.
+    Returns (that dex, the instruction index in METHOD whose wait the copy changes)."""
+    cls = lv["class"]
+    defining = [(name, dex) for name, dex in dexes if dex.class_def(cls) is not None]
+    if len(defining) != 1:
+        raise Mismatch("%s is defined in %d dexes, expected one" % (cls, len(defining)))
+    name, dex = defining[0]
+    text = class_text(dex, cls)
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    if digest != lv["sha256"]:
+        raise Mismatch("%s in %s is not the map loop read for this version (sha256 %s)" % (cls, name, digest))
+    d = dex.class_def(cls)
+    # what the sha256 already covers, stated: the copy relies on each
+    expect(cls + " final", bool(d["access"] & 0x10), True)
+    expect(cls + " annotations", d["annotations_off"], 0)
+    expect(cls + " static values", d["static_values_off"], 0)
+    fields = dex.class_fields(d["data"])
+    methods = dex.class_methods(d["data"])
+    if any(n == LOOP_FIELD[0] for n, _t, _a in fields) or any(n == "<clinit>" for n, _p, _a, _c in methods):
+        raise Mismatch("%s already has %s or a class initialiser" % (cls, LOOP_FIELD[0]))
+    for n, p, _a, code_off in methods:
+        if not code_off or dex.code(code_off)[2]:
+            raise Mismatch("%s.%s%s is abstract, native or has exception handlers" % (cls, n, p))
+    code = [c for n, p, _a, c in methods if (n, p) == lv["method"]]
+    if len(code) != 1:
+        raise Mismatch("%s has no %s%s" % (cls, lv["method"][0], lv["method"][1]))
+    insns = decode(dex, dex.code(code[0])[3])
+    waits = {}
+    for i, (t, _w, _r) in enumerate(insns):
+        m = re.match(r"const-wide/16 v\d+ (-?\d+)$", t)
+        if m and int(m.group(1)) in (lv["still"], lv["fast"]):
+            waits.setdefault(int(m.group(1)), []).append(i)
+    if len(waits.get(lv["still"], [])) != 1 or len(waits.get(lv["fast"], [])) != 1:
+        raise Mismatch("%s.%s: its waits %s, expected %d ms and %d ms once each"
+                       % (cls, lv["method"][0], waits, lv["still"], lv["fast"]))
+    own_methods = set((n, p) for n, p, _a, _c in methods)
+    own_fields = set((n, t) for n, t, _a in fields)
+    for dname, other in dexes:
+        for c, n, p in other.method_refs():
+            if c == cls and (n, p) not in own_methods and (n, p) not in (
+                    ("equals", "(Ljava/lang/Object;)Z"), ("hashCode", "()I"),
+                    ("toString", "()Ljava/lang/String;"), ("getClass", "()Ljava/lang/Class;")):
+                raise Mismatch("%s refers to %s->%s%s, not a method it has" % (dname, c, n, p))
+        for c, n, t in other.field_refs():
+            if c == cls and (n, t) not in own_fields:
+                raise Mismatch("%s refers to %s->%s:%s, not a field it has" % (dname, c, n, t))
+        for d2 in other.class_defs():
+            if d2[2] == cls:
+                raise Mismatch("%s extends %s" % (d2[0], cls))
+    return dex, waits[lv["still"]][0]
+
+
 def check_atl(api_impl, v):
-    """ATL's api-impl.jar has ATLFrameRateLimiter with what the generated class calls (an older ATL
+    """ATL's api-impl.jar has ATLFrameRateLimiter with what the generated classes use (an older ATL
     without it would make Waze's limiter class fail to load: no map)"""
     want = set(v["api"].values())
     with zipfile.ZipFile(api_impl) as z:
@@ -415,24 +575,36 @@ def check_atl(api_impl, v):
             missing = want - have
             if missing:
                 raise Mismatch("%s in %s lacks %s" % (ATL_LIMITER, api_impl, ", ".join(n + p for n, p in sorted(missing))))
+            if "loop" in v:
+                statics = set((n, t) for n, t, a in dex.class_fields(data_off) if a & 0x9 == 0x9)  # public static
+                missing = [n for n, t in ATL_POLICY_FIELDS if (n, t) not in statics]
+                if missing:
+                    raise Mismatch("%s in %s lacks the policy fields %s" % (ATL_LIMITER, api_impl, ", ".join(missing)))
             return
     raise Mismatch("ATL's %s has no %s (an ATL older than the automatic map frame rate)" % (api_impl, ATL_LIMITER))
 
 
+def read_dexes(base):
+    with zipfile.ZipFile(base) as z:
+        return [(name, Dex(z.read(name))) for name in sorted(n for n in z.namelist()
+                                                            if n.startswith("classes") and n.endswith(".dex"))]
+
+
 def check_auto(app_dir):
-    """(versionCode, versionName, the version's VERIFIED_AUTO entry) when the installed app is a
-    verified version whose limiter is as expected; raises Mismatch otherwise"""
+    """(versionCode, versionName, the version's VERIFIED_AUTO entry, the APK's dexes) when the
+    installed app is a verified version whose limiter and map loop are as expected; raises Mismatch
+    otherwise"""
     base, info, vc = app_info(app_dir)
     if info.get("package") != "com.waze" or vc not in VERIFIED_AUTO:
         raise Mismatch("%s versionCode %s is not a verified Waze version (%s)"
                        % (info.get("package"), vc, ", ".join(str(k) for k in VERIFIED_AUTO)))
     v = VERIFIED_AUTO[vc]
-    with zipfile.ZipFile(base) as z:
-        dexes = [(name, Dex(z.read(name))) for name in sorted(n for n in z.namelist()
-                                                             if n.startswith("classes") and n.endswith(".dex"))]
+    dexes = read_dexes(base)
     defining = check_references(dexes, v)
     check_limiter(dict(dexes)[defining], v)
-    return vc, info.get("versionName"), v
+    if "loop" in v:
+        check_loop(dexes, v["loop"])
+    return vc, info.get("versionName"), v, dexes
 
 
 # ---------------------------------------------------------------------------- writing
@@ -458,50 +630,93 @@ def param_types(proto):
     params = proto[1:].split(")")[0]
     out, i = [], 0
     while i < len(params):
-        if params[i] == "L":
-            j = params.index(";", i)
-            out.append(params[i:j + 1])
-            i = j + 1
-        elif params[i] == "[":
-            raise ValueError("arrays not used here")
-        else:
-            out.append(params[i])
-            i += 1
+        j = i
+        while params[j] == "[":
+            j += 1
+        if params[j] == "L":
+            j = params.index(";", j)
+        out.append(params[i:j + 1])
+        i = j + 1
     return out
 
 
 def shorty(proto):
     ret = proto.split(")")[1]
-    return "".join("L" if t[0] == "L" else t for t in [ret] + param_types(proto))
+    return "".join("L" if t[0] in "L[" else t for t in [ret] + param_types(proto))
 
 
-def limiter_class_dex(v):
-    """A dex with one class: v["class"], public, extending ATL_LIMITER: a constructor that hands
-    ATL's Waze's starting rate, and each of the limiter's methods calling ATL's for the same thing."""
-    cls = v["class"]
-    api = sorted(v["api"].items())
-    methods = [(ATL_LIMITER, an, ap) for (_n, _p, _a), (an, ap) in api] + [(cls, n, p) for (n, p, _a), _t in api]
-    protos = sorted(set(p for _c, _n, p in methods))
-    types = set([cls, ATL_LIMITER])
-    for p in protos:
+def is_direct(name, access):
+    return name in ("<init>", "<clinit>") or access & 0x1000a  # static, private or a constructor
+
+
+def write_dex(classes):
+    """A dex holding CLASSES, each a dict: "class" (descriptor), "access", "super", "interfaces"
+    (descriptors), "fields" [(name, type, access)], "methods" [(name, proto, access, code)], code
+    (registers, ins, outs, insns), insns a list of 16-bit code units where a reference index is
+    ("type", descriptor), ("field", (class, name, type)) or ("method", (class, name, proto)). No
+    debug information, annotations or static values."""
+    types, protos, fields, methods, names = set(), set(), set(), set(), set()
+
+    def add_proto(p):
+        protos.add(p)
         types.update(param_types(p))
         types.add(p.split(")")[1])
-    strings = sorted(set(types) | set(n for _c, n, _p in methods) | set(shorty(p) for p in protos))
-    sidx = {s: i for i, s in enumerate(strings)}  # ASCII: code point order is Java's String order
+
+    def add_field(f):
+        fields.add(f)
+        types.update((f[0], f[2]))
+        names.add(f[1])
+
+    def add_method(m):
+        methods.add(m)
+        types.add(m[0])
+        names.add(m[1])
+        add_proto(m[2])
+
+    for c in classes:
+        types.add(c["class"])
+        if c["super"]:
+            types.add(c["super"])
+        types.update(c["interfaces"])
+        for n, t, _a in c["fields"]:
+            add_field((c["class"], n, t))
+        for n, p, _a, code in c["methods"]:
+            add_method((c["class"], n, p))
+            for u in code[3]:
+                if isinstance(u, tuple):
+                    {"type": types.add, "field": add_field, "method": add_method}[u[0]](u[1])
+    strings = sorted(types | names | set(shorty(p) for p in protos))
+    for s in strings:
+        s.encode("ascii")  # ASCII: Python's order is the dex's (UTF-16 code unit) order
+    sidx = {s: i for i, s in enumerate(strings)}
     types = sorted(types, key=lambda t: sidx[t])
     tidx = {t: i for i, t in enumerate(types)}
     protos = sorted(protos, key=lambda p: (tidx[p.split(")")[1]], [tidx[t] for t in param_types(p)]))
     pidx = {p: i for i, p in enumerate(protos)}
+    fields = sorted(fields, key=lambda f: (tidx[f[0]], sidx[f[1]], tidx[f[2]]))
+    fidx = {f: i for i, f in enumerate(fields)}
     methods = sorted(methods, key=lambda m: (tidx[m[0]], sidx[m[1]], pidx[m[2]]))
     midx = {m: i for i, m in enumerate(methods)}
+    index = {"type": tidx, "field": fidx, "method": midx}
+    defined = set(c["class"] for c in classes)
+    order, placed = [], set()
+    while len(order) < len(classes):  # a class defined here after its superclass and interfaces
+        ready = [c for c in classes if c["class"] not in placed
+                 and all(t in placed or t not in defined for t in [c["super"]] + list(c["interfaces"]))]
+        if not ready:
+            raise ValueError("a cycle in the classes' hierarchy")
+        c = min(ready, key=lambda c: tidx[c["class"]])
+        order.append(c)
+        placed.add(c["class"])
 
     header_size = 0x70
     string_ids_off = header_size
     type_ids_off = string_ids_off + 4 * len(strings)
     proto_ids_off = type_ids_off + 4 * len(types)
-    method_ids_off = proto_ids_off + 12 * len(protos)
+    field_ids_off = proto_ids_off + 12 * len(protos)
+    method_ids_off = field_ids_off + 8 * len(fields)
     class_defs_off = method_ids_off + 8 * len(methods)
-    data_off = class_defs_off + 32
+    data_off = class_defs_off + 32 * len(order)
     data = bytearray()
     sections = []  # (map type, count, offset)
 
@@ -509,38 +724,121 @@ def limiter_class_dex(v):
         return data_off + len(data)
 
     type_list_off = {}
+    lists = [tuple(param_types(p)) for p in protos] + [tuple(c["interfaces"]) for c in order]
     first = None
-    for p in protos:
-        params = param_types(p)
-        if not params:
+    for tl in lists:
+        if not tl or tl in type_list_off:
             continue
         align(data)
-        type_list_off[p] = here()
+        type_list_off[tl] = here()
         first = first if first is not None else here()
-        data += struct.pack("<I", len(params)) + b"".join(struct.pack("<H", tidx[t]) for t in params)
+        data += struct.pack("<I", len(tl)) + b"".join(struct.pack("<H", tidx[t]) for t in tl)
     if type_list_off:
         sections.append((0x1001, len(type_list_off), first))
 
-    def code_item(regs, ins, outs, insns):
-        align(data)
-        off = here()
-        data.extend(struct.pack("<HHHHII", regs, ins, outs, 0, 0, len(insns)))
-        data.extend(b"".join(struct.pack("<H", u) for u in insns))
-        return off
-
-    # the code: the parameters are the last registers (this, then the arguments; a long takes two)
     align(data)
     code_start = here()
     codes = {}
-    for (n, p, _a), (an, ap) in api:
-        target = midx[(ATL_LIMITER, an, ap)]
+    for c in order:
+        for n, p, _a, (regs, ins, outs, insns) in c["methods"]:
+            align(data)
+            codes[(c["class"], n, p)] = here()
+            units = []
+            for u in insns:
+                if isinstance(u, tuple):
+                    i = index[u[0]][u[1]]
+                    if i > 0xFFFF:
+                        raise ValueError("index %d does not fit an instruction" % i)
+                    units.append(i)
+                else:
+                    units.append(u)
+            data.extend(struct.pack("<HHHHII", regs, ins, outs, 0, 0, len(units)))
+            data.extend(b"".join(struct.pack("<H", u) for u in units))
+    sections.append((0x2001, len(codes), code_start))
+
+    string_data_off = []
+    for s in strings:
+        string_data_off.append(here())
+        data += write_uleb(len(s)) + s.encode("ascii") + b"\0"
+    sections.append((0x2002, len(strings), string_data_off[0]))
+
+    class_data_off = {}
+    for c in order:
+        class_data_off[c["class"]] = here()
+        sf = sorted((fidx[(c["class"], n, t)], a) for n, t, a in c["fields"] if a & 0x8)
+        inst = sorted((fidx[(c["class"], n, t)], a) for n, t, a in c["fields"] if not a & 0x8)
+        direct = sorted((midx[(c["class"], n, p)], a) for n, p, a, _c in c["methods"] if is_direct(n, a))
+        virtual = sorted((midx[(c["class"], n, p)], a) for n, p, a, _c in c["methods"] if not is_direct(n, a))
+        data += b"".join(write_uleb(len(g)) for g in (sf, inst, direct, virtual))
+        for group in (sf, inst):
+            prev = None
+            for f, access in group:
+                data += write_uleb(f if prev is None else f - prev) + write_uleb(access)
+                prev = f
+        for group in (direct, virtual):
+            prev = None
+            for m, access in group:
+                data += write_uleb(m if prev is None else m - prev) + write_uleb(access) + write_uleb(codes[methods[m]])
+                prev = m
+    sections.append((0x2000, len(order), class_data_off[order[0]["class"]]))
+
+    align(data)
+    map_off = here()
+    items = [(0x0000, 1, 0), (0x0001, len(strings), string_ids_off), (0x0002, len(types), type_ids_off),
+             (0x0003, len(protos), proto_ids_off)]
+    if fields:
+        items.append((0x0004, len(fields), field_ids_off))
+    items += [(0x0005, len(methods), method_ids_off), (0x0006, len(order), class_defs_off)] + sections + [(0x1000, 1, map_off)]
+    items.sort(key=lambda it: it[2])
+    data += struct.pack("<I", len(items))
+    for typ, count, off in items:
+        data += struct.pack("<HHII", typ, 0, count, off)
+    align(data)
+
+    out = bytearray(data_off)
+    file_size = data_off + len(data)
+    struct.pack_into("<8s", out, 0, b"dex\n035\0")
+    struct.pack_into("<20I", out, 0x20,
+                     file_size, header_size, 0x12345678, 0, 0, map_off,
+                     len(strings), string_ids_off, len(types), type_ids_off,
+                     len(protos), proto_ids_off, len(fields), field_ids_off if fields else 0,
+                     len(methods), method_ids_off, len(order), class_defs_off, len(data), data_off)
+    for i, off in enumerate(string_data_off):
+        struct.pack_into("<I", out, string_ids_off + 4 * i, off)
+    for i, t in enumerate(types):
+        struct.pack_into("<I", out, type_ids_off + 4 * i, sidx[t])
+    for i, p in enumerate(protos):
+        struct.pack_into("<III", out, proto_ids_off + 12 * i, sidx[shorty(p)], tidx[p.split(")")[1]],
+                         type_list_off.get(tuple(param_types(p)), 0))
+    for i, (c, n, t) in enumerate(fields):
+        struct.pack_into("<HHI", out, field_ids_off + 8 * i, tidx[c], tidx[t], sidx[n])
+    for i, (c, n, p) in enumerate(methods):
+        struct.pack_into("<HHI", out, method_ids_off + 8 * i, tidx[c], pidx[p], sidx[n])
+    for i, c in enumerate(order):
+        struct.pack_into("<8I", out, class_defs_off + 32 * i, tidx[c["class"]], c["access"],
+                         tidx[c["super"]] if c["super"] else 0xFFFFFFFF,
+                         type_list_off.get(tuple(c["interfaces"]), 0), 0xFFFFFFFF, 0,
+                         class_data_off[c["class"]], 0)
+    out += data
+    out[12:32] = hashlib.sha1(bytes(out[32:])).digest()
+    struct.pack_into("<I", out, 8, zlib.adler32(bytes(out[12:])) & 0xFFFFFFFF)
+    return bytes(out)
+
+
+def limiter_class(v):
+    """v["class"], public, extending ATL_LIMITER: a constructor that hands ATL's Waze's starting
+    rate, and each of the limiter's methods calling ATL's for the same thing (write_dex's form)"""
+    methods = []
+    for (n, p, a), (an, ap) in sorted(v["api"].items()):
+        target = ("method", (ATL_LIMITER, an, ap))
         if n == "<init>":
             # const/16 v0, rate; invoke-direct {v1, v0} ATL-><init>(I)V; return-void
             rate = v["rate"]
             if not 0 < rate < 0x8000:
                 raise ValueError("rate %r" % rate)
-            insns, regs, ins, outs = [0x0013, rate, 0x2070, target, 0x0001, 0x000e], 2, 1, 2
+            code = (2, 1, 2, [0x0013, rate, 0x2070, target, 0x0001, 0x000e])
         else:
+            # the parameters are the last registers (this, then the arguments; a long takes two)
             width = 1 + sum(2 if t in ("J", "D") else 1 for t in param_types(p))
             ret = p.split(")")[1]
             # invoke-virtual {v0..v(width-1)} ATL's method (all of this method's registers, in order)
@@ -556,60 +854,66 @@ def limiter_class_dex(v):
                 insns += [0x000b, 0x0010]  # move-result-wide v0; return-wide v0
             else:
                 raise ValueError("return type %s not used here" % ret)
-            regs, ins, outs = max(width, 2 if ret in ("J", "D") else 1), width, width
-        codes[(cls, n, p)] = code_item(regs, ins, outs, insns)
-    sections.append((0x2001, len(codes), code_start))
+            code = (max(width, 2 if ret in ("J", "D") else 1), width, width, insns)
+        methods.append((n, p, a, code))
+    return {"class": v["class"], "access": 0x1, "super": ATL_LIMITER, "interfaces": [], "fields": [],
+            "methods": methods}
 
-    string_data_off = []
-    for s in strings:
-        string_data_off.append(here())
-        data += write_uleb(len(s)) + s.encode("ascii") + b"\0"
-    sections.append((0x2002, len(strings), string_data_off[0]))
 
-    # class data: the constructor (direct), the other methods (virtual), each in method index order
-    class_data_off = here()
-    direct = sorted((midx[(cls, n, p)], a) for (n, p, a), _t in api if n == "<init>")
-    virtual = sorted((midx[(cls, n, p)], a) for (n, p, a), _t in api if n != "<init>")
-    data += write_uleb(0) + write_uleb(0) + write_uleb(len(direct)) + write_uleb(len(virtual))
-    for group in (direct, virtual):
-        prev = None
-        for m, access in group:
-            data += write_uleb(m if prev is None else m - prev) + write_uleb(access) + write_uleb(codes[methods[m]])
-            prev = m
-    sections.append((0x2000, 1, class_data_off))
+def limiter_class_dex(v):
+    """A dex with the limiter class alone"""
+    return write_dex([limiter_class(v)])
 
-    align(data)
-    map_off = here()
-    items = [(0x0000, 1, 0), (0x0001, len(strings), string_ids_off), (0x0002, len(types), type_ids_off),
-             (0x0003, len(protos), proto_ids_off), (0x0005, len(methods), method_ids_off),
-             (0x0006, 1, class_defs_off)] + sections + [(0x1000, 1, map_off)]
-    items.sort(key=lambda it: it[2])
-    data += struct.pack("<I", len(items))
-    for typ, count, off in items:
-        data += struct.pack("<HHII", typ, 0, count, off)
-    align(data)
 
-    out = bytearray(data_off)
-    file_size = data_off + len(data)
-    struct.pack_into("<8s", out, 0, b"dex\n035\0")
-    struct.pack_into("<20I", out, 0x20,
-                     file_size, header_size, 0x12345678, 0, 0, map_off,
-                     len(strings), string_ids_off, len(types), type_ids_off,
-                     len(protos), proto_ids_off, 0, 0, len(methods), method_ids_off,
-                     1, class_defs_off, len(data), data_off)
-    for i, off in enumerate(string_data_off):
-        struct.pack_into("<I", out, string_ids_off + 4 * i, off)
-    for i, t in enumerate(types):
-        struct.pack_into("<I", out, type_ids_off + 4 * i, sidx[t])
-    for i, p in enumerate(protos):
-        struct.pack_into("<III", out, proto_ids_off + 12 * i, sidx[shorty(p)], tidx[p.split(")")[1]], type_list_off.get(p, 0))
-    for i, (c, n, p) in enumerate(methods):
-        struct.pack_into("<HHI", out, method_ids_off + 8 * i, tidx[c], pidx[p], sidx[n])
-    struct.pack_into("<8I", out, class_defs_off, tidx[cls], 0x1, tidx[ATL_LIMITER], 0, 0xFFFFFFFF, 0, class_data_off, 0)
-    out += data
-    out[12:32] = hashlib.sha1(bytes(out[32:])).digest()
-    struct.pack_into("<I", out, 8, zlib.adler32(bytes(out[12:])) & 0xFFFFFFFF)
-    return bytes(out)
+def copy_units(dex, units, replace=None):
+    """A method's code in write_dex's form: its units with each reference index as its reference;
+    REPLACE {instruction index: units} puts other units of the same width in an instruction's place"""
+    out, pc = [], 0
+    for i, (_t, w, refs) in enumerate(decode(dex, units)):
+        if replace and i in replace:
+            if len(replace[i]) != w:
+                raise ValueError("a replacement of another width")
+            out += replace[i]
+        else:
+            insn = list(units[pc:pc + w])
+            for at, kind, ref in refs:
+                insn[at] = (kind, ref)
+            out += insn
+        pc += w
+    return out
+
+
+def loop_class(dex, lv, still_at):
+    """The map loop class copied from DEX, the wait at instruction STILL_AT of its METHOD read from
+    LOOP_FIELD, which its class initialiser sets from ATL's policy (write_dex's form)"""
+    cls = lv["class"]
+    d = dex.class_def(cls)
+    field = ("field", (cls, LOOP_FIELD[0], LOOP_FIELD[1]))
+    methods = []
+    for n, p, a, code_off in dex.class_methods(d["data"]):
+        regs, ins, _tries, units = dex.code(code_off)
+        replace = None
+        if (n, p) == lv["method"]:
+            insn = decode(dex, units)
+            pc = sum(w for _t, w, _r in insn[:still_at])
+            reg = units[pc] >> 8
+            # const-wide/16 vAA, STILL -> sget-wide vAA, LOOP_FIELD (both two units)
+            replace = {still_at: [0x0061 | reg << 8, field]}
+        methods.append((n, p, a, (regs, ins, dex.code_outs(code_off), copy_units(dex, units, replace))))
+    for value in (lv["still"], lv["fast"]):
+        if not 0 < value < 0x8000:
+            raise ValueError("wait %r" % value)
+    # <clinit>: v0 = POLICY; v1 = POLICY_DISPLAY; v2:v3 = STILL; if v0 == v1 then v2:v3 = FAST; the field = v2:v3
+    clinit = [0x0060, ("field", (ATL_LIMITER,) + ATL_POLICY_FIELDS[0]),
+              0x0160, ("field", (ATL_LIMITER,) + ATL_POLICY_FIELDS[1]),
+              0x0216, lv["still"],
+              0x1033, 4,                  # if-ne v0, v1, +4 (over the next instruction)
+              0x0216, lv["fast"],
+              0x0268, field,              # sput-wide v2, the field
+              0x000e]
+    methods.append(("<clinit>", "()V", 0x10008, (4, 0, 0, clinit)))
+    return {"class": cls, "access": d["access"], "super": d["super"], "interfaces": d["interfaces"],
+            "fields": dex.class_fields(d["data"]) + [LOOP_FIELD], "methods": methods}
 
 
 def write_jar(dex_bytes, out_jar):
@@ -628,29 +932,63 @@ def write_jar(dex_bytes, out_jar):
     os.replace(tmp, out_jar)
 
 
+def override_dex(v, dexes):
+    """the jar's dex: the limiter class, and the map loop class copied from DEXES (checked)"""
+    classes = [limiter_class(v)]
+    if "loop" in v:
+        dex, still_at = check_loop(dexes, v["loop"])
+        classes.append(loop_class(dex, v["loop"], still_at))
+    return write_dex(classes)
+
+
 def patch_auto(app_dir, out_jar, check_only, atl):
     try:
-        vc, vn, v = check_auto(app_dir)
+        vc, vn, v, dexes = check_auto(app_dir)
         if atl:
             check_atl(atl, v)
+        dex = override_dex(v, dexes)
     except Mismatch as e:
         print("waze-map-pacing: %s: nothing changed" % e, file=sys.stderr)
         return 2
     except (OSError, zipfile.BadZipFile, ValueError) as e:
         print("waze-map-pacing: %s: nothing changed" % e, file=sys.stderr)
         return 1
-    dex = limiter_class_dex(v)
     print("waze-map-pacing: Waze %s (%d): the frame limiter %s as expected; it extends %s (starting at %d frames/s)"
           % (vn, vc, v["class"], ATL_LIMITER, v["rate"]))
+    if "loop" in v:
+        lv = v["loop"]
+        print("waze-map-pacing: the map loop %s as expected; its %d ms wait is %d ms under ATL_FRAME_RATE=display"
+              % (lv["class"], lv["still"], lv["fast"]))
     if not check_only:
         write_jar(dex, out_jar)
         print("waze-map-pacing: wrote %s" % out_jar)
     return 0
 
 
+def dump(app_dir):
+    base, info, vc = app_info(app_dir)
+    v = VERIFIED_AUTO.get(vc)
+    classes = [v["class"], v["loop"]["class"]] if v else [LIMITER_5_27_5, VERIFIED_AUTO[1030750]["loop"]["class"]]
+    print("# %s %s (%s)" % (info.get("package"), info.get("versionName"), vc))
+    for name, dex in read_dexes(base):
+        for cls in classes:
+            if dex.class_def(cls) is None:
+                continue
+            try:
+                text = class_text(dex, cls)
+            except Mismatch as e:
+                print("# %s %s: %s" % (name, cls, e))
+                continue
+            print("# %s, sha256 %s" % (name, hashlib.sha256(text.encode()).hexdigest()))
+            sys.stdout.write(text)
+    return 0
+
+
 def main():
     args = sys.argv[1:]
     usage = __doc__.split("\n\n")[1]
+    if len(args) == 2 and args[0] == "--dump":
+        return dump(args[1])
     check = "--check" in args
     args = [a for a in args if a != "--check"]
     atl = None
