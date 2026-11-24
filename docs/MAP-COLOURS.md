@@ -31,8 +31,10 @@ the APK into its data folder (`/var/lib/tesla/android/waze/base.apk_/`). `libwaz
 - **teslalinux**: the manifest with the palette and the verified list,
   `host/appstyle/waze-map-graphite.json` (installed to `/usr/local/lib/teslalinux/appstyle/`); the
   launcher (`host/phase1-pios/teslalinux-atl`) passes it in the car interface when the choice is
-  Graphite; `services/api/api.py` reports in `GET /api/appInterface` `mapSkin` whether it applies to
-  the installed Waze (the same versionCode + sha256 check), and the settings page warns when it does not.
+  Graphite, as `mapskin.py effective` writes it for that start (`~/.cache/teslalinux/map-skin.json`,
+  see "When Waze updates"); `services/api/api.py` reports in `GET /api/appInterface` `mapSkin` whether
+  it applies to the installed Waze ("verified", or "unverified": it applies to a version nobody
+  checked and may not work), and the settings page says so in one line.
 
 The palette comes from the Graphite tokens and the mockup's map: land `#D9DADD` / `#2F3032` (by day a
 shade darker than the panels, so the white roads stand out), buildings and stations `#CDCED2` /
@@ -49,12 +51,19 @@ purple by day and cyan by night, and Waze's Java side draws the bitmap with it).
 
 ## When Waze updates
 
-`tools/appupdate` installs a new Waze as before. At its next start Waze unpacks the new skin files; if
-the new versionCode (or the files) is not on the verified list, ATL leaves them alone, the map shows
-Waze's own palette, the page tones it down (Muted, with the Graphite page style), and Settings shows
-"Map colours: not available for Waze X.Y". Nothing else changes; nothing breaks.
+`tools/appupdate` installs a new Waze as before. Graphite still applies to a version that is not on
+the verified list, without anyone checking it: at every start the launcher runs
+`mapskin.py effective`, which writes the manifest ATL gets with, for the installed versionCode, the
+originals verified for other versions (a new Waze often keeps its palette files byte for byte: 5.25,
+5.26 and 5.27 have the same four) and each file now on disk in which every replacement occurs exactly
+once (the same text replacement; the file's length stays). Those pairs are marked `"unverified": true`
+and Settings shows "May not work with Waze X.Y". A file whose replacements do not all occur gets no
+pair: ATL leaves it alone and the map shows Waze's own palette for it; when none applies, the page
+tones the map down (Muted, with the Graphite page style) and Settings says Graphite is not available
+for that version. A file Waze unpacks anew at the first start of a new version is checked from the
+next start on (ATL checks the sha256 of the file it opens). Nothing breaks either way.
 
-## Checking a new Waze version and adding it
+## Checking a new Waze version and adding it (from "may not work" to verified)
 
 On the device (or the VM) with the new version installed and started once (so its skin files are
 unpacked), as root or the `tesla` user:

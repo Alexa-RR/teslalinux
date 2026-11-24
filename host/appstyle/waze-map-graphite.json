@@ -2,7 +2,7 @@
   "_about": [
     "Waze's map in the car page's Graphite look: neutral grey land, white roads by day and dark roads by night, the route in the theme blue; traffic, pins and reports stay Waze's.",
     "An ATL file overlay manifest (ATL_FILE_OVERLAYS, see the fork's src/api-impl-jni/file_overlays.c). Waze reads its map palette from the Lua files it unpacks into its data folder; ATL serves Waze a copy with these replacements, in memory. The files on disk never change.",
-    "Applied only for the (versionCode, sha256 of the original file) pairs under each entry's 'verified'. Any other Waze version or file contents: Waze's own colours, and Settings > Waze interface says so (services/api/api.py).",
+    "ATL applies it for the (versionCode, sha256 of the original file) pairs under each entry's 'verified'. For another Waze version the launcher adds pairs marked 'unverified' (mapskin.py effective: the verified originals, and the file on disk when every replacement occurs in it once); Settings > Waze interface says 'May not work'.",
     "To check a new Waze version and add it: docs/MAP-COLOURS.md (tools/appstyle/mapskin.py)."
   ],
   "replacements": {

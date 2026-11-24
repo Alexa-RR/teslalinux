@@ -22,17 +22,18 @@ for f in "$APP_DIR"/split_config.*.apk; do [[ -f "$f" ]] && APKS+=("$f"); done
 [[ -f "${APKS[0]}" ]] || { echo "teslalinux-atl: no base.apk in $APP_DIR (run tools/apps/install-app.sh)" >&2; exit 1; }
 
 # ---- classes ATL loads in front of the app's own (ATL_APP_CLASS_OVERRIDES), each made here from the
-# installed APK by a tool that knows the app versions it was checked with (the APK is never changed),
-# made again when the app, the tool or ATL (whose class each one extends) changed:
-#   - the speedometer: for the Waze versions tools/apps/waze-speedometer.py knows, Waze's own
-#     speedometer readings (a value class it makes on every position) become a class that extends
-#     ATL's ATLCarSpeedometer, which hands each one to ATL's car-app host ({"type":"speedometer"} on
-#     /sockets/carapp) for the car page to draw. Without the car host (the phone interface) the
-#     readings go nowhere and the class is Waze's value class as before.
-#   - the map's frame limiter: for the Waze versions tools/apps/waze-map-pacing.py knows, Waze's
-#     frame limiter becomes a class that extends ATL's ATLFrameRateLimiter, whose policy
-#     (ATL_FRAME_RATE, below) is the Map frame rate chosen on the settings page; "app" is Waze's own
-#     limiter exactly.
+# installed APK by a tool that knows the app versions it was checked with and finds the same code in
+# other versions (the APK is never changed), made again when the app, the tool or ATL (whose class each
+# one extends) changed. A tool that finds nothing (exit 2) leaves NAME.none, so the next starts do not
+# search again until one of those changes (the settings page reads both: services/api/api.py):
+#   - the speedometer: tools/apps/waze-speedometer.py: Waze's own speedometer readings (a value class
+#     it makes on every position) become a class that extends ATL's ATLCarSpeedometer, which hands
+#     each one to ATL's car-app host ({"type":"speedometer"} on /sockets/carapp) for the car page to
+#     draw. Without the car host (the phone interface) the readings go nowhere and the class is Waze's
+#     value class as before.
+#   - the map's frame limiter: tools/apps/waze-map-pacing.py: Waze's frame limiter becomes a class
+#     that extends ATL's ATLFrameRateLimiter, whose policy (ATL_FRAME_RATE, below) is the Map frame
+#     rate chosen on the settings page; "app" is Waze's own limiter exactly.
 # Both are loaded whatever the interface and the frame rate: the list is part of the app's class loader
 # context, which ART's compiled code for the app records, so a different list at a start would throw
 # that code away and compile the whole app again (minutes on a Pi 4). With the same list every time,
@@ -47,13 +48,21 @@ SPEEDO_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-speedometer.jar"
 PACING_JAR="$OVERRIDE_DIR/com.waze-${VC:-unknown}-map-auto.jar"
 OVERRIDES=()
 # override_jar JAR TOOL ARGS...: JAR made (again) by TOOL ARGS when missing or older than the app, the
-# tool or ATL; added to OVERRIDES when there is one for this app version
+# tool or ATL (or, after the tool found nothing, JAR's .none marker older than those); added to
+# OVERRIDES when there is one for this app version
 override_jar() {
-  local jar=$1 tool=$2; shift 2
+  local jar=$1 tool=$2 rc; shift 2
+  local made=$jar none="${jar%.jar}.none"
   [[ -n "$VC" ]] || return 1
-  if [[ -r "$tool" && ( ! -s "$jar" || "${APKS[0]}" -nt "$jar" || "$tool" -nt "$jar" || "$API_IMPL" -nt "$jar" ) ]]; then
+  [[ ! -s "$jar" && -e "$none" ]] && made=$none
+  if [[ -r "$tool" && ( ! -s "$made" && "$made" == "$jar" || "${APKS[0]}" -nt "$made" || "$tool" -nt "$made" || "$API_IMPL" -nt "$made" ) ]]; then
     mkdir -p "$OVERRIDE_DIR"
-    python3 -I "$tool" "$@" >&2 || rm -f "$jar"
+    rm -f "$none"
+    if python3 -I "$tool" "$@" >&2; then :; else
+      rc=$?
+      rm -f "$jar"
+      if (( rc == 2 )); then : > "$none"; fi
+    fi
   fi
   [[ -s "$jar" ]] || return 1
   OVERRIDES+=("$jar")
@@ -61,10 +70,10 @@ override_jar() {
 SPEEDO_OK=0 PACING_OK=0
 override_jar "$SPEEDO_JAR" "$SPEEDO_TOOL" jar "$APP_DIR" "$SPEEDO_JAR" --atl "$API_IMPL" && SPEEDO_OK=1
 override_jar "$PACING_JAR" "$PACING_TOOL" "$APP_DIR" "$PACING_JAR" --atl "$API_IMPL" && PACING_OK=1
-# jars of other app versions, and the whole-dex "full" frame rate jar of earlier releases
+# jars and markers of other app versions, and the whole-dex "full" frame rate jar of earlier releases
 if [[ -d "$OVERRIDE_DIR" ]]; then
-  for f in "$OVERRIDE_DIR"/com.waze-*.jar; do
-    [[ -e "$f" && "$f" != "$SPEEDO_JAR" && "$f" != "$PACING_JAR" ]] && rm -f "$f"
+  for f in "$OVERRIDE_DIR"/com.waze-*.jar "$OVERRIDE_DIR"/com.waze-*.none; do
+    [[ -e "$f" && "$f" != "$SPEEDO_JAR" && "$f" != "$PACING_JAR" && "$f" != "${SPEEDO_JAR%.jar}.none" && "$f" != "${PACING_JAR%.jar}.none" ]] && rm -f "$f"
   done
 fi
 unset ATL_APP_CLASS_OVERRIDES
@@ -175,8 +184,8 @@ if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
   # the speedometer: Waze draws its own into the car map (speed and the road's speed limit, bottom
   # right), where the car page can neither place nor style it. With the speedometer class above, the
   # car page draws it from Waze's readings (Settings > Waze interface > Speedometer), and Waze's own is
-  # turned off: its "Show speedometer" setting, kept to be put back in the phone interface. Other
-  # versions keep their own.
+  # turned off: its "Show speedometer" setting, kept to be put back in the phone interface. When the
+  # tool found nothing in this version, Waze keeps its own.
   if (( SPEEDO_OK )); then
     python3 -I "$SPEEDO_TOOL" hide "$DATA_DIR" >&2 || true
   else
@@ -186,10 +195,18 @@ if [[ "${TESLALINUX_APP_INTERFACE:-phone}" == car ]]; then
   # the car map's colours chosen on the settings page (teslalinux-set-app-interface map ...):
   # "graphite" has ATL serve the app its map palette recoloured, in memory, from a file overlay
   # manifest that lists the app versions and original files it was checked against (ATL applies it
-  # to those only; docs/MAP-COLOURS.md). The app's files on disk are never changed.
+  # to those only; docs/MAP-COLOURS.md). For a version not on the list, mapskin.py effective writes
+  # this start's copy of the manifest with the files it may apply to: the originals verified for
+  # other versions, and the app's file on disk when every replacement occurs in it once ("may not
+  # work"). The app's files on disk are never changed.
   MAP_SKIN="${TESLALINUX_MAP_SKIN_MANIFEST:-/usr/local/lib/teslalinux/appstyle/waze-map-graphite.json}"
+  MAP_SKIN_TOOL="${TESLALINUX_MAP_SKIN_TOOL:-/usr/local/lib/teslalinux/appstyle/mapskin.py}"
+  MAP_SKIN_NOW="$HOME/.cache/teslalinux/map-skin.json"
   if [[ "${TESLALINUX_MAP_COLOURS:-}" == graphite ]]; then
-    if [[ -r "$MAP_SKIN" ]]; then
+    if [[ -r "$MAP_SKIN" && -r "$MAP_SKIN_TOOL" && -n "$VC" ]] && python3 -I "$MAP_SKIN_TOOL" effective --manifest "$MAP_SKIN" \
+        --data-dir "$DATA_DIR/base.apk_" --version-code "$VC" --out "$MAP_SKIN_NOW" >&2; then
+      export ATL_FILE_OVERLAYS="$MAP_SKIN_NOW"
+    elif [[ -r "$MAP_SKIN" ]]; then
       export ATL_FILE_OVERLAYS="$MAP_SKIN"
     else
       echo "teslalinux-atl: no map colour manifest at $MAP_SKIN; the app keeps its own map colours" >&2

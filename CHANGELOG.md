@@ -40,6 +40,17 @@ version's.
   waited for the map, so it covered those screens for good. The panel now also goes away when the
   display shows that Waze is drawing, and stays away for that start.
 
+### Graphite, the speedometer and the map frame rate on more Waze versions
+
+*Other Waze versions than the checked ones: "May not work", and you can still turn them on.*
+
+- Graphite map colours apply when Waze's palette files are the checked ones or still hold every line
+  they change; otherwise Waze keeps its own colours.
+- The car page's speedometer and the Automatic and Full map frame rates work when the device finds
+  the same code in the installed Waze, under the checked version's names or its own. Waze 5.25 and
+  5.26 get the speedometer this way; their map frame rate code differs, so they keep Waze's own.
+- Settings shows one short line for these instead of the list of checked versions.
+
 ## [0.6.4] - 2026-11-24
 
 A fresh install of 0.6.3 stopped halfway; this one completes.

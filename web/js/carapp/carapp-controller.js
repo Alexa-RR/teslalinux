@@ -19,7 +19,7 @@
   const DAY_NIGHT = ["auto", "day", "night"];
   // The map's colours are the device's choice (/api/appInterface "mapColours"), since "graphite"
   // changes what the app draws: ATL serves the app its map palette recoloured, for verified app
-  // versions only (docs/MAP-COLOURS.md). This browser's earlier "muted"/"app" choice is used until
+  // versions and others whose palette files it fits (docs/MAP-COLOURS.md). This browser's earlier "muted"/"app" choice is used until
   // one is made on the device.
   const MAP_COLOURS = ["graphite", "muted", "app"];
   const PAGE_MAP_COLOURS = ["muted", "app"];
@@ -470,7 +470,7 @@
       });
     }
 
-    /** "graphite" only applies where the installed app version is on the verified list */
+    /** "graphite" only applies where the device says it does for the installed app (mapSkin.supported: verified, or "unverified": may not work) */
     graphiteMapApplies() {
       return this.mapColours === "graphite" && !!(this.mapSkin && this.mapSkin.supported);
     }
@@ -559,7 +559,7 @@
      * the H.264 renderers; the MJPEG one shows it as it is): only with the Graphite look, and only
      * while the page knows whether the app draws its day or its night map (the driver's choice, or
      * the host's night mode), since each has its own palette. With "graphite" map colours the app
-     * draws them itself; where its version is not verified for them it draws its own palette, which
+     * draws them itself; where they do not fit its version it draws its own palette, which
      * this page then mutes instead (Settings shows a warning).
      */
     applyMapColours() {

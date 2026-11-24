@@ -77,8 +77,10 @@ The app's interface (new routes only):
                           verified list of host/appstyle/waze-map-graphite.json, docs/MAP-COLOURS.md);
                           "speedometerSupport": whether the car page draws the speedometer for the
                           installed app version (speedometer_status: tools/apps/waze-speedometer.py's
-                          verified list) and the speedometer settings the app uses (sign style,
-                          over-the-limit offset)
+                          verified list, or the jar the launcher made for another version) and the
+                          speedometer settings the app uses (sign style, over-the-limit offset);
+                          each with "state": "verified", or "unverified" when it works for a version
+                          nobody checked (it may not work)
 * POST /api/appInterface  JSON {"interface": ...} and/or {"mapColours": ...}: `teslalinux-set-app-interface`
                           (one sudoers rule) writes /etc/teslalinux/interface.env and restarts the app
                           if what it starts with changed
@@ -170,12 +172,13 @@ KEYBOARD_MODES = ("builtin", "device")
 SET_APP_INTERFACE = os.environ.get("TESLALINUX_SET_APP_INTERFACE", "/usr/local/bin/teslalinux-set-app-interface")
 INTERFACE_ENV = os.environ.get("TESLALINUX_INTERFACE_ENV", "/etc/teslalinux/interface.env")
 APP_INTERFACES = ("phone", "car")
-# the car map's colours: graphite (ATL's file overlay of the app's palette, verified versions only),
-# muted (the car page recolours the stream), app (the app's own)
+# the car map's colours: graphite (ATL's file overlay of the app's palette: verified versions, and
+# others where its replacements fit), muted (the car page recolours the stream), app (the app's own)
 MAP_COLOURS = ("graphite", "muted", "app")
 # the car map's frame rate: auto (the default: the display's 60 while the map moves, Waze's own 30 while it
 # is still), app (Waze's own, 30 frames/s) or full (the display's 60 all the time); the launcher gives the
-# app a class made by tools/apps/waze-map-pacing.py (verified versions only), whose policy it sets
+# app a class made by tools/apps/waze-map-pacing.py (verified versions, and others with the same code),
+# whose policy it sets
 MAP_PACINGS = ("auto", "app", "full")
 MAP_PACING_DEFAULT = "auto"
 MAP_PACING_TOOLS = tuple(p for p in (
@@ -183,7 +186,8 @@ MAP_PACING_TOOLS = tuple(p for p in (
     "/usr/local/lib/teslalinux/apps/waze-map-pacing.py",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools", "apps", "waze-map-pacing.py"),
 ) if p)
-# the car page's speedometer (the app's readings through ATL's car-app host, verified versions only)
+# the car page's speedometer (the app's readings through ATL's car-app host: verified versions, and
+# others with the same code)
 SPEEDOMETER_TOOLS = tuple(p for p in (
     os.environ.get("TESLALINUX_SPEEDOMETER_TOOL"),
     "/usr/local/lib/teslalinux/apps/waze-speedometer.py",
@@ -191,6 +195,10 @@ SPEEDOMETER_TOOLS = tuple(p for p in (
 ) if p)
 APP_PACKAGE = "com.waze"
 APP_DIR =os.environ.get("TESLALINUX_APP_DIR", "/var/lib/teslalinux/apps/" + APP_PACKAGE)
+# where the launcher (host/phase1-pios/teslalinux-atl, as the app's user, as this service runs) keeps the
+# class override jars the two tools made, and NAME.none where a tool found nothing in this version
+APP_OVERRIDE_DIR = os.environ.get("TESLALINUX_APP_OVERRIDE_DIR",
+                                  os.path.join(os.path.expanduser("~"), ".cache", "teslalinux", "app-overrides"))
 # ATL's data directory for the app: ANDROID_APP_DATA_DIR/<base APK name>_ (main.c)
 APP_DATA_DIR = os.path.join(os.environ.get("ANDROID_APP_DATA_DIR", "/var/lib/tesla/android/waze"), "base.apk_")
 MAP_SKIN_MANIFESTS = tuple(p for p in (
@@ -1239,8 +1247,11 @@ def map_skin_status():
     the manifest the launcher hands it (host/appstyle/waze-map-graphite.json, docs/MAP-COLOURS.md).
     state: "verified" (the installed version and its unpacked files are on the list), "pending" (the
     version is on the list; the app unpacks its files at its next start and ATL checks them then),
-    "unverified-version", "unverified-files" (on the list, but the files on disk differ),
-    "no-manifest", "not-installed"."""
+    "unverified" (it applies, but nobody checked the map with this version or these files: it may not
+    work; the launcher's `mapskin.py effective` adds them for ATL: a file verified for another version,
+    or one in which every replacement occurs once, or files not unpacked yet), "unverified-version"
+    (another version, and no unpacked file it applies to), "unverified-files" (on the list, but the
+    files on disk differ and it applies to none of them), "no-manifest", "not-installed"."""
     inst = _read_json(os.path.join(APP_DIR, "installed.json")) or {}
     vc, vn = inst.get("versionCode"), inst.get("versionName")
     out = {"supported": False, "versionCode": vc, "versionName": vn, "verifiedVersions": []}
@@ -1263,34 +1274,65 @@ def map_skin_status():
         out["state"] = "not-installed"
         return out
     listed = [e for e in entries if any(isinstance(v, dict) and v.get("versionCode") == vc for v in e.get("verified") or [])]
-    if not listed:
-        out["state"] = "unverified-version"
-        return out
-    state = "verified"
-    for e in listed:
+    # each entry's file: missing, verified (this version and these contents), applies (contents verified
+    # for another version, or every replacement once in it: mapskin.py effective), or no
+    files = []
+    for e in entries:
         path = e.get("path") or ""
         path = path if path.startswith("/") else os.path.join(APP_DATA_DIR, path)
         try:
             with open(path, "rb") as f:
-                sha = hashlib.sha256(f.read()).hexdigest()
+                data = f.read()
         except OSError:
-            state = "pending" if state == "verified" else state
+            files.append("missing")
             continue
-        if not any(isinstance(v, dict) and v.get("versionCode") == vc and str(v.get("sha256", "")).lower() == sha
-                   for v in e.get("verified") or []):
-            state = "unverified-files"
+        sha = hashlib.sha256(data).hexdigest()
+        pairs = [v for v in e.get("verified") or [] if isinstance(v, dict)]
+        if any(v.get("versionCode") == vc and str(v.get("sha256", "")).lower() == sha for v in pairs):
+            files.append("verified")
+        elif any(str(v.get("sha256", "")).lower() == sha for v in pairs) or "contents" in e \
+                or _skin_replaces(data, e.get("replace"), (manifest or {}).get("replacements")):
+            files.append("applies")
+        else:
+            files.append("no")
+    present = [f for f in files if f != "missing"]
+    if listed and all(f == "verified" for f in present):
+        state = "verified" if len(present) == len(files) else "pending"
+    elif not present or any(f in ("verified", "applies") for f in present):
+        state = "unverified"
+    else:
+        state = "unverified-files" if listed else "unverified-version"
     out["state"] = state
-    out["supported"] = state in ("verified", "pending")
+    out["supported"] = state in ("verified", "pending", "unverified")
     return out
+
+
+def _skin_replaces(data, replace, named):
+    """ATL's rule for an overlay's text replacements (mapskin.py transform): every FROM occurs exactly
+    once in DATA and no two overlap"""
+    pairs = (named or {}).get(replace) if isinstance(replace, str) else replace
+    if not isinstance(pairs, list) or not pairs:
+        return False
+    spans = []
+    for p in pairs:
+        if not (isinstance(p, list) and len(p) == 2 and isinstance(p[0], str) and p[0]):
+            return False
+        src = p[0].encode()
+        at = data.find(src)
+        if at < 0 or data.find(src, at + 1) >= 0:
+            return False
+        spans.append((at, at + len(src)))
+    spans.sort()
+    return all(a[1] <= b[0] for a, b in zip(spans, spans[1:]))
 
 
 def map_pacing_status():
     """Whether the "auto" and "full" map frame rates apply to the app as installed: its versionCode
     against the versions tools/apps/waze-map-pacing.py knows (VERIFIED_AUTO: its one frame limiter
     class serves both; the launcher's run of the tool also checks the code itself and leaves the app
-    alone if it differs).
-    state: "verified" (for both), "unverified-version", "no-tool", "not-installed"; "modes" names the
-    choices the installed version is verified for (["auto", "full"], one of them, or none)."""
+    alone if it differs; for another version it looks for the same code, see _unlisted).
+    state: "verified" (for both), "unverified" (another version: may not work), "not-found",
+    "no-tool", "not-installed"; "modes" names the choices that apply (["auto", "full"] or none)."""
     inst = _read_json(os.path.join(APP_DIR, "installed.json")) or {}
     vc, vn = inst.get("versionCode"), inst.get("versionName")
     out = {"supported": False, "versionCode": vc, "versionName": vn, "verifiedVersions": [], "modes": []}
@@ -1317,9 +1359,26 @@ def map_pacing_status():
         out["state"] = "not-installed"
         return out
     out["modes"] = [m for m in ("auto", "full") if vc in verified[m]]
-    out["state"] = "verified" if vc in both else "unverified-version"
-    out["supported"] = out["state"] == "verified"
+    if vc in both:
+        out["state"], out["supported"] = "verified", True
+        return out
+    _unlisted(out, vc, "map-auto")
+    if out["supported"]:
+        out["modes"] = ["auto", "full"]
     return out
+
+
+def _unlisted(out, vc, kind):
+    """OUT's state for an app version the tool does not list, from what the launcher's run of the tool
+    left (host/phase1-pios/teslalinux-atl override_jar): its jar ("unverified": the same code found,
+    it may not work), its .none marker ("not-found"), or neither yet ("unverified", "checked" false:
+    the tool looks at the app's next start)"""
+    base = os.path.join(APP_OVERRIDE_DIR, "%s-%d-%s" % (APP_PACKAGE, vc, kind))
+    made = os.path.isfile(base + ".jar") and os.path.getsize(base + ".jar") > 0
+    none = not made and os.path.exists(base + ".none")
+    out["state"] = "not-found" if none else "unverified"
+    out["supported"] = made
+    out["checked"] = made or none
 
 
 def _load_tool(paths, name):
@@ -1341,7 +1400,8 @@ def speedometer_status():
     """Whether the car page draws the app's speedometer (Settings > Waze interface > Speedometer): the
     installed versionCode against the versions tools/apps/waze-speedometer.py knows (the launcher's run
     of the tool also checks the code and ATL, and leaves the app its own speedometer if either
-    differs). state: "verified", "unverified-version", "no-tool", "not-installed". With the app's own
+    differs; for another version it looks for the same code, see _unlisted). state: "verified",
+    "unverified" (another version: may not work), "not-found", "no-tool", "not-installed". With the app's own
     speedometer settings, as the app mirrors them (the tool's settings()): "signStyle" ("us": the US
     rectangle; "world": the round sign), "alertOffset" (when the speed counts as over the limit: above
     limit + limit * offset / 100 for an offset above 0, else above limit - offset), and "hidden"
@@ -1362,8 +1422,10 @@ def speedometer_status():
     if not isinstance(vc, int):
         out["state"] = "not-installed"
         return out
-    out["state"] = "verified" if vc in mod.VERIFIED else "unverified-version"
-    out["supported"] = out["state"] == "verified"
+    if vc in mod.VERIFIED:
+        out["state"], out["supported"] = "verified", True
+    else:
+        _unlisted(out, vc, "speedometer")
     return out
 
 

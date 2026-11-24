@@ -193,11 +193,12 @@ Changes from upstream:
   "Map colours: Graphite" is the device's choice instead (`/api/appInterface` `mapColours`,
   `teslalinux-set-app-interface map graphite`, the app restarts): ATL serves the app its own map
   palette recoloured to the look (docs/MAP-COLOURS.md), so the page draws no shader pass. It applies
-  only to the app versions on the device's verified list (`mapSkin` in the same reply); for any other
-  version the page falls back to Muted and Settings shows a warning tile. "Muted" and "Waze's own"
+  to the app versions on the device's verified list and to others whose palette files it fits
+  (`mapSkin` in the same reply; state "unverified": Settings says "May not work"); where it does not
+  fit, the page falls back to Muted and Settings says so in one line. "Muted" and "Waze's own"
   are also saved on the device; until one is, the browser's earlier `teslalinux.carMapColours` holds.
   The speedometer (`carapp-speedometer.js`, new): for the app versions the device's
-  `tools/apps/waze-speedometer.py` knows (`speedometerSupport` in `/api/appInterface`), the app's
+  `tools/apps/waze-speedometer.py` knows, or finds the same code in (`speedometerSupport` in `/api/appInterface`), the app's
   own speedometer is off and its readings arrive on `/sockets/carapp` (`speedometer`); the page draws
   the current speed in a bubble (red above the limit, by the app's own offset rule) and the road's
   limit as a red-ringed sign beside it (the US rectangle where the app uses that style), at the bottom
