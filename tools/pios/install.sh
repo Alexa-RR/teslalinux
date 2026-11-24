@@ -29,6 +29,12 @@
 #   --yes                no questions (needed when this SSH session runs over the hotspot's Wi-Fi)
 #   --reboot | --no-reboot   what to do at the end (default: ask)
 #
+#   ./install.sh prepare [--dist ...] [--sha256 HEX]
+#                        get that release ready while the app keeps running: its dist unpacked next
+#                        to the running one, the Debian packages it adds downloaded, ART's boot image
+#                        and the app's code compiled for it (at idle priority, in a private mount
+#                        namespace in which /opt/teslalinux is the new dist); the install that follows
+#                        only switches (docs/SYSTEM-UPDATES.md)
 #   teslalinux doctor [--static]   health check (this script, installed as /usr/local/sbin/teslalinux)
 #   teslalinux status              installed dist, previous dist, steps, backups
 #   teslalinux rollback [--yes]    the previous dist and the system files as they were before the
@@ -60,6 +66,9 @@ ENVF=/etc/teslalinux/env
 LIB=/usr/local/lib/teslalinux
 APPS=/var/lib/teslalinux/apps
 TESLA_HOME=/var/lib/tesla
+# ART's cache and the app's override jars for a dist that is not the running one: made by `prepare`
+# for the next one, kept for the previous one (a rollback takes them back); <dist name>/home/.cache
+PREPARED="$STATE_DIR/prepared"
 SELF=/usr/local/sbin/teslalinux
 REBOOT_FLAG=/run/teslalinux/reboot-required
 # directories that belong to teslalinux as a whole (not tracked file by file)
@@ -449,17 +458,159 @@ resolve_dist() {
   fi
 }
 
+# ================================================================ ART's cache per dist
+# ART's cache ($TESLA_HOME/.cache/art: the boot image and the app's compiled code) and the app's
+# override jars belong to one dist (its jars, its tools). A stamp in the cache names it:
+#   dist=<the dist's real path>  app=<app_key when the app was compiled>  compiled=1|0
+art_stamp() { sed -n "s/^$2=//p" "$1/.teslalinux" 2>/dev/null | head -1; }
+app_key() { hash_paths "$APPS/com.waze/installed.json"; }
+prep_dir() { printf '%s/%s' "$PREPARED" "$(basename "$1")"; }
+
+# art_switch FROM TO: /opt/teslalinux moved from dist FROM to dist TO; the cache follows. FROM's is
+# kept beside its prepared set (going back takes it again, with no compiling); TO's, when `prepare`
+# made it while the app ran, comes in; else there is none (step prewarm builds it).
+art_switch() {
+  local from=$1 to=$2 c="$TESLA_HOME/.cache/art" o="$TESLA_HOME/.cache/teslalinux/app-overrides" pf pt d
+  # the same dist (a rollback of an install run that changed files only): its cache stays as it is
+  [[ "$from" == "$to" ]] && return 0
+  pt=$(prep_dir "$to")
+  if [[ -n "$from" && "$from" != "$to" && -d "$c" ]]; then
+    pf=$(prep_dir "$from")
+    rm -rf "$pf"; mkdir -p "$pf/home/.cache/teslalinux"
+    # a cache from before the stamps belongs to the running dist as well (every switch emptied it)
+    [[ -f "$c/.teslalinux" ]] || printf 'dist=%s\napp=%s\ncompiled=1\n' "$from" "$(app_key)" > "$c/.teslalinux"
+    if [[ "$(art_stamp "$c" dist)" == "$from" ]]; then
+      mv "$c" "$pf/home/.cache/art"
+      [[ -d "$o" ]] && mv "$o" "$pf/home/.cache/teslalinux/app-overrides"
+      log "  ART's cache for $from kept for going back"
+    fi
+  fi
+  rm -rf "$c"
+  if [[ -d "$pt/home/.cache/art" && "$(art_stamp "$pt/home/.cache/art" dist)" == "$to" ]]; then
+    install -d -o tesla -g tesla "$TESLA_HOME/.cache" "$TESLA_HOME/.cache/teslalinux"
+    rm -rf "$o"
+    mv "$pt/home/.cache/art" "$c"
+    [[ -d "$pt/home/.cache/teslalinux/app-overrides" ]] && mv "$pt/home/.cache/teslalinux/app-overrides" "$o"
+    log "  ART's cache for $to: the one made for it (prepared while the app ran, or kept from before)"
+  fi
+  rm -rf "$pt"
+  # only the sets of the dists still around
+  for d in "$PREPARED"/*; do
+    [[ -d "$d" ]] || continue
+    [[ -d "$DISTS/$(basename "$d")" ]] || rm -rf "$d"
+  done
+}
+
+# __art-build HOME DIST PAYLOAD: run by `prepare` in a private mount namespace (unshare): there
+# /opt/teslalinux is DIST (a tmpfs over /opt with the dists bound back and the link made anew, so
+# ART records DIST's real paths as it will at DIST's own starts), and ART's boot image, then the
+# app's code (the launcher's --compile, with DIST's launcher and override tools) go to HOME/.cache as
+# the app's user, at idle priority. Exit 0: both, 2: the boot image only, 1: nothing.
+cmd_art_build() {
+  local home=$1 dist=$2 p=$3 bind="/run/teslalinux-prepare.$$"
+  [[ -d "$dist/bin" && -f "$p/host/phase1-pios/teslalinux-atl" ]] || die "no dist in $dist"
+  mkdir -p "$bind"
+  mount --bind "$DISTS" "$bind" && mount -t tmpfs -o mode=0755 tmpfs /opt && mkdir -p "$DISTS" \
+    && mount --bind "$bind" "$DISTS" && ln -s "$dist" "$PREFIX" || die "the mount namespace for $dist failed"
+  [[ "$(readlink -f "$PREFIX")" == "$dist" ]] || die "$PREFIX is not $dist in the namespace"
+  install -d -o tesla -g tesla "$home" "$home/.cache" "$home/android-data"
+  # the launcher and its override tools copied where the app's user reads them (a --payload may be a
+  # checkout in another user's home); all of tools/apps: the tools run their siblings (apk-info.py),
+  # and a tool that fails leaves no jar, so Waze compiled without the jars its real start makes would
+  # be compiled again at that start
+  local t="$home/.prepare-tools"
+  install -d -o tesla -g tesla "$t"
+  install -m 0644 -o tesla -g tesla "$p/host/phase1-pios/teslalinux-atl" "$p"/tools/apps/*.py "$t/"
+  # HOME in here is the app user's own home path, with HOME's content: ART records the paths of the
+  # class path's jars (the override jars live in HOME/.cache) in the app's compiled code and in its
+  # cache's file names, so the code compiled here is valid where art_switch moves it
+  mount --bind "$home" "$TESLA_HOME" || die "the app user's home for $dist failed"
+  t="$TESLA_HOME/.prepare-tools"
+  # the image location as ATL's runtime names it (step prewarm explains -Ximage)
+  runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
+    ANDROID_DATA="$TESLA_HOME/android-data" nice -n 19 ionice -c 3 timeout 1800 "$PREFIX/bin/dalvikvm" \
+    "-Ximage:$PREFIX/lib/art/../java/dex/art/oat/boot.art" || true
+  ls "$TESLA_HOME"/.cache/art/*/*boot*.art >/dev/null 2>&1 || return 1
+  [[ -f "$APPS/com.waze/base.apk" ]] || return 2
+  runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH=/usr/bin:/bin ATL_PREFIX="$PREFIX" \
+    TESLALINUX_SPEEDOMETER_TOOL="$t/waze-speedometer.py" TESLALINUX_MAP_PACING_TOOL="$t/waze-map-pacing.py" \
+    nice -n 19 ionice -c 3 timeout 1800 bash "$t/teslalinux-atl" --compile || return 2
+  return 0
+}
+
+# the packages DIST's MANIFEST and this installer want that are not installed: downloaded now, so the
+# install's packages step needs no download
+prepare_packages() {
+  local want=() avail=() p
+  read -r -a want <<<"$(sed -n 's/^packages=//p' "$DIST_DIR/MANIFEST" 2>/dev/null | head -1) ${RUNTIME_PKGS[*]}"
+  for p in "${want[@]}"; do
+    case "$p" in *-dev|gcc|gcc-*|g++|g++-*|cpp|openjdk-*|default-jdk*|cage|weston) continue ;; esac
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || avail+=("$p")
+  done
+  if [[ ${#avail[@]} -eq 0 ]]; then log "  no packages to add"; return 0; fi
+  log "  downloading ${#avail[@]} packages: ${avail[*]}"
+  export DEBIAN_FRONTEND=noninteractive
+  if ! { apt-get update -q >/dev/null && apt-get install --download-only -y -q --no-install-recommends "${avail[@]}" >/dev/null; }; then
+    warn "  the packages were not downloaded now; the install downloads them"
+  fi
+}
+
+cmd_prepare() {
+  parse_install_args "$@"
+  [[ $EUID -eq 0 ]] || die "run as root (sudo)"
+  local script; script=$(readlink -f "${BASH_SOURCE[0]:-}" 2>/dev/null || true)
+  [[ -f "$script" ]] || die "prepare runs from a file (sudo bash install.sh prepare ...)"
+  mkdir -p "$LOG_DIR"
+  LOG="$LOG_DIR/prepare-$RUN_TS.log"
+  install -m 0600 /dev/null "$LOG"
+  exec > >(tee -a "$LOG") 2>&1
+  log "teslalinux prepare $RUN_TS: a release made ready while the app keeps running"
+  # a background job: the app, the display stream and the car link keep the CPU and the disk
+  renice -n 19 -p $$ >/dev/null 2>&1 || true
+  ionice -c 3 -p $$ >/dev/null 2>&1 || true
+  local t0=$SECONDS cur pd rc
+  resolve_dist
+  cur=$(readlink -f "$PREFIX" 2>/dev/null || true)
+  if [[ "$DIST_DIR" == "$cur" ]]; then log "$DIST_DIR is the running release: nothing to prepare"; return 0; fi
+  # the dist (~150 MB), ART's cache (~400 MB) and the kept previous one
+  local free_kb; free_kb=$(df --output=avail -k "$STATE_DIR" | tail -1)
+  (( free_kb > 1500000 )) || die "less than 1.5 GB free on $STATE_DIR: not prepared"
+  unpack_dist
+  prepare_packages
+  pd=$(prep_dir "$DIST_DIR")
+  rm -rf "$pd"
+  # the launcher and override tools the install will put in place: the dist's payload, or --payload's
+  local payload="$DIST_DIR/share/teslalinux"
+  [[ -n "$PAYLOAD_OVERRIDE" ]] && payload=$(readlink -f "$PAYLOAD_OVERRIDE")
+  if [[ $PREWARM == 1 ]]; then
+    log "  ART's boot image and the app's code for $DIST_DIR (minutes on a Pi 4; the app keeps running)"
+    rc=0
+    unshare --mount --propagation private bash "$script" __art-build "$pd/home" "$DIST_DIR" "$payload" || rc=$?
+    rmdir /run/teslalinux-prepare.* 2>/dev/null || true
+    case "$rc" in
+      0) printf 'dist=%s\napp=%s\ncompiled=1\n' "$DIST_DIR" "$(app_key)" > "$pd/home/.cache/art/.teslalinux" ;;
+      2) printf 'dist=%s\napp=\ncompiled=0\n' "$DIST_DIR" > "$pd/home/.cache/art/.teslalinux"
+         warn "  the app's code was not compiled now (no app, or it failed); the install compiles it" ;;
+      *) rm -rf "$pd"; warn "  ART's boot image was not built now; the install builds it" ;;
+    esac
+  fi
+  log "prepared $DIST_DIR in $((SECONDS - t0)) s: installing it now only switches"
+}
+
 # ================================================================ steps
+unpack_dist() {
+  [[ -n "${DIST_FILE:-}" && ! -d "$DIST_DIR" ]] || return 0
+  log "  unpacking into $DIST_DIR"
+  local tmp="$DIST_DIR.tmp-$$"
+  rm -rf "$tmp"; mkdir -p "$tmp"
+  tar $TAR_Z -xf "$DIST_FILE" -C "$tmp" --strip-components=1 --no-same-owner
+  printf '%s\n' "$DIST_SHA" > "$tmp/.dist-sha256"
+  mv "$tmp" "$DIST_DIR"
+}
+
 step_dist() {
   if [[ -z "${DIST_FILE:-}" ]]; then log "  keeping $DIST_DIR"; return 0; fi
-  if [[ ! -d "$DIST_DIR" ]]; then
-    log "  unpacking into $DIST_DIR"
-    local tmp="$DIST_DIR.tmp-$$"
-    rm -rf "$tmp"; mkdir -p "$tmp"
-    tar $TAR_Z -xf "$DIST_FILE" -C "$tmp" --strip-components=1 --no-same-owner
-    printf '%s\n' "$DIST_SHA" > "$tmp/.dist-sha256"
-    mv "$tmp" "$DIST_DIR"
-  fi
+  unpack_dist
   local cur; cur=$(readlink -f "$PREFIX" 2>/dev/null || true)
   if [[ "$cur" != "$DIST_DIR" ]]; then
     log "  $PREFIX -> $DIST_DIR (was ${cur:-none})"
@@ -468,8 +619,9 @@ step_dist() {
     ensure_bk
     ln -sfn "$DIST_DIR" "$PREFIX.new"
     mv -T "$PREFIX.new" "$PREFIX"
-    # ART's cached boot image and app code belong to the old jars
-    rm -rf "$TESLA_HOME/.cache/art"
+    # ART's cached boot image and app code belong to the old jars: kept for going back, and the new
+    # dist's taken in when `prepare` made it
+    art_switch "$cur" "$DIST_DIR"
   fi
   # the ATL stack's libraries (lib, lib/art) for the loader and dex2oat; tacomp uses its RUNPATH
   put_str /etc/ld.so.conf.d/teslalinux.conf 0644 "$PREFIX/lib\n$PREFIX/lib/art\n"
@@ -535,7 +687,7 @@ step_files() {
   cp -r "$P/host/phase1-pios/etc/." /usr/share/teslalinux/templates/
   install -m 0644 "$P/host/phase1-pios/env" /usr/share/teslalinux/env.template
   for f in teslalinux-render teslalinux-restart-app teslalinux-set-locale teslalinux-set-keyboard teslalinux-set-app-interface teslalinux-network \
-           teslalinux-system-update teslalinux-uplink teslalinux-usb-quirks teslalinux-dexopt teslalinux-set-gpu-speed teslalinux-boottime; do
+           teslalinux-system-update teslalinux-uplink teslalinux-usb-quirks teslalinux-dexopt teslalinux-set-gpu-speed teslalinux-boottime teslalinux-logs; do
     put_file "$P/host/$f" "/usr/local/bin/$f" 0755
   done
   put_file "$P/host/phase1-pios/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display 0755
@@ -553,6 +705,8 @@ step_files() {
   # the car's own link (docs/TESLA-LINK.md): teslalinux-carkey ($PREFIX/bin, root) keeps the car's VIN
   # and the read-only key root-only; the follow service drives Waze with Grok's code ($LIB/grok)
   install -d -m 0700 "$STATE_DIR/carkey"
+  # saved log snapshots (host/teslalinux-logs, Settings > Device > Logs): root writes, the API reads
+  install -d -m 0750 -o root -g tesla "$STATE_DIR/logs"
   install -m 0644 "$P/services/carsync/carsync.py" "$LIB/"
   [[ -x "$PREFIX/bin/teslalinux-carkey" ]] || warn "teslalinux-carkey is not in this dist: Settings > Tesla stays unavailable"
   # Grok remote control (docs/GROK.md): the MCP service, its action log (the service user's alone),
@@ -576,7 +730,7 @@ step_files() {
   install -m 0755 "$P/tools/apps/install-app.sh" "$P/tools/apps/apk-info.py" "$P/tools/apps/waze-map-pacing.py" "$P/tools/apps/waze-speedometer.py" "$LIB/apps/"
   install -m 0644 "$P/tools/apps/apk_verify.py" "$LIB/apps/"
   install -m 0644 "$P/host/local/check.py" "$P/services/display/test/ws-client.py" "$LIB/check/"
-  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update, /usr/local/bin/teslalinux-set-gpu-speed, /usr/local/bin/teslalinux-set-grok\n'
+  put_str /etc/sudoers.d/teslalinux 0440 'tesla ALL=(root) NOPASSWD: /usr/local/bin/teslalinux-apply-display, /usr/local/bin/teslalinux-restart-app, /usr/local/bin/teslalinux-set-locale, /usr/local/bin/teslalinux-set-keyboard, /usr/local/bin/teslalinux-set-app-interface, /usr/local/bin/teslalinux-network, /usr/local/bin/teslalinux-system-update, /usr/local/bin/teslalinux-set-gpu-speed, /usr/local/bin/teslalinux-set-grok, /usr/local/bin/teslalinux-logs\n'
   visudo -cq -f /etc/sudoers.d/teslalinux || die "sudoers check failed for /etc/sudoers.d/teslalinux"
   for f in "${UNITS[@]}" "${OPTIONAL_UNITS[@]}" teslalinux-tls-fetch.service teslalinux-tls-fetch.timer; do
     put_file "$P/host/phase1-pios/etc/systemd/$f" "/etc/systemd/system/$f" 0644
@@ -1018,24 +1172,39 @@ step_prewarm() {
   # ART builds its boot image (the core libraries, AOT) on the first start of any VM; dalvikvm
   # creates the VM before it looks for a class, so a run without one leaves the image in the cache
   # the app's later starts use (ATL uses the same default boot class path). A few minutes on a Pi 4.
-  # This step runs when the dist changed or no image exists: whatever is cached is stale.
-  rm -rf "$TESLA_HOME/.cache/art"
-  install -d -o tesla -g tesla "$TESLA_HOME/.cache" "$TESLA_HOME/android-data"
-  log "  building ART's boot image as tesla (a few minutes on a Pi 4)"
-  # -Ximage: the location ATL's runtime uses. ART names the cached image after the image location;
-  # dalvikvm alone derives it from its own real path (/opt/teslalinux.d/<dist>/bin/../lib/art/..),
-  # ATL from where libart.so was loaded (/opt/teslalinux/lib/art/..), so without this the app's first
-  # start built a second image of its own (checked on a Pi 4: ATL takes this one as it is)
-  run_progress "building the boot image" runuser -u tesla -- env -i HOME="$TESLA_HOME" \
-    PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
-    ANDROID_DATA="$TESLA_HOME/android-data" timeout 1800 "$PREFIX/bin/dalvikvm" \
-    "-Ximage:$PREFIX/lib/art/../java/dex/art/oat/boot.art" || true
-  rm -f "$PROGRESS_OUT"
-  if ls "$TESLA_HOME"/.cache/art/*/*boot*.art >/dev/null 2>&1; then
-    log "  boot image ready ($(du -sh "$TESLA_HOME/.cache/art" | cut -f1))"
+  # This step runs when the dist changed or no image exists: whatever is cached is stale, unless
+  # `prepare` made it for this dist while the app ran (art_switch took it in): then it is kept, and the
+  # app's code too while the app is the one it was compiled with.
+  local c="$TESLA_HOME/.cache/art" cur compiled=0
+  cur=$(readlink -f "$PREFIX")
+  if [[ "$(art_stamp "$c" dist)" == "$cur" ]] && ls "$c"/*/*boot*.art >/dev/null 2>&1; then
+    if [[ "$(art_stamp "$c" compiled)" == 1 && "$(art_stamp "$c" app)" == "$(app_key)" ]]; then
+      # the override jars were made by this release's tools before step files installed them: newer
+      # than those again, or the launcher would make them anew and ART throw the compiled code away
+      find "$TESLA_HOME/.cache/teslalinux/app-overrides" -name '*.jar' -exec touch {} + 2>/dev/null || true
+      log "  ART's boot image and the app's code were prepared while the app ran: kept"
+      return 0
+    fi
+    log "  ART's boot image was prepared while the app ran; the app changed since: compiling it"
   else
-    warn "no boot image was built now; the app's first start builds it"
-    return 0
+    rm -rf "$c"
+    install -d -o tesla -g tesla "$TESLA_HOME/.cache" "$TESLA_HOME/android-data"
+    log "  building ART's boot image as tesla (a few minutes on a Pi 4)"
+    # -Ximage: the location ATL's runtime uses. ART names the cached image after the image location;
+    # dalvikvm alone derives it from its own real path (/opt/teslalinux.d/<dist>/bin/../lib/art/..),
+    # ATL from where libart.so was loaded (/opt/teslalinux/lib/art/..), so without this the app's
+    # first start built a second image of its own (checked on a Pi 4: ATL takes this one as it is)
+    run_progress "building the boot image" runuser -u tesla -- env -i HOME="$TESLA_HOME" \
+      PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
+      ANDROID_DATA="$TESLA_HOME/android-data" timeout 1800 "$PREFIX/bin/dalvikvm" \
+      "-Ximage:$PREFIX/lib/art/../java/dex/art/oat/boot.art" || true
+    rm -f "$PROGRESS_OUT"
+    if ls "$TESLA_HOME"/.cache/art/*/*boot*.art >/dev/null 2>&1; then
+      log "  boot image ready ($(du -sh "$TESLA_HOME/.cache/art" | cut -f1))"
+    else
+      warn "no boot image was built now; the app's first start builds it"
+      return 0
+    fi
   fi
   # then the runtime's own code and the app's, as their first start would compile them (the launcher's
   # --compile: android.atl.TlPrewarm in the same class loaders); about 3 minutes for Waze on a Pi 4,
@@ -1046,12 +1215,15 @@ step_prewarm() {
     if run_progress "compiling Waze" runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH=/usr/bin:/bin \
           ATL_PREFIX="$PREFIX" timeout 1800 /usr/local/bin/teslalinux-atl --compile; then
       log "  Waze compiled in $((SECONDS - t0)) s"
+      compiled=1
     else
       tail -5 "$PROGRESS_OUT" | sed 's/^/  /'
       warn "Waze was not compiled now; its first start compiles it"
     fi
     rm -f "$PROGRESS_OUT"
   fi
+  # whose cache this is (art_switch keeps it for going back to this dist)
+  printf 'dist=%s\napp=%s\ncompiled=%s\n' "$cur" "$(app_key)" "$compiled" > "$c/.teslalinux"
 }
 
 step_trim() {
@@ -1450,9 +1622,14 @@ cmd_rollback() {
   stop_stack
   declare -gA DONE_PATH=() DONE_UNIT=()
   restore_set "$set"
+  local cur; cur=$(readlink -f "$PREFIX" 2>/dev/null || true)
   ln -sfn "$before" "$PREFIX.new"; mv -T "$PREFIX.new" "$PREFIX"
   ldconfig
-  rm -rf "$TESLA_HOME/.cache/art"
+  # the previous dist's own ART cache, kept at the install (nothing to compile again); its override
+  # jars newer than the tools just restored, or the launcher makes them anew at the start (~50 s on a
+  # Pi 4) and ART compiles the app again if they come out different
+  art_switch "$cur" "$(readlink -f "$before")"
+  find "$TESLA_HOME/.cache/teslalinux/app-overrides" -name '*.jar' -exec touch {} + 2>/dev/null || true
   mv "$set" "$BACKUP_ROOT/rolled-back-$(basename "$set")"
   # every step runs again on the next install
   rm -f "$STATE"
@@ -1513,11 +1690,13 @@ main() {
   # the installed copy (/usr/local/sbin/teslalinux) without arguments only explains itself
   if [[ $# -eq 0 && "$(basename "$0")" == teslalinux ]]; then usage; exit 0; fi
   case "${1:-}" in
-    install|doctor|status|rollback|uninstall) cmd=$1; shift ;;
+    install|prepare|doctor|status|rollback|uninstall|__art-build) cmd=$1; shift ;;
     -h|--help|help) usage; exit 0 ;;
   esac
   case "$cmd" in
     install) cmd_install "$@" ;;
+    prepare) cmd_prepare "$@" ;;
+    __art-build) cmd_art_build "$@" ;;
     doctor) cmd_doctor "$@" ;;
     status) cmd_status ;;
     rollback) cmd_rollback "$@" ;;

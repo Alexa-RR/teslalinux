@@ -1,0 +1,126 @@
+#!/bin/bash
+# teslalinux-logs: the device's logs saved, to look at later (Settings > Device > Logs).
+#
+# The system journal lives in RAM (journald Storage=volatile, 16 MB: no disk sync at boot, less SD
+# wear), so a restart, or the car cutting the Pi's power, loses it. This saves a snapshot to disk:
+#   teslalinux-logs save [REASON]   writes LOG_DIR/teslalinux-logs-<time>.tar.gz and prints its name
+#   teslalinux-logs delete NAME     removes one
+#   teslalinux-logs list            the saved ones as JSON (no root needed: the API reads the directory)
+# A snapshot holds: the whole journal of this boot (every service, the app, the kernel), the
+# teslalinux log files (their last 4 MB each), the app's, audio's, car link's and updates' state, the
+# installed release, temperature and throttling, failed units, the network. The car's VIN shows only
+# its last 6 characters. Nothing of /etc/teslalinux (the hotspot password, LTE login, tokens) is in it.
+# The newest KEEP stay (and at most MAX_MB together). Files are 0640 root:tesla in a 0750 root:tesla
+# directory, so the API (user tesla) lists and serves them; saving and deleting run as root through
+# one sudoers rule (tools/pios/install.sh).
+set -uo pipefail
+
+LOG_DIR="${TESLALINUX_LOGS_DIR:-/var/lib/teslalinux/logs}"
+KEEP="${TESLALINUX_LOGS_KEEP:-20}"
+MAX_MB="${TESLALINUX_LOGS_MAX_MB:-300}"
+NAME_RE='^teslalinux-logs-[0-9]{8}-[0-9]{6}\.tar\.gz$'
+
+die() { echo "teslalinux-logs: $*" >&2; exit 1; }
+
+cmd_list() {
+  python3 -I - "$LOG_DIR" <<'EOF'
+import json, os, re, sys
+d = sys.argv[1]
+out = []
+try:
+    names = os.listdir(d)
+except OSError:
+    names = []
+for n in sorted(names, reverse=True):
+    if not re.match(r"^teslalinux-logs-[0-9]{8}-[0-9]{6}\.tar\.gz$", n):
+        continue
+    st = os.stat(os.path.join(d, n))
+    reason = ""
+    try:
+        with open(os.path.join(d, n[:-7] + ".reason")) as f:
+            reason = f.read(200).strip()
+    except OSError:
+        pass
+    out.append({"name": n, "size": st.st_size, "at": int(st.st_mtime), "reason": reason})
+print(json.dumps(out))
+EOF
+}
+
+# what one snapshot holds, written into DIR
+collect() {
+  local d=$1 f
+  {
+    echo "saved: $(date -Is)"
+    echo "reason: ${REASON:-asked for on the settings page}"
+    echo "host: $(hostname)  model: $(tr -d '\0' < /proc/device-tree/model 2>/dev/null)"
+    echo "uptime: $(uptime)"
+    echo "kernel: $(uname -a)"
+    echo "release: $(sed -n 's/^release=//p' /opt/teslalinux/MANIFEST 2>/dev/null) dist: $(readlink -f /opt/teslalinux)"
+    command -v vcgencmd >/dev/null && echo "temp: $(vcgencmd measure_temp 2>/dev/null)  throttled: $(vcgencmd get_throttled 2>/dev/null)"
+    echo; df -h / /var/lib 2>/dev/null; echo; free -m
+  } > "$d/info.txt" 2>&1
+  journalctl -b --no-pager -o short-precise > "$d/journal.txt" 2>&1
+  journalctl -b -k --no-pager -o short-precise > "$d/kernel.txt" 2>&1
+  { systemctl --failed --no-pager; echo; systemctl list-units --no-pager --all 'teslalinux*' tacomp.service nginx.service hostapd.service dnsmasq.service bluetooth.service; } > "$d/units.txt" 2>&1
+  { ip -br addr; echo; ip route; echo; nmcli -t device 2>/dev/null; echo; iw dev 2>/dev/null; } > "$d/network.txt" 2>&1
+  mkdir -p "$d/state" "$d/log"
+  for f in /run/tesla/teslalinux-app-state.json /run/tesla/teslalinux-audio.json /run/tesla/teslalinux-carsync.json \
+           /var/lib/teslalinux/release-update/state.json /var/lib/teslalinux/appupdate/state.json \
+           /var/lib/teslalinux/state/audio.json /var/lib/teslalinux/state/carsync.json /etc/teslalinux/interface.env \
+           /opt/teslalinux/MANIFEST /var/lib/teslalinux/apps/com.waze/installed.json; do
+    [[ -r "$f" ]] && cp "$f" "$d/state/$(basename "$f")"
+  done
+  # the car's own link: its VIN shortened
+  curl -s -m 3 http://127.0.0.1:8086/state 2>/dev/null \
+    | sed -E 's/"vin": *"[A-HJ-NPR-Z0-9]{11}([A-HJ-NPR-Z0-9]{6})"/"vin":"...\1"/' > "$d/state/carkey.json"
+  for f in /var/log/teslalinux/*.log; do
+    [[ -f "$f" ]] && tail -c 4M "$f" > "$d/log/$(basename "$f")"
+  done
+}
+
+prune() {
+  local n=0 total=0 f s
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    s=$(stat -c %s "$LOG_DIR/$f")
+    n=$((n + 1)); total=$((total + s))
+    if (( n > KEEP || total > MAX_MB * 1024 * 1024 )); then rm -f "$LOG_DIR/$f" "$LOG_DIR/${f%.tar.gz}.reason"; fi
+  done < <(ls -1t "$LOG_DIR" 2>/dev/null | grep -E "$NAME_RE")
+}
+
+cmd_save() {
+  [[ $EUID -eq 0 ]] || die "run as root"
+  REASON=$(printf '%s' "${1:-}" | tr -cd '[:print:]' | cut -c1-200)
+  install -d -m 0750 -o root -g tesla "$LOG_DIR"
+  local name tmp
+  name="teslalinux-logs-$(date +%Y%m%d-%H%M%S).tar.gz"
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/${name%.tar.gz}"
+  collect "$tmp/${name%.tar.gz}"
+  tar -C "$tmp" -czf "$LOG_DIR/.$name.tmp" "${name%.tar.gz}" || { rm -rf "$tmp" "$LOG_DIR/.$name.tmp"; die "could not write $LOG_DIR"; }
+  rm -rf "$tmp"
+  chown root:tesla "$LOG_DIR/.$name.tmp" 2>/dev/null || true
+  chmod 0640 "$LOG_DIR/.$name.tmp"
+  mv "$LOG_DIR/.$name.tmp" "$LOG_DIR/$name"
+  if [[ -n "$REASON" ]]; then
+    printf '%s\n' "$REASON" > "$LOG_DIR/${name%.tar.gz}.reason"
+    chown root:tesla "$LOG_DIR/${name%.tar.gz}.reason" 2>/dev/null || true
+    chmod 0640 "$LOG_DIR/${name%.tar.gz}.reason"
+  fi
+  prune
+  echo "$name"
+}
+
+cmd_delete() {
+  [[ $EUID -eq 0 ]] || die "run as root"
+  [[ "${1:-}" =~ $NAME_RE ]] || die "not a saved log: ${1:-}"
+  [[ -f "$LOG_DIR/$1" ]] || die "no such log: $1"
+  rm -f "$LOG_DIR/$1" "$LOG_DIR/${1%.tar.gz}.reason"
+}
+
+case "${1:-}" in
+  save) shift; cmd_save "${1:-}" ;;
+  delete) shift; cmd_delete "${1:-}" ;;
+  list) cmd_list ;;
+  *) echo "usage: teslalinux-logs save [REASON] | delete NAME | list" >&2; exit 2 ;;
+esac

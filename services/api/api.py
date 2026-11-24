@@ -122,6 +122,12 @@ The settings page's Status, Network and System update sections (new routes only)
 * POST /api/releaseUpdate JSON {action: "check"|"download"|"downloadMetered"|"installNow"|"goBack"} or
                           {autoUpdate: bool}: the helper (root, one sudoers rule) records it and runs; {ok, message}
 
+Saved logs (host/teslalinux-logs), new routes only:
+* GET  /api/logs          the saved snapshots, newest first: [{name, size, at, reason}]
+* POST /api/logs          JSON {"action": "save", "reason"?} | {"action": "delete", "name"}: the root
+                          helper (one sudoers rule); {ok, message, name (the new one), logs}
+* GET  /api/logsFile?name=NAME   one snapshot (tar.gz) as a download; 404 for any other name
+
 The car's own link (docs/TESLA-LINK.md), new routes only:
 * GET  /api/carLink       {"running": teslalinux-carkey answers, "car": its state (the VIN, "link":
                           off|searching|connected|notPaired|asleep|error, "message", the car's route
@@ -264,10 +270,10 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
 REAR_DISPLAY_FIELDS = ("isRearDisplayEnabled", "isRearDisplayPrioritised")
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
               "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan",
-              "gpuSpeed", "audioOutput", "carLink", "releaseUpdate", "wifiConnect"}
+              "gpuSpeed", "audioOutput", "carLink", "releaseUpdate", "wifiConnect", "logs", "logsFile"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
                                   "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed",
-                                  "audioOutput", "audioTest", "carLink", "releaseUpdate", "wifiConnect"}
+                                  "audioOutput", "audioTest", "carLink", "releaseUpdate", "wifiConnect", "logs"}
 
 
 def props():
@@ -1022,6 +1028,62 @@ def gpu_speed_state():
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
     return {"speed": "standard", "pendingRestart": False, "gpuMHz": None, "temperatureC": None, "throttled": None}
+
+
+# ---------------------------------------------------------------------------- saved logs
+
+LOGS_HELPER = os.environ.get("TESLALINUX_LOGS_HELPER", "/usr/local/bin/teslalinux-logs")
+LOGS_DIR = os.environ.get("TESLALINUX_LOGS_DIR", "/var/lib/teslalinux/logs")
+LOG_NAME_RE = re.compile(r"^teslalinux-logs-[0-9]{8}-[0-9]{6}\.tar\.gz$")
+
+
+def saved_logs():
+    """GET /api/logs: [{name, size, at, reason}] newest first (the directory is root's, group tesla)"""
+    out = []
+    try:
+        names = os.listdir(LOGS_DIR)
+    except OSError:
+        names = []
+    for n in sorted(names, reverse=True):
+        if not LOG_NAME_RE.match(n):
+            continue
+        try:
+            st = os.stat(os.path.join(LOGS_DIR, n))
+        except OSError:
+            continue
+        reason = ""
+        try:
+            with open(os.path.join(LOGS_DIR, n[:-7] + ".reason")) as f:
+                reason = f.read(200).strip()
+        except OSError:
+            pass
+        out.append({"name": n, "size": st.st_size, "at": int(st.st_mtime), "reason": reason})
+    return out
+
+
+def logs_action(req):
+    """POST /api/logs {"action": "save", "reason"?} | {"action": "delete", "name"}: the root helper
+    (host/teslalinux-logs, one sudoers rule). (ok, message, name or None); None for a bad request."""
+    if not isinstance(req, dict):
+        return None
+    if req.get("action") == "save" and set(req) <= {"action", "reason"} and isinstance(req.get("reason", ""), str):
+        args = ["save", req.get("reason", "")[:200]]
+    elif req.get("action") == "delete" and set(req) == {"action", "name"} and isinstance(req["name"], str) \
+            and LOG_NAME_RE.match(req["name"]):
+        args = ["delete", req["name"]]
+    else:
+        return None
+    cmd = ["sudo", "-n", LOGS_HELPER] if APPLY_SUDO and os.geteuid() != 0 else [LOGS_HELPER]
+    try:
+        r = subprocess.run(cmd + args, check=False, timeout=120, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, "The logs were not saved: %s" % e, None
+    if r.returncode != 0:
+        return False, (r.stderr.strip().splitlines() or ["the helper failed"])[-1].replace("teslalinux-logs: ", ""), None
+    if args[0] == "save":
+        name = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else None
+        return True, "Saved", name if name and LOG_NAME_RE.match(name) else None
+    return True, "Deleted", None
 
 
 def set_gpu_speed(speed):
@@ -2086,7 +2148,7 @@ RELEASE_UPDATE_DIR = os.environ.get("TESLALINUX_RELEASE_UPDATE_DIR", "/var/lib/t
 # POST /api/releaseUpdate {"action": ...}: the helper's command for each (exactly the sudoers rule's)
 RELEASE_ACTIONS = {"check": ["check"], "download": ["download"], "downloadMetered": ["download", "--metered"],
                    "installNow": ["install-now"], "goBack": ["go-back"]}
-RELEASE_PHASES = ("idle", "downloading", "installing", "restarting", "health", "rolling-back")
+RELEASE_PHASES = ("idle", "downloading", "preparing", "installing", "restarting", "health", "rolling-back")
 
 
 def release_update_running():
@@ -2123,7 +2185,7 @@ def release_update_state():
     raw = _read_json(os.path.join(RELEASE_UPDATE_DIR, "settings.json")) or {}
     running = release_update_running()
     phase = st.get("phase") if st.get("phase") in RELEASE_PHASES else "idle"
-    if not running and phase in ("downloading", "installing", "rolling-back"):
+    if not running and phase in ("downloading", "preparing", "installing", "rolling-back"):
         phase = "idle"  # a run cut short
     prog = _read_json(os.path.join(RELEASE_UPDATE_DIR, "progress.json")) if phase == "downloading" else None
 
@@ -2134,6 +2196,11 @@ def release_update_state():
                 "notes": v.get("notes") if isinstance(v.get("notes"), str) else ""}
     avail = rel(st.get("available"))
     pend = rel(st.get("pending"))
+    if pend:
+        # made ready while the app ran (host/teslalinux-release-update prepare): the install only switches
+        raw_p = st["pending"]
+        pend["prepared"] = raw_p.get("prepared") if isinstance(raw_p.get("prepared"), int) else None
+        pend["prepareFailed"] = bool(raw_p.get("prepareFailed"))
     if pend and avail and avail["tag"] == pend["tag"]:
         pend["notes"] = avail["notes"]
     li = st.get("lastInstall") if isinstance(st.get("lastInstall"), dict) else {}
@@ -2410,6 +2477,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(sysupdate_state(int(log_from) if log_from and log_from.isdigit() else None))
         if route == "releaseUpdate":
             return self._json(release_update_state())
+        if route == "logs":
+            return self._json(saved_logs())
+        if route == "logsFile":
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            name = (q.get("name") or [""])[0]
+            if not LOG_NAME_RE.match(name):
+                return self._send(404, b"no such log", "text/plain")
+            try:
+                with open(os.path.join(LOGS_DIR, name), "rb") as f:
+                    data = f.read()
+            except OSError:
+                return self._send(404, b"no such log", "text/plain")
+            return self._send(200, data, "application/gzip",
+                              (("Content-Disposition", 'attachment; filename="%s"' % name), ("Cache-Control", "no-store")))
         if route == "openUpdater":
             # Upstream runs `am start -a android.settings.SYSTEM_UPDATE_SETTINGS` on the Android
             # screen. This platform has no system-update activity (the car image is replaced as a
@@ -2571,6 +2652,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error()
             code, msg = sysupdate_action(req["action"])
             return self._send(code, json.dumps({"ok": code == 200, "message": msg}).encode(), "application/json")
+        if route == "logs":
+            try:
+                req = json.loads(body.decode("utf-8") or "null")
+            except (ValueError, UnicodeDecodeError):
+                return self._error()
+            res = logs_action(req)
+            if res is None:
+                return self._error()
+            return self._json({"ok": res[0], "message": res[1], "name": res[2], "logs": saved_logs()})
         if route == "releaseUpdate":
             try:
                 req = json.loads(body.decode("utf-8") or "null")

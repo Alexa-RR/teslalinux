@@ -470,3 +470,78 @@
   #app-state-overlay .aso-card { padding: 22px 20px; gap: 18px; }
   #app-state-overlay .aso-title { font-size: 21px; }
 }
+
+/* teslalinux: a Teslalinux release that is ready to switch to (js/core/update-notice.js); the same
+   place and looks as the gates' notice (js/gates/gates.css) */
+.tl-update-notice {
+  --un-surface: #1e2125;
+  --un-raised: #2b2f34;
+  --un-ink: #f1f3f4;
+  --un-ink-2: #aeb3b9;
+  --un-blue: #8ab4f8;
+  --un-on-blue: #0b1d3a;
+  --un-lift: 0 6px 24px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
+  --un-radius: 20px;
+  position: fixed;
+  z-index: 1001;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(620px, calc(100% - 32px));
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px 14px 18px;
+  border-radius: var(--un-radius);
+  background: var(--un-surface);
+  color: var(--un-ink);
+  box-shadow: var(--un-lift);
+  font-family: "Roboto", Arial, sans-serif;
+}
+.tl-update-notice[hidden] { display: none; }
+.tl-update-notice.graphite {
+  --un-surface: rgba(250, 250, 251, 0.94);
+  --un-raised: rgba(20, 20, 30, 0.07);
+  --un-ink: #1d1d1f;
+  --un-ink-2: #5c5e63;
+  --un-blue: #2d61e6;
+  --un-on-blue: #fff;
+  --un-lift: 0 0 0 1px rgba(16, 18, 24, 0.09), 0 1px 3px rgba(16, 18, 24, 0.1), 0 8px 24px rgba(16, 18, 24, 0.14);
+  --un-radius: 12px;
+  font-family: "Inter Car", "Roboto", Arial, sans-serif;
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  backdrop-filter: blur(24px) saturate(1.2);
+}
+.tl-update-notice.graphite.night {
+  --un-surface: rgba(38, 38, 40, 0.92);
+  --un-raised: rgba(255, 255, 255, 0.08);
+  --un-ink: #f3f3f4;
+  --un-ink-2: #b0b2b7;
+  --un-blue: #7aa0ff;
+  --un-on-blue: #0b1d3a;
+}
+.tl-update-icon { font-size: 30px; color: var(--un-blue); flex-shrink: 0; }
+.tl-update-text { flex: 1; min-width: 0; }
+.tl-update-title { font-size: 19px; font-weight: 500; line-height: 1.3; }
+.tl-update-detail { margin-top: 2px; font-size: 15px; line-height: 1.35; color: var(--un-ink-2); }
+.tl-update-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.tl-update-btn {
+  min-height: 48px;
+  min-width: 72px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--un-raised);
+  color: var(--un-ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.tl-update-btn.primary { background: var(--un-blue); color: var(--un-on-blue); }
+.tl-update-btn.armed { outline: 2px solid var(--un-blue); outline-offset: 2px; }
+.tl-update-btn:disabled { opacity: 0.6; }
+@media (max-width: 560px) {
+  .tl-update-notice { flex-wrap: wrap; }
+  .tl-update-actions { width: 100%; justify-content: flex-end; }
+}

@@ -607,6 +607,20 @@
   text-align: end;
 }
 
+/* teslalinux: more than one button on a row (Settings > Device > Logs: Download, Delete) */
+#page-settings .row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+#page-settings a.btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
 #page-settings .row-more {
   grid-column: 1 / -1;
   margin-top: 8px;

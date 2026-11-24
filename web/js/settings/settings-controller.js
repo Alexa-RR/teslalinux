@@ -1694,7 +1694,7 @@
       const rows = [verRow];
       const avail = ru.available;
       const pend = ru.pending;
-      const busy = ["downloading", "installing", "restarting", "health", "rolling-back"].indexOf(ru.phase) >= 0;
+      const busy = ["downloading", "preparing", "installing", "restarting", "health", "rolling-back"].indexOf(ru.phase) >= 0;
       const checkBtn = UI.button("Check now", null, null, "sync");
       checkBtn.disabled = busy;
       const line = this._releaseLine(ru);
@@ -1716,7 +1716,9 @@
         const ir = UI.row({
           id: "upd.releaseinstall",
           title: "Install " + name(pend.tag),
-          detail: "Waze stops, the update installs (a few minutes) and the device restarts. Waze starts again on the new release; the page reconnects by itself.",
+          detail: pend.prepared
+            ? "Ready: Waze stops for about a minute while the device switches to it and restarts. The page reconnects by itself."
+            : "Waze stops, the update installs (a few minutes) and the device restarts. Waze starts again on the new release; the page reconnects by itself.",
           chips: [UI.CHIP.restart()],
         });
         UI.setControl(ir, UI.armed("Install now", "Tap again to install", (b) => act({ action: "installNow" }, b, ir, "Installing… the device restarts when it is done"), "btn--primary"));
@@ -1754,6 +1756,8 @@
       switch (ru.phase) {
         case "downloading":
           return "Downloading " + name(a && a.tag) + "…";
+        case "preparing":
+          return "Getting " + name((p && p.tag) || (a && a.tag)) + " ready in the background. Waze keeps working; this takes a few minutes.";
         case "installing":
           return "Installing " + name((p && p.tag) || (a && a.tag)) + ". Waze is stopped; the device restarts when it is done.";
         case "restarting":
@@ -1765,6 +1769,7 @@
         default:
           break;
       }
+      if (p && p.prepared) return name(p.tag) + " is ready: switching to it takes about a minute. " + (ru.settings && ru.settings.autoUpdate !== false ? "It switches when the car is not connected, or at the next start." : "Install it below.");
       if (p) return name(p.tag) + " is downloaded and verified. " + (ru.settings && ru.settings.autoUpdate !== false ? "It installs when the car is not connected, or at the next start." : "Install it below.");
       if (a && ru.skipped) return name(a.tag) + " is not installed automatically: " + ru.skipped.reason + ".";
       if (a && ru.lastResult === "waiting-unmetered") return "Waiting for Wi-Fi or Ethernet to download (LTE is mobile data).";
@@ -2204,6 +2209,7 @@
       });
       UI.setControl(ra, UI.armed("Restart Waze", "Tap again to restart", (b) => this._restartApp(ra, b)));
       out.push(UI.group("Restart", [ra, this._restartDeviceRow(Boolean(this.cache.sys && this.cache.sys.rebootRequired))]));
+      out.push(await this._logsGroup(token));
 
       const hot = st.hotspot || {};
       out.push(
@@ -2934,6 +2940,57 @@
       if (voice.length) groups.push(UI.group("Voice", voice));
       if (!groups.length) throw new Error("no answer");
       return groups;
+    }
+
+    /**
+     * Saved logs (GET/POST /api/logs, host/teslalinux-logs): the device keeps its log in memory, so a
+     * restart or the car cutting the power loses it. Save keeps a snapshot on the device; each one
+     * downloads later from any browser on the hotspot (GET /api/logsFile).
+     */
+    async _logsGroup(token) {
+      const api = this.apiClient;
+      const fmt = UI.fmt;
+      let logs = [];
+      try {
+        logs = await api.fetchLogs();
+      } catch (_e) {
+        // shown as none; saving tells whether the device answers
+      }
+      const save = UI.row({
+        id: "dev.logs",
+        title: "Save logs now",
+        detail: "Right after something goes wrong: the log is lost at the next restart.",
+      });
+      const btn = UI.button("Save", null, "btn--primary", "save");
+      btn.addEventListener("click", async () => {
+        const reason = await UI.editText({ title: "What happened?", placeholder: "Optional, e.g. no voice while driving", maxLength: 200 });
+        if (reason == null) return;
+        btn.disabled = true;
+        UI.status(save).pending("Saving…");
+        const r = await api.saveLogs(reason.trim());
+        btn.disabled = false;
+        if (!r.ok) {
+          UI.status(save).err(r.message || "Not saved");
+          return;
+        }
+        UI.status(save).ok("Saved", true);
+        global.setTimeout(() => token === this._renderToken && this._rerender(), 800);
+      });
+      UI.setControl(save, btn);
+      const rows = [save];
+      for (const l of logs) {
+        const when = new Date(l.at * 1000).toLocaleString();
+        const r = UI.row({ title: when, detail: (l.reason ? l.reason + " · " : "") + fmt.bytes(l.size) });
+        const dl = h("a", { class: "btn", href: api.logFileUrl(l.name), download: l.name }, "Download");
+        const del = UI.armed("Delete", "Tap again to delete", async () => {
+          const res = await api.deleteLogs(l.name);
+          if (!res.ok) UI.status(r).err(res.message || "Not deleted");
+          else global.setTimeout(() => token === this._renderToken && this._rerender(), 300);
+        });
+        UI.setControl(r, h("div", { class: "row-actions" }, dl, del));
+        rows.push(r);
+      }
+      return UI.group("Logs", rows, logs.length ? "Kept on the device: the newest 20." : null);
     }
 
     /**

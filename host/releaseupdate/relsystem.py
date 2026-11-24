@@ -23,6 +23,8 @@ BACKUP_ROOT = E("RELEASE_UPDATE_BACKUP_ROOT", "/var/lib/teslalinux/backup")
 INSTALL_STATE = E("RELEASE_UPDATE_INSTALL_STATE", "/var/lib/teslalinux/install.state")
 INSTALLER = E("RELEASE_UPDATE_INSTALLER", "/usr/local/sbin/teslalinux")
 ART_CACHE = E("RELEASE_UPDATE_ART_CACHE", "/var/lib/tesla/.cache/art")
+# ART's caches of dists that are not running (tools/pios/install.sh PREPARED)
+PREPARED = E("RELEASE_UPDATE_PREPARED", "/var/lib/teslalinux/prepared")
 APPUPDATE = E("RELEASE_UPDATE_APPUPDATE", "/usr/local/bin/teslalinux-appupdate")
 GROK_LIB = E("RELEASE_UPDATE_GROK_LIB", "/usr/local/lib/teslalinux/grok")
 INTERFACE_ENV = E("RELEASE_UPDATE_INTERFACE_ENV", "/etc/teslalinux/interface.env")
@@ -56,6 +58,17 @@ def manifest(dist_dir):
             out[k] = v.strip()
     return {"release": out.get("release") or None, "version": out.get("version") or None,
             "releaseRepo": out.get("release_repo") or None, "dist": os.path.realpath(dist_dir)}
+
+
+def installer_features(manifest_path):
+    """What a release's install.sh can do beyond install (its MANIFEST's installer_features=, a
+    comma or space list): {"prepare"} for releases whose installer makes them ready while the app runs."""
+    text = _read(manifest_path) or ""
+    for line in text.splitlines():
+        k, sep, v = line.partition("=")
+        if sep and k == "installer_features":
+            return {x for x in re.split(r"[,\s]+", v.strip()) if x}
+    return set()
 
 
 def installed():
@@ -167,16 +180,54 @@ def switch_dist(dist_dir, log):
     left no backup set): the link, the loader cache, ART's cache of the other dist's jars, and the
     installer's step record (its next run redoes every step)."""
     tmp = PREFIX + ".new"
+    before = os.path.realpath(PREFIX)
     if os.path.lexists(tmp):
         os.unlink(tmp)
     os.symlink(dist_dir, tmp)
     os.replace(tmp, PREFIX)
     run(["ldconfig"], log, timeout=120)
-    shutil.rmtree(ART_CACHE, ignore_errors=True)
+    art_switch(before, os.path.realpath(dist_dir), log)
     try:
         os.unlink(INSTALL_STATE)
     except OSError:
         pass
+
+
+def _art_stamp(cache):
+    out = {}
+    for line in (_read(os.path.join(cache, ".teslalinux")) or "").splitlines():
+        k, sep, v = line.partition("=")
+        if sep:
+            out[k] = v
+    return out
+
+
+def art_switch(from_dist, to_dist, log):
+    """ART's cache follows a dist switch, as tools/pios/install.sh's art_switch does: the cache of
+    from_dist (its stamp names it) kept in PREPARED/<name>/home/.cache, to_dist's kept or prepared one
+    taken in, else none (the app's first start builds it)."""
+    if from_dist == to_dist:
+        return  # the same dist: its cache stays as it is
+    over = os.path.join(os.path.dirname(ART_CACHE), "teslalinux", "app-overrides")
+    if from_dist and os.path.isdir(ART_CACHE) \
+            and _art_stamp(ART_CACHE).get("dist") == from_dist:
+        keep = os.path.join(PREPARED, os.path.basename(from_dist), "home", ".cache")
+        shutil.rmtree(os.path.dirname(keep), ignore_errors=True)
+        os.makedirs(os.path.join(keep, "teslalinux"), exist_ok=True)
+        os.replace(ART_CACHE, os.path.join(keep, "art"))
+        if os.path.isdir(over):
+            os.replace(over, os.path.join(keep, "teslalinux", "app-overrides"))
+        log("ART's cache for %s kept for going back" % from_dist)
+    shutil.rmtree(ART_CACHE, ignore_errors=True)
+    src = os.path.join(PREPARED, os.path.basename(to_dist), "home", ".cache")
+    if _art_stamp(os.path.join(src, "art")).get("dist") == to_dist:
+        shutil.rmtree(over, ignore_errors=True)
+        os.makedirs(os.path.dirname(over), exist_ok=True)
+        os.replace(os.path.join(src, "art"), ART_CACHE)
+        if os.path.isdir(os.path.join(src, "teslalinux", "app-overrides")):
+            os.replace(os.path.join(src, "teslalinux", "app-overrides"), over)
+        log("ART's cache for %s taken back: nothing to compile" % to_dist)
+    shutil.rmtree(os.path.join(PREPARED, os.path.basename(to_dist)), ignore_errors=True)
 
 
 def roll_back_to(from_dist, sets_before, log):

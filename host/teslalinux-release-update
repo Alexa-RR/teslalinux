@@ -4,8 +4,10 @@
     teslalinux-release-update run        one cycle (teslalinux-release-update.service: the hourly timer,
                                          the NetworkManager hook, the settings page): the daily check
                                          of GitHub's releases, the download (unmetered uplink only,
-                                         unless asked), the verification, the install while the car is
-                                         not connected
+                                         unless asked), the verification, the release made ready while
+                                         the app keeps running (its install.sh prepare, when its
+                                         MANIFEST lists installer_features=prepare), the install (then
+                                         a switch of about a minute) while the car is not connected
     teslalinux-release-update boot       before the app starts: install a verified release (automatic
                                          updates on)
     teslalinux-release-update health     after an install's restart: services up and the app's first
@@ -51,6 +53,7 @@ BACKOFF_BASE = int(E("RELEASE_UPDATE_BACKOFF_BASE", "900"))
 BACKOFF_MAX = int(E("RELEASE_UPDATE_BACKOFF_MAX", "86400"))
 DOWNLOAD_DEADLINE = int(E("RELEASE_UPDATE_DOWNLOAD_DEADLINE", "7200"))
 INSTALL_TIMEOUT = int(E("RELEASE_UPDATE_INSTALL_TIMEOUT", "3600"))
+PREPARE_TIMEOUT = int(E("RELEASE_UPDATE_PREPARE_TIMEOUT", "5400"))
 HEALTH_TIMEOUT = int(E("RELEASE_UPDATE_HEALTH_TIMEOUT", "1500"))
 HEALTH_MAX_RESTARTS = int(E("RELEASE_UPDATE_HEALTH_MAX_RESTARTS", "3"))
 HEALTH_MAX_BOOTS = int(E("RELEASE_UPDATE_HEALTH_MAX_BOOTS", "3"))
@@ -290,6 +293,42 @@ def reboot(st, why):
     sysm.systemctl("reboot", log=log)
 
 
+def can_prepare(pend):
+    """Whether the pending release's installer makes it ready while the app keeps running."""
+    return "prepare" in sysm.installer_features(_p("pending", pend["tag"], "MANIFEST"))
+
+
+def prepare(st, now):
+    """The pending release made ready while the app keeps running: the release's own install.sh
+    prepare (its dist unpacked next to the running one, its packages downloaded, ART's boot image and
+    the app's code compiled for it at idle priority), so the install that follows only switches and
+    restarts (about a minute instead of several). A failed prepare is not retried for that release:
+    its install then does all of it, as installs did before."""
+    pend = st["pending"]
+    d = _p("pending", pend["tag"])
+    busy = sysm.other_update_busy()
+    if busy:
+        event(st, "waiting-busy", "%s is downloaded; it is made ready after %s" % (pend["tag"], busy), now=now)
+        return False
+    st["phase"] = "preparing"
+    event(st, "preparing", "getting %s ready while Waze keeps running (a few minutes)" % pend["tag"], now=now)
+    save_state(st)
+    t0 = time.time()
+    rc = sysm.run(["bash", os.path.join(d, gh.INSTALLER), "prepare", "--dist", os.path.join(d, pend["tarball"]), "--yes"],
+                  log, timeout=PREPARE_TIMEOUT)
+    now = int(time.time())
+    st["phase"] = "idle"
+    if rc == 0:
+        pend["prepared"] = now
+        event(st, "prepared", "%s is ready (made ready in %d min while Waze ran): switching to it takes about a minute"
+              % (pend["tag"], max(1, round((time.time() - t0) / 60))), notice=True, now=now)
+        return True
+    pend["prepareFailed"] = now
+    event(st, "prepare-failed", "%s was not made ready in the background (the installer exited %d): its install "
+          "does all of it, with Waze stopped for several minutes" % (pend["tag"], rc), now=now)
+    return True
+
+
 def install(st, how, now):
     """The pending release with its own install.sh, then a restart; the health check follows at the
     next start. On a failed install: back to the previous dist, and a restart."""
@@ -486,6 +525,14 @@ def cycle(st, flags, settings, now, booting=False):
                 download(st, rel, st.get("meteredFor") == rel["tag"], now)
         else:
             event(st, "available", "%s is available; automatic updates are off" % rel["tag"], now=now)
+    if st.get("pending") and not booting:
+        # made ready first, whatever comes next (Install now too: its wait is then a minute, not minutes)
+        p = st["pending"]
+        if can_prepare(p) and not p.get("prepared") and not p.get("prepareFailed") \
+                and (settings["autoUpdate"] or "install-now" in flags):
+            if not prepare(st, now):
+                return st
+            now = int(time.time())
     if st.get("pending"):
         if "install-now" in flags:
             install(st, "Install now on the settings page", now)

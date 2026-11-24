@@ -72,6 +72,23 @@
       return this._postJsonResult(this.apiBaseUrl + "/carLink", request);
     }
 
+    // teslalinux: saved log snapshots (host/teslalinux-logs): [{name, size, at, reason}]
+    fetchLogs() {
+      return this._fetchJson(this.apiBaseUrl + "/logs");
+    }
+
+    saveLogs(reason) {
+      return this._postJsonResult(this.apiBaseUrl + "/logs", { action: "save", reason: reason || "" });
+    }
+
+    deleteLogs(name) {
+      return this._postJsonResult(this.apiBaseUrl + "/logs", { action: "delete", name });
+    }
+
+    logFileUrl(name) {
+      return this.apiBaseUrl + "/logsFile?name=" + encodeURIComponent(name);
+    }
+
     // teslalinux: a short chime from the Pi into the app's sink ({seconds, already, audio})
     playAudioTest() {
       return this._fetchJson(this.apiBaseUrl + "/audioTest", {

@@ -125,11 +125,14 @@ def make_dist_dir(version, release):
     return d
 
 
-def make_release(tag, version, published="2026-12-01T10:00:00Z", corrupt=None, draft=False, prerelease=False, notes=None):
-    """A release on the fake GitHub: its API entry and its four files."""
+def make_release(tag, version, published="2026-12-01T10:00:00Z", corrupt=None, draft=False, prerelease=False, notes=None,
+                 features=None):
+    """A release on the fake GitHub: its API entry and its four files (features: its installer's
+    installer_features=, e.g. "prepare")."""
     top = "teslalinux-dist-%s" % version
     tarball = top + "-arm64.tar.xz"
-    manifest = ("format=1\nversion=%s\nrelease=%s\narch=arm64\ntarball=%s\n" % (version, tag, tarball)).encode()
+    manifest = ("format=1\nversion=%s\nrelease=%s\narch=arm64\ntarball=%s\n" % (version, tag, tarball)
+                + ("installer_features=%s\n" % features if features else "")).encode()
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:xz") as t:
         for name, data, mode in ((top + "/MANIFEST", manifest, 0o644),
@@ -149,6 +152,11 @@ def make_release(tag, version, published="2026-12-01T10:00:00Z", corrupt=None, d
            "body": notes if notes is not None else "Short notes.\n\n### A topic\n\n*Its summary.*\n\n- one\n\n## Install\n\ncurl ...",
            "assets": [{"name": n, "size": len(d)} for n, d in files.items()]}
     return rel
+
+
+def calls_text(path):
+    with open(path) as f:
+        return f.read()
 
 
 def calls(name):
@@ -179,7 +187,7 @@ class Base(unittest.TestCase):
         SRV_STATE["fail"] = None
         SRV_STATE["releases"] = [make_release(*NEW)]
         NET.update(unmetered=True, idle=True, why="test", unavailable=None)
-        for k in ("FAKE_INSTALL_FAIL", "FAKE_INSTALL_NO_SET"):
+        for k in ("FAKE_INSTALL_FAIL", "FAKE_INSTALL_NO_SET", "FAKE_PREPARE_FAIL"):
             os.environ.pop(k, None)
         ru.CHECK_INTERVAL = 86400
 
@@ -321,6 +329,90 @@ class Cycle(Base):
         # Install now from the car page: installs while connected
         st = self.run_cycle({"install-now": "1"})
         self.assertEqual(self.prefix_release(), "v0.6.0")
+
+    def prepare_calls(self):
+        return [c for c in calls("install.log") if c.startswith("fake-install prepare")]
+
+    def test_prepared_while_the_app_runs_then_switched(self):
+        SRV_STATE["releases"] = [make_release(*NEW, features="prepare")]
+        NET.update(idle=False, why="1 station(s) on the hotspot wlan0")
+        st = self.run_cycle()
+        # made ready with the app running: no stop, no install, the release waits for the car
+        self.assertEqual(len(self.prepare_calls()), 1)
+        self.assertIn(ru._p("pending", "v0.6.0"), self.prepare_calls()[0])
+        self.assertNotIn("stop teslalinux-atl.service", calls("systemctl.log"))
+        self.assertFalse([c for c in calls("install.log") if c.startswith("fake-install install")])
+        self.assertTrue(st["pending"]["prepared"])
+        self.assertEqual(st["lastResult"], "waiting-idle")
+        self.assertIn("prepared", [h["result"] for h in st["history"]])
+        # the next run with the car gone: the switch, not prepared again
+        NET.update(idle=True, why="test")
+        self.run_cycle()
+        self.assertEqual(self.prefix_release(), "v0.6.0")
+        self.assertEqual(len(self.prepare_calls()), 1)
+
+    def test_a_release_without_prepare_installs_as_before(self):
+        NET.update(idle=False, why="busy")
+        st = self.run_cycle()
+        self.assertFalse(self.prepare_calls())
+        self.assertNotIn("prepared", st["pending"])
+
+    def test_a_failed_prepare_falls_back_to_the_full_install(self):
+        SRV_STATE["releases"] = [make_release(*NEW, features="prepare")]
+        os.environ["FAKE_PREPARE_FAIL"] = "1"
+        NET.update(idle=False, why="busy")
+        st = self.run_cycle()
+        self.assertTrue(st["pending"]["prepareFailed"])
+        self.assertEqual(st["lastResult"], "waiting-idle")
+        NET.update(idle=True, why="test")
+        self.run_cycle()
+        self.assertEqual(len(self.prepare_calls()), 1)      # not tried again
+        self.assertEqual(self.prefix_release(), "v0.6.0")   # installed the full way
+
+    def test_install_now_prepares_first_and_boot_does_not(self):
+        SRV_STATE["releases"] = [make_release(*NEW, features="prepare")]
+        self.run_cycle({"download": "1"}, auto=False)
+        self.assertFalse(self.prepare_calls())               # automatic updates off: nothing in the background
+        self.run_cycle({"install-now": "1"}, auto=False)
+        log = [c.split()[1] for c in calls("install.log")]
+        self.assertEqual(log, ["prepare", "install"])
+        # a release still unprepared at a start is installed there as before
+        self.setUp()
+        SRV_STATE["releases"] = [make_release(*NEW, features="prepare")]
+        self.run_cycle({"download": "1"}, auto=False)
+        self.run_cycle(booting=True)
+        self.assertFalse(self.prepare_calls())
+        self.assertEqual(self.prefix_release(), "v0.6.0")
+
+    def test_art_cache_follows_a_switch(self):
+        cache, prep = P("art"), P("prepared")
+        old, new = os.path.realpath(self.old_dist), P("opt", "teslalinux.d", NEW[1])
+        sysm.PREPARED = prep
+        try:
+            os.makedirs(os.path.join(cache, "arm64"))
+            with open(os.path.join(cache, ".teslalinux"), "w") as f:
+                f.write("dist=%s\napp=x\ncompiled=1\n" % old)
+            pc = os.path.join(prep, os.path.basename(new), "home", ".cache", "art")
+            os.makedirs(os.path.join(pc, "arm64"))
+            with open(os.path.join(pc, ".teslalinux"), "w") as f:
+                f.write("dist=%s\napp=x\ncompiled=1\n" % new)
+            sysm.art_switch(old, new, lambda m: None)
+            self.assertIn("dist=" + new, calls_text(os.path.join(cache, ".teslalinux")))
+            kept = os.path.join(prep, os.path.basename(old), "home", ".cache", "art", ".teslalinux")
+            self.assertIn("dist=" + old, calls_text(kept))
+            self.assertFalse(os.path.exists(os.path.join(prep, os.path.basename(new))))
+            # and back: the kept one returns
+            sysm.art_switch(new, old, lambda m: None)
+            self.assertIn("dist=" + old, calls_text(os.path.join(cache, ".teslalinux")))
+            # no switch (a rollback of files only): the cache stays
+            sysm.art_switch(old, old, lambda m: None)
+            self.assertIn("dist=" + old, calls_text(os.path.join(cache, ".teslalinux")))
+            # a cache of another dist is not taken for a dist it does not name
+            sysm.art_switch(old, P("elsewhere"), lambda m: None)
+            self.assertFalse(os.path.exists(cache))
+        finally:
+            sysm.PREPARED = os.environ.get("RELEASE_UPDATE_PREPARED", "/var/lib/teslalinux/prepared")
+            shutil.rmtree(prep, ignore_errors=True)
 
     def test_auto_off(self):
         st = self.run_cycle(auto=False)

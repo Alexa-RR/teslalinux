@@ -4,13 +4,19 @@
 # (the updater's own RELEASE_UPDATE_* variables): unpacks the dist into DISTS/<version>, records a
 # backup set with dist.before, links PREFIX to the new dist; rollback goes back to the latest set's
 # dist.before and renames the set as the real one does.
-#   install --dist FILE --yes --no-reboot | rollback --yes
+#   install --dist FILE --yes --no-reboot | prepare --dist FILE --yes | rollback --yes
+#   FAKE_PREPARE_FAIL=1: prepare exits 1 (the release is then installed the slow way)
 #   FAKE_INSTALL_FAIL=after-switch: exits 1 once the link has moved (a run that died half way)
 #   FAKE_INSTALL_NO_SET=1: changes no file but the link (a run that leaves no backup set)
 set -euo pipefail
 PREFIX=$RELEASE_UPDATE_PREFIX DISTS=$RELEASE_UPDATE_DISTS BACKUP_ROOT=$RELEASE_UPDATE_BACKUP_ROOT
 echo "fake-install $*" >> "$FAKE_INSTALL_LOG"
 case "${1:-}" in
+  prepare)
+    [[ "$2" == --dist && "$4" == --yes ]] || { echo "bad arguments: $*" >&2; exit 2; }
+    [[ -f "$3" ]] || exit 1
+    [[ -n "${FAKE_PREPARE_FAIL:-}" ]] && { echo "unshare: mount failed" >&2; exit 1; }
+    exit 0 ;;
   install)
     [[ "$2" == --dist && "$4" == --yes && "$5" == --no-reboot ]] || { echo "bad arguments: $*" >&2; exit 2; }
     file=$3

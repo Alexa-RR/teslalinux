@@ -107,7 +107,18 @@ class _FakeCarkey(_BH):
 
 CARKEY = _TS(("127.0.0.1", 0), _FakeCarkey)
 threading.Thread(target=CARKEY.serve_forever, daemon=True).start()
+# the logs helper (host/teslalinux-logs): save writes a fixed name into the logs dir, delete removes it
+LOGS_DIR = os.path.join(TMP, "logs")
+os.makedirs(LOGS_DIR)
+with open(os.path.join(TMP, "teslalinux-logs"), "w") as f:
+    f.write('#!/bin/sh\nD="%s"\ncase "$1" in\n'
+            '  save) n=teslalinux-logs-20261125-010203.tar.gz; printf gz > "$D/$n"; [ -n "$2" ] && printf "%%s" "$2" > "$D/teslalinux-logs-20261125-010203.reason"; echo "$n" ;;\n'
+            '  delete) [ -f "$D/$2" ] || { echo "teslalinux-logs: no such log: $2" >&2; exit 1; }; rm -f "$D/$2" ;;\n'
+            'esac\n' % LOGS_DIR)
+os.chmod(os.path.join(TMP, "teslalinux-logs"), 0o755)
 os.environ.update({
+    "TESLALINUX_LOGS_HELPER": os.path.join(TMP, "teslalinux-logs"),
+    "TESLALINUX_LOGS_DIR": LOGS_DIR,
     "TESLALINUX_CARKEY_URL": "http://127.0.0.1:%d" % CARKEY.server_address[1],
     "TESLALINUX_CARSYNC_SETTINGS": os.path.join(TMP, "state", "carsync.json"),
     "TESLALINUX_CARSYNC_STATUS": os.path.join(TMP, "carsync-status.json"),
@@ -554,6 +565,31 @@ class AudioOutput(unittest.TestCase):
             wav = f.read()
         self.assertEqual(wav[:4] + wav[8:16], b"RIFFWAVEfmt ")
         self.assertEqual(int.from_bytes(wav[24:28], "little"), 48000)
+
+
+class SavedLogs(unittest.TestCase):
+    """/api/logs and /api/logsFile: saving, listing, downloading and deleting a snapshot"""
+
+    def post(self, req):
+        code, _, body = call("logs", "POST", json.dumps(req), "application/json")
+        return code, (json.loads(body) if code == 200 else None)
+
+    def test_save_list_download_delete(self):
+        self.assertEqual(json.loads(call("logs")[2]), [])
+        code, res = self.post({"action": "save", "reason": "no voice on a drive"})
+        self.assertEqual((code, res["ok"], res["name"]), (200, True, "teslalinux-logs-20261125-010203.tar.gz"))
+        self.assertEqual(res["logs"][0]["reason"], "no voice on a drive")
+        code, hdr, body = call("logsFile?name=teslalinux-logs-20261125-010203.tar.gz")
+        self.assertEqual((code, body), (200, b"gz"))
+        self.assertIn("attachment", hdr.get("Content-Disposition", ""))
+        for bad in ("../state/audio.json", "teslalinux-logs-1.tar.gz", ""):
+            self.assertEqual(call("logsFile?name=" + bad)[0], 404, bad)
+        code, res = self.post({"action": "delete", "name": "teslalinux-logs-20261125-010203.tar.gz"})
+        self.assertEqual((res["ok"], res["logs"]), (True, []))
+        code, res = self.post({"action": "delete", "name": "teslalinux-logs-20261125-010203.tar.gz"})
+        self.assertEqual((res["ok"], res["message"]), (False, "no such log: teslalinux-logs-20261125-010203.tar.gz"))
+        for bad in ({"action": "delete", "name": "/etc/passwd"}, {"action": "wipe"}, {"action": "save", "reason": 5}, []):
+            self.assertEqual(self.post(bad)[0], 500, bad)
 
 
 class CarLink(unittest.TestCase):

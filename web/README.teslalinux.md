@@ -69,6 +69,10 @@ Changes from upstream:
     sound (`/api/audioTest`: a chime from the Pi into the sink Waze plays into, so it takes Waze's
     whole path; the press also starts the car's sound stream), the car's browser audio and its
     volume, and voice search (car interface only).
+  * **Updates** also shows a release being made ready in the background ("preparing") and one
+    that is ready (switching takes about a minute). The car page itself shows a notice once per
+    ready release (`js/core/update-notice.js`, docs/SYSTEM-UPDATES.md): in Drive it only tells,
+    parked it offers Switch now.
   * **Tesla** (`js/settings/settings-tesla.js`, `/api/carLink`, docs/TESLA-LINK.md): the car's VIN,
     pairing the device as a read-only key (the car's add-key prompt and the key card), the link's
     state and the route on the car's screen, Waze following that route, and the car's GPS as Waze's

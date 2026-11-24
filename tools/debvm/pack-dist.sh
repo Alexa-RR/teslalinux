@@ -116,7 +116,7 @@ log "2/5 payload from $REPO -> $TOP/share/teslalinux/"
 PAYLOAD=(
   host/phase1-pios host/rpi4 host/tls/teslalinux-tls host/local/check.py
   host/teslalinux-render host/teslalinux-restart-app host/teslalinux-set-locale host/teslalinux-set-keyboard host/teslalinux-set-app-interface
-  host/teslalinux-network host/teslalinux-system-update host/teslalinux-uplink host/teslalinux-usb-quirks host/teslalinux-dexopt host/teslalinux-android-cacerts host/teslalinux-set-gpu-speed host/teslalinux-boottime
+  host/teslalinux-network host/teslalinux-system-update host/teslalinux-uplink host/teslalinux-usb-quirks host/teslalinux-dexopt host/teslalinux-android-cacerts host/teslalinux-set-gpu-speed host/teslalinux-boottime host/teslalinux-logs
   host/teslalinux-release-update host/releaseupdate/relgithub.py host/releaseupdate/relsystem.py docs/SYSTEM-UPDATES.md
   host/teslalinux-app-log-watch.py
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
@@ -256,6 +256,9 @@ M="$D/MANIFEST"
   echo "release=$RELEASE"
   # the repository whose releases this device updates from (host/teslalinux-release-update)
   echo "release_repo=$RELEASE_REPO"
+  # what this dist's install.sh can do beyond install (host/teslalinux-release-update asks before it
+  # uses one): prepare = the release made ready while the app keeps running, then a short switch
+  echo "installer_features=prepare"
   echo "arch=$ARCH"
   echo "prefix=$PREFIX"
   echo "tarball=$TARBALL"

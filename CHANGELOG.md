@@ -25,6 +25,34 @@ version's.
   so does Waze's drive (car interface).
 - Optional: Waze uses the car's own GPS instead of the browser's position.
 
+### Updates no longer take Waze away for minutes
+
+*Teslalinux updates, from the release after this one on.*
+
+- A new release is now made ready in the background while Waze keeps working: unpacked, its
+  packages downloaded, and Waze compiled for it. Switching to it then takes about a minute instead
+  of several, and the device does it when the car is not connected, or at the next start.
+- When a release is ready while the car page is open, a notice says so. While you drive it only
+  tells you; parked, it offers **Switch now**.
+- Going back to the previous release no longer compiles Waze again.
+- This release itself still installs the old way: the device's updater learns the new way from it.
+
+### Save the logs to look at later
+
+*Settings > Device > Logs, new.*
+
+- The device keeps its log in memory, so a restart or the car cutting its power loses it. **Save**
+  keeps a snapshot on the device (with an optional note on what happened); each one downloads later
+  from any browser on the hotspot. The newest 20 are kept.
+
+### The USB speaker keeps its volume after a restart
+
+*Pi speaker.*
+
+- A USB speaker with its own volume (a Jabra Speak2) reported its lower level again a few seconds
+  after each start, and that level stuck. The device now keeps the speaker at full for its first
+  30 seconds; the Pi speaker volume in Settings > Sound sets the level.
+
 ### A test sound in Settings > Sound
 
 *Hear whether the sound path works.*
