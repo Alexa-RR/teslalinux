@@ -4,6 +4,8 @@ The Pi checks for a new Waze once a day, downloads it, verifies it against the i
 it only while the app is not in use, makes sure the new version starts, and rolls back if it does
 not. It uses no Play Store app, no other APK, no cloud job and **no account of any kind**.
 
+Teslalinux itself updates the same way, from its GitHub releases: `docs/SYSTEM-UPDATES.md`.
+
 ## Sources
 
 | Source (setting `source`) | How | Default |

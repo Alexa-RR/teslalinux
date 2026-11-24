@@ -114,6 +114,16 @@
       return this._postJsonResult(this.apiBaseUrl + "/systemUpdate", { action });
     }
 
+    // teslalinux: the device's own Teslalinux release updates (host/teslalinux-release-update;
+    // services/api/api.py); the action resolves with {ok, message}
+    fetchReleaseUpdate() {
+      return this._fetchJson(this.apiBaseUrl + "/releaseUpdate");
+    }
+
+    releaseUpdateAction(request) {
+      return this._postJsonResult(this.apiBaseUrl + "/releaseUpdate", request);
+    }
+
     // teslalinux: automatic app updates from Google Play (tools/appupdate; services/api/api.py)
     fetchAppUpdate() {
       return this._fetchJson(this.apiBaseUrl + "/appUpdate");

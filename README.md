@@ -65,6 +65,14 @@ sudo teslalinux uninstall   # remove everything (--keep-data keeps the app and s
 
 In the car: join the Pi's Wi-Fi, then open `https://car.alexahub.dev/` in the browser.
 
+Updates: the Pi installs new releases by itself. It checks GitHub once a day, downloads over Wi-Fi
+or Ethernet (not LTE, unless you tap "Download over mobile data"), verifies the files against the
+release's checksums, installs while the car is not connected and goes back to the previous release
+if the new one does not start. Settings > Updates > Teslalinux shows the state and has "Check now",
+"Install now" and "Go back". See `docs/SYSTEM-UPDATES.md`. By hand, on the Pi, running the
+one-liner above again with `--dist vX.Y.Z` does the same install. An install from v0.5.0 or
+earlier has no updater yet and needs that one-liner once.
+
 No app is included. The Pi downloads Waze itself and keeps it updated (APKPure's public API by
 default; every APK must carry the app's original signature), or you upload an app bundle from the
 car page. See `docs/APP-UPDATES.md`.

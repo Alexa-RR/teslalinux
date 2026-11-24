@@ -1,0 +1,11 @@
+[Unit]
+Description=teslalinux: release update cycle hourly (the GitHub check itself runs once a day, jittered; the other runs retry with backoff or install a downloaded release when the car is not connected)
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=1h
+RandomizedDelaySec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

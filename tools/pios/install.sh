@@ -421,6 +421,9 @@ step_dist() {
   local cur; cur=$(readlink -f "$PREFIX" 2>/dev/null || true)
   if [[ "$cur" != "$DIST_DIR" ]]; then
     log "  $PREFIX -> $DIST_DIR (was ${cur:-none})"
+    # this run's backup set records the dist it replaces even when no other file changes, so
+    # `teslalinux rollback` (and the release updater, docs/SYSTEM-UPDATES.md) returns to it
+    ensure_bk
     ln -sfn "$DIST_DIR" "$PREFIX.new"
     mv -T "$PREFIX.new" "$PREFIX"
     # ART's cached boot image and app code belong to the old jars
@@ -524,6 +527,20 @@ step_files() {
     put_file "$P/host/phase1-pios/etc/systemd/$f" "/etc/systemd/system/$f" 0644
   done
   put_file "$P/host/phase1-pios/etc/NetworkManager/90-teslalinux-tls" /etc/NetworkManager/dispatcher.d/90-teslalinux-tls 0755
+  # the release updater (docs/SYSTEM-UPDATES.md): the device updates itself to a new release from
+  # Settings > Updates; root's state and settings, the API may only ask it to act (sudoers below)
+  install -d -m 0755 "$LIB/releaseupdate" /usr/local/share/doc/teslalinux "$STATE_DIR/release-update"
+  install -m 0644 "$P/host/releaseupdate/relgithub.py" "$P/host/releaseupdate/relsystem.py" "$LIB/releaseupdate/"
+  install -m 0644 "$P/docs/SYSTEM-UPDATES.md" /usr/local/share/doc/teslalinux/SYSTEM-UPDATES.md
+  put_file "$P/host/teslalinux-release-update" /usr/local/bin/teslalinux-release-update 0755
+  for f in teslalinux-release-update.service teslalinux-release-update.timer teslalinux-release-update-boot.service \
+           teslalinux-release-update-health.service; do
+    put_file "$P/host/phase1-pios/etc/systemd/$f" "/etc/systemd/system/$f" 0644
+  done
+  put_file "$P/host/phase1-pios/etc/NetworkManager/92-teslalinux-release-update" /etc/NetworkManager/dispatcher.d/92-teslalinux-release-update 0755
+  local ru=/usr/local/bin/teslalinux-release-update
+  put_str /etc/sudoers.d/teslalinux-release-update 0440 "tesla ALL=(root) NOPASSWD: $ru check, $ru download, $ru download --metered, $ru install-now, $ru go-back, $ru auto on, $ru auto off\n"
+  visudo -cq -f /etc/sudoers.d/teslalinux-release-update || die "sudoers check failed for /etc/sudoers.d/teslalinux-release-update"
   # the apps may scan for Bluetooth LE advertisements through bluetoothd, nothing else (the file says why)
   put_file "$P/host/phase1-pios/etc/dbus-1/teslalinux-bluetooth.conf" /etc/dbus-1/system.d/teslalinux-bluetooth.conf 0644
   systemctl reload dbus.service >/dev/null 2>&1 || true
@@ -1107,7 +1124,8 @@ step_enable() {
   unit_set reenable teslalinux-ap-addr.service
   local en=(hostapd.service dnsmasq.service nftables.service NetworkManager.service
     ModemManager.service nginx.service systemd-timesyncd.service "${UNITS[@]}"
-    teslalinux-appupdate.timer teslalinux-appupdate-boot.service teslalinux-appupdate-health.service)
+    teslalinux-appupdate.timer teslalinux-appupdate-boot.service teslalinux-appupdate-health.service
+    teslalinux-release-update.timer teslalinux-release-update-boot.service teslalinux-release-update-health.service)
   [[ $TRIM == 1 ]] && en+=(teslalinux-cpufreq.service)
   # bluetoothd for the apps' LE scanning (Waze's tunnel beacons); earlier installs disabled it
   case "$(unit_state bluetooth.service)" in ''|not-found) ;; *) en+=(bluetooth.service) ;; esac
@@ -1254,6 +1272,7 @@ doctor_live() {
   info "network: $(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null | grep -v ':unmanaged$' | tr '\n' ' ')"
   info "certificate: $(/usr/local/bin/teslalinux-tls status 2>/dev/null | tr -d '\n' | cut -c1-200)"
   info "app updates: $(/usr/local/bin/teslalinux-appupdate status 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d.get("state",{}); print(d.get("source"), s.get("lastResult"), "-", s.get("lastMessage"))' 2>/dev/null || echo '?')"
+  info "release updates: $(/usr/local/bin/teslalinux-release-update status 2>/dev/null | python3 -c 'import json,sys; s=json.load(sys.stdin)["state"]; print(s.get("lastResult"), "-", s.get("lastMessage"))' 2>/dev/null || echo '?')"
   local co; co=$(mktemp)
   if python3 "$LIB/check/check.py" --addr 127.0.0.1 --https-port 443 --http-port 80 --env "$ENVF" --expect-display >"$co" 2>&1; then
     ok "web stack (check.py)"
@@ -1331,7 +1350,7 @@ restore_set() { # DIR [first-only-map-name]
 }
 
 stop_stack() {
-  systemctl stop teslalinux-appupdate.timer teslalinux-appupdate.service 2>/dev/null || true
+  systemctl stop teslalinux-appupdate.timer teslalinux-appupdate.service teslalinux-release-update.timer 2>/dev/null || true
   systemctl stop "${APP_UNITS[@]}" 2>/dev/null || true
 }
 

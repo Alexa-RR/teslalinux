@@ -1,0 +1,18 @@
+[Unit]
+Description=teslalinux: install a downloaded, verified Teslalinux release before the app starts (automatic updates on)
+Documentation=file:///usr/local/share/doc/teslalinux/SYSTEM-UPDATES.md
+Before=teslalinux-atl.service teslalinux-appupdate-boot.service
+After=local-fs.target network.target teslalinux-netconfig.service
+# nothing downloaded: skipped without starting anything (no boot-time cost)
+ConditionDirectoryNotEmpty=/var/lib/teslalinux/release-update/pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/teslalinux-release-update boot
+TimeoutStartSec=75min
+StandardOutput=append:/var/log/teslalinux/release-update.log
+StandardError=append:/var/log/teslalinux/release-update.log
+LogsDirectory=teslalinux
+
+[Install]
+WantedBy=multi-user.target

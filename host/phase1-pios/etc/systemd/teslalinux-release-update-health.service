@@ -1,0 +1,17 @@
+[Unit]
+Description=teslalinux: health check of a new Teslalinux release's first start (back to the previous release when it fails)
+Documentation=file:///usr/local/share/doc/teslalinux/SYSTEM-UPDATES.md
+After=teslalinux-atl.service tacomp.service teslalinux-api.service nginx.service
+# only while a health check is pending (written by teslalinux-release-update when it installs)
+ConditionPathExists=/var/lib/teslalinux/release-update/health.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/teslalinux-release-update health
+TimeoutStartSec=45min
+StandardOutput=append:/var/log/teslalinux/release-update.log
+StandardError=append:/var/log/teslalinux/release-update.log
+LogsDirectory=teslalinux
+
+[Install]
+WantedBy=multi-user.target

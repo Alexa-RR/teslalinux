@@ -111,9 +111,10 @@
           render: this._updatesSection,
           railValue() {
             const c = this.cache;
-            if (!c.appUpdate && !c.sys) return "";
-            if (c.sys && c.sys.running) return "Installing…";
-            const n = (c.appUpdate && c.appUpdate.pending ? 1 : 0) + (c.sys && Array.isArray(c.sys.available) && c.sys.available.some((p) => !p.held) ? 1 : 0);
+            if (!c.appUpdate && !c.sys && !c.release) return "";
+            if ((c.sys && c.sys.running) || (c.release && ["installing", "restarting", "rolling-back"].indexOf(c.release.phase) >= 0)) return "Installing…";
+            const n = (c.appUpdate && c.appUpdate.pending ? 1 : 0) + (c.sys && Array.isArray(c.sys.available) && c.sys.available.some((p) => !p.held) ? 1 : 0) +
+              (c.release && c.release.supported && (c.release.available || c.release.pending) ? 1 : 0);
             return n ? n + " waiting" : "Up to date";
           },
         },
@@ -185,6 +186,9 @@
         ["upd.play", "updates", "Google Play via a token dispenser", "google play dispenser advanced aurora"],
         ["upd.system", "updates", "System updates", "debian apt os system packages security kernel"],
         ["upd.version", "updates", "Teslalinux version", "teslalinux version release installed what's new changelog"],
+        ["upd.release", "updates", "Teslalinux updates", "teslalinux update release new version github check download install"],
+        ["upd.releaseauto", "updates", "Update Teslalinux automatically", "teslalinux automatic update release auto"],
+        ["upd.releaseback", "updates", "Go back to the previous release", "teslalinux rollback previous release go back downgrade", () => Boolean(this.cache.release && this.cache.release.previous)],
         ["dev.health", "device", "Health", "temperature cpu load memory storage power throttled voltage heat"],
         ["dev.boot", "device", "Start-up time", "boot start startup how long power on fast slow seconds", () => Boolean(this._bootShown())],
         ["dev.restartapp", "device", "Restart Waze", "restart waze frozen stuck reload"],
@@ -1494,32 +1498,182 @@
      */
     async _updatesSection(token) {
       const api = this.apiClient;
-      const [info, su, st] = await Promise.all([
+      const [info, su, st, ru] = await Promise.all([
         api.fetchAppUpdate().catch(() => null),
         api.fetchSystemUpdate().catch(() => null),
         api.fetchStatus().catch(() => null),
+        api.fetchReleaseUpdate().catch(() => null),
       ]);
-      if (!info && !su && !st) throw new Error("no answer");
+      if (!info && !su && !st && !ru) throw new Error("no answer");
       if (info) this.cache.appUpdate = info;
       if (su) this.cache.sys = su;
       if (st) this.cache.status = st;
+      if (ru) this.cache.release = ru;
       const out = [];
+      if (st || ru) out.push(this._releaseUpdateGroup(token, st, ru));
       if (info) out.push(...this._wazeUpdateGroups(token, info));
       if (su) out.push(this._systemUpdateGroup(token, su));
-      if (st) {
-        const v = this._teslalinuxVersion(st);
-        out.push(
-          UI.group("Teslalinux", [
-            UI.row({
-              id: "upd.version",
-              title: "Installed version",
-              detail: v.detail,
-              control: UI.value(v.text),
-            }),
-          ]),
-        );
+      return out;
+    }
+
+    /**
+     * Teslalinux itself (host/teslalinux-release-update, docs/SYSTEM-UPDATES.md: GET/POST
+     * /api/releaseUpdate): the installed release, a newer one with its date and notes, the download
+     * (Wi-Fi or Ethernet only unless asked, with its progress), the install (while the car is not
+     * connected, at the next start, or Install now), the health check and going back.
+     */
+    _releaseUpdateGroup(token, st, ru) {
+      const v = this._teslalinuxVersion(st || (ru && ru.installed ? { system: { teslalinux: ru.installed } } : null));
+      const fmt = UI.fmt;
+      const verRow = UI.row({ id: "upd.version", title: "Installed version", detail: v.detail, control: UI.value(v.text) });
+      if (!ru) return UI.group("Teslalinux", [verRow]);
+      if (!ru.supported) {
+        return UI.group("Teslalinux", [verRow, UI.row({ id: "upd.release", title: "Release updates", detail: ru.unsupportedReason || "Not available on this device.", control: UI.value("Not available") })]);
+      }
+      const name = (tag) => String(tag || "").replace(/^v/, "");
+      const act = async (request, btn, row, okText) => {
+        if (btn) btn.disabled = true;
+        const r = await this.apiClient.releaseUpdateAction(request);
+        if (!r.ok) {
+          UI.status(row).err("Did not start: " + (r.message || "the device did not answer"));
+          if (btn) btn.disabled = false;
+          return;
+        }
+        if (okText) UI.status(row).pending(okText);
+        global.setTimeout(() => token === this._renderToken && this._rerender(), 1500);
+      };
+      const rows = [verRow];
+      const avail = ru.available;
+      const pend = ru.pending;
+      const busy = ["downloading", "installing", "restarting", "health", "rolling-back"].indexOf(ru.phase) >= 0;
+      const checkBtn = UI.button("Check now", null, null, "sync");
+      checkBtn.disabled = busy;
+      const line = this._releaseLine(ru);
+      const stRow = UI.row({ id: "upd.release", title: avail ? "Teslalinux " + name(avail.tag) + " available" : "Release updates", detail: line, control: checkBtn });
+      checkBtn.addEventListener("click", () => act({ action: "check" }, checkBtn, stRow, "Checking GitHub for a newer release…"));
+      const notices = ru.notices || [];
+      const last = notices.length ? notices[notices.length - 1] : null;
+      if (last && /^(rolled-back|install-failed|verify-failed|rollback-failed|rollback-impossible)$/.test(last.result)) UI.status(stRow).err(fmt.ago(last.at) + ": " + last.text);
+      else if (last && last.at > (ru.lastCheck || 0) - 60) UI.status(stRow).info(new Date(last.at * 1000).toLocaleString() + ": " + last.text);
+      rows.push(stRow);
+      if (ru.phase === "downloading" && ru.progress && ru.progress.total) {
+        const pct = Math.floor((100 * (ru.progress.bytes || 0)) / ru.progress.total);
+        const bar = h("div", { class: "progress-bar", style: "width:" + pct + "%" });
+        rows.push(h("div", { class: "progress" }, h("div", { class: "progress-label" }, h("span", null, "Downloading " + name(avail && avail.tag)), h("span", { class: "num" }, pct + " % of " + fmt.bytes(ru.progress.total))), h("div", { class: "progress-track" }, bar)));
+      }
+      if (busy) global.setTimeout(() => token === this._renderToken && this._rerender(), 3000);
+      if (avail && !pend && !busy) rows.push(...this._releaseDownloadRows(ru, avail, act));
+      if (pend && !busy) {
+        const ir = UI.row({
+          id: "upd.releaseinstall",
+          title: "Install " + name(pend.tag),
+          detail: "Waze stops, the update installs (a few minutes) and the device restarts. Waze starts again on the new release; the page reconnects by itself.",
+          chips: [UI.CHIP.restart()],
+        });
+        UI.setControl(ir, UI.armed("Install now", "Tap again to install", (b) => act({ action: "installNow" }, b, ir, "Installing… the device restarts when it is done"), "btn--primary"));
+        rows.push(ir);
+      }
+      const shown = avail || pend;
+      if (shown && shown.notes) {
+        const when = shown.publishedAt ? " (" + new Date(shown.publishedAt).toLocaleDateString() + ")" : "";
+        rows.push(h("div", null, UI.disclosure("What's new in " + name(shown.tag) + when, this._releaseNotes(shown.notes))));
+      }
+      const auto = UI.row({
+        id: "upd.releaseauto",
+        title: "Update Teslalinux automatically",
+        detail: "Downloads a new release over Wi-Fi or Ethernet and installs it while the car is not connected.",
+        control: UI.toggle(ru.settings && ru.settings.autoUpdate !== false, (on) => UI.save(auto, () => this.apiClient.releaseUpdateAction({ autoUpdate: on }).then((r) => {
+          if (!r.ok) throw UI.userError("Not saved: " + (r.message || "the device did not answer"));
+          return true;
+        })), "Update Teslalinux automatically"),
+      });
+      rows.push(auto);
+      if (ru.previous && !busy) {
+        const back = UI.row({ id: "upd.releaseback", title: "Go back to " + name(ru.previous), detail: "The release installed before this one, with its files. The device restarts.", chips: [UI.CHIP.restart()] });
+        UI.setControl(back, UI.armed("Go back", "Tap again to go back", (b) => act({ action: "goBack" }, b, back, "Going back… the device restarts when it is done")));
+        rows.push(back);
+      }
+      const note = "Checked " + fmt.ago(ru.lastCheckOk) + (ru.repo ? ", releases of " + ru.repo + " on GitHub." : ".");
+      return UI.group("Teslalinux", rows, note);
+    }
+
+    /** the release updater's state in one line */
+    _releaseLine(ru) {
+      const name = (tag) => String(tag || "").replace(/^v/, "");
+      const a = ru.available;
+      const p = ru.pending;
+      switch (ru.phase) {
+        case "downloading":
+          return "Downloading " + name(a && a.tag) + "…";
+        case "installing":
+          return "Installing " + name((p && p.tag) || (a && a.tag)) + ". Waze is stopped; the device restarts when it is done.";
+        case "restarting":
+          return "Installed. The device is restarting.";
+        case "health":
+          return "Checking that " + name(ru.health && ru.health.tag) + " starts correctly…";
+        case "rolling-back":
+          return "Going back to the previous release…";
+        default:
+          break;
+      }
+      if (p) return name(p.tag) + " is downloaded and verified. " + (ru.settings && ru.settings.autoUpdate !== false ? "It installs when the car is not connected, or at the next start." : "Install it below.");
+      if (a && ru.skipped) return name(a.tag) + " is not installed automatically: " + ru.skipped.reason + ".";
+      if (a && ru.lastResult === "waiting-unmetered") return "Waiting for Wi-Fi or Ethernet to download (LTE is mobile data).";
+      if (a && ru.lastResult === "download-failed") return "The download stopped; it goes on by itself. " + ru.lastMessage;
+      if (a) return ru.settings && ru.settings.autoUpdate === false ? "Automatic updates are off." : "It downloads over Wi-Fi or Ethernet.";
+      if (ru.lastResult === "check-failed") return "The last check did not reach GitHub; it tries again by itself.";
+      if (ru.lastResult === "installed") return "Up to date: " + ru.lastMessage + ".";
+      return ru.lastCheckOk ? "Up to date." : "Not checked yet.";
+    }
+
+    /** a newer release that is not downloaded: download now, or over mobile data (two taps) */
+    _releaseDownloadRows(ru, avail, act) {
+      const name = String(avail.tag).replace(/^v/, "");
+      const size = UI.fmt.bytes(avail.size);
+      const lte = ru.uplink === "lte" || ru.uplink === "phone" || ru.lastResult === "waiting-unmetered";
+      const auto = ru.settings && ru.settings.autoUpdate !== false;
+      const out = [];
+      if (ru.skipped || (!auto && !lte)) {
+        const r = UI.row({ id: "upd.releasedl", title: (ru.skipped ? "Install " : "Download ") + name + " anyway", detail: size + ". Verified against the release's checksums before anything is installed." });
+        UI.setControl(r, UI.button("Download", (e) => act({ action: "download" }, e.currentTarget, r, "Starting the download…"), null, "download"));
+        out.push(r);
+      }
+      if (lte) {
+        const r = UI.row({ id: "upd.releasemetered", title: "Download over mobile data", detail: size + " over LTE. Otherwise it waits for Wi-Fi or Ethernet.", chips: [UI.CHIP.plain("Mobile data")] });
+        UI.setControl(r, UI.armed("Download " + size, "Tap again to use mobile data", (b) => act({ action: "downloadMetered" }, b, r, "Downloading over mobile data…"), "btn--primary"));
+        out.push(r);
       }
       return out;
+    }
+
+    /**
+     * The release notes (the release's text on GitHub, CHANGELOG.md's section) as plain text: a
+     * "### " heading, its italic summary line, "- " points, paragraphs. Nothing is read as HTML.
+     */
+    _releaseNotes(text) {
+      const box = h("div", { class: "relnotes" });
+      let list = null;
+      for (const raw of String(text).split("\n")) {
+        const line = raw.trim();
+        const item = /^[-*] (.*)$/.exec(line);
+        if (item) {
+          if (!list) box.append((list = h("ul")));
+          list.append(h("li", null, item[1].replace(/[`*_]/g, "")));
+          continue;
+        }
+        if (!line) {
+          list = null;
+          continue;
+        }
+        const head = /^#{2,6} (.*)$/.exec(line);
+        if (head) {
+          list = null;
+          box.append(h("h3", null, head[1]));
+        } else if (/^\*[^*].*\*$/.test(line)) box.append(h("p", { class: "relnotes-sub" }, line.slice(1, -1)));
+        else if (list) list.lastElementChild.append(" " + line.replace(/[`*_]/g, ""));
+        else box.append(h("p", null, line.replace(/[`*_]/g, "")));
+      }
+      return box;
     }
 
     /**
@@ -2747,7 +2901,7 @@
     async _refreshCache() {
       const api = this.apiClient;
       const safe = (p) => p.then((v) => v, () => null);
-      const [status, iface, audio, display, appUpdate, sys, config, gpu, keyboard] = await Promise.all([
+      const [status, iface, audio, display, appUpdate, sys, config, gpu, keyboard, release] = await Promise.all([
         safe(api.fetchStatus()),
         safe(api.fetchAppInterface()),
         safe(api.fetchAudioOutput()),
@@ -2757,6 +2911,7 @@
         safe(api.fetchSystemConfiguration()),
         safe(api.fetchGpuSpeed()),
         safe(api.fetchKeyboard()),
+        safe(api.fetchReleaseUpdate()),
       ]);
       const c = this.cache;
       const keep = (k, v) => {
@@ -2771,6 +2926,7 @@
       keep("config", config);
       keep("gpu", gpu);
       keep("keyboard", keyboard);
+      keep("release", release);
       this._cacheAt = Date.now();
       this._renderSidebar();
     }

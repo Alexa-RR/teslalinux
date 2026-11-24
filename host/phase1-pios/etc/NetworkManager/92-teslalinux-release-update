@@ -1,0 +1,18 @@
+#!/bin/sh
+# teslalinux: NetworkManager dispatcher hook (/etc/NetworkManager/dispatcher.d/92-teslalinux-release-update).
+# An uplink came up: a release waiting for Wi-Fi or Ethernet may download now. The service itself
+# decides whether GitHub is asked (once a day) and whether this uplink may download.
+IFACE=$1 ACTION=$2
+AP_IFACE=wlan0
+[ -r /etc/teslalinux/env ] && . /etc/teslalinux/env
+[ "$IFACE" = "$AP_IFACE" ] && exit 0
+STATE=/var/lib/teslalinux/release-update/state.json
+case "$ACTION" in
+	up)
+		[ -x /usr/local/bin/teslalinux-release-update ] || exit 0
+		# only when a release is waiting for an unmetered uplink, or a download was cut short
+		grep -q '"lastResult": "\(waiting-unmetered\|download-failed\)"' "$STATE" 2>/dev/null || exit 0
+		systemctl start --no-block teslalinux-release-update.service >/dev/null 2>&1
+		;;
+esac
+exit 0

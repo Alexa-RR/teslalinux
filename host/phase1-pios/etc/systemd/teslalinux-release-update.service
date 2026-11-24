@@ -1,0 +1,16 @@
+[Unit]
+Description=teslalinux: keep Teslalinux on its newest release (check GitHub daily, download on an unmetered uplink, verify, install when the car is not connected)
+Documentation=file:///usr/local/share/doc/teslalinux/SYSTEM-UPDATES.md
+# never on the boot path; the hourly timer, the NetworkManager hook and the settings page start it
+After=network.target teslalinux-netconfig.service teslalinux-release-update-boot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/teslalinux-release-update run
+# download (up to 2 h) + the release's installer (up to 1 h, ART's boot image and Waze compiled again)
+TimeoutStartSec=4h
+# a background job: the app and the display stream keep priority
+Nice=10
+StandardOutput=append:/var/log/teslalinux/release-update.log
+StandardError=append:/var/log/teslalinux/release-update.log
+LogsDirectory=teslalinux

@@ -117,6 +117,7 @@ PAYLOAD=(
   host/phase1-pios host/rpi4 host/tls/teslalinux-tls host/local/check.py
   host/teslalinux-render host/teslalinux-restart-app host/teslalinux-set-locale host/teslalinux-set-keyboard host/teslalinux-set-app-interface
   host/teslalinux-network host/teslalinux-system-update host/teslalinux-uplink host/teslalinux-dexopt host/teslalinux-android-cacerts host/teslalinux-set-gpu-speed host/teslalinux-boottime
+  host/teslalinux-release-update host/releaseupdate/relgithub.py host/releaseupdate/relsystem.py docs/SYSTEM-UPDATES.md
   host/teslalinux-app-log-watch.py
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
   services/gates/gates.py services/gates/palgate.py services/gates/tlqr.py docs/GATES.md
@@ -250,6 +251,8 @@ M="$D/MANIFEST"
   echo "format=1"
   echo "version=$VERSION"
   echo "release=$RELEASE"
+  # the repository whose releases this device updates from (host/teslalinux-release-update)
+  echo "release_repo=$RELEASE_REPO"
   echo "arch=$ARCH"
   echo "prefix=$PREFIX"
   echo "tarball=$TARBALL"

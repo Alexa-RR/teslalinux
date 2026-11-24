@@ -24,7 +24,23 @@ version's.
 - It uses Waze's own Report screens out of sight. Waze's "Thanks!" shows on the car screen.
 - The kinds are the ones Waze offers right now. Each report shows in Settings > Grok.
 
+### Teslalinux updates itself
+
+*Settings > Updates > Teslalinux. On by default.*
+
+- The Pi checks for a new release once a day and shows its notes.
+- It downloads over Wi-Fi or Ethernet only. On LTE you can tap "Download over mobile data".
+- It installs while the car is not connected, at the next start, or when you tap "Install now".
+- If the new release does not start correctly, the Pi goes back to the previous one by itself.
+  "Go back" does the same by hand.
+
 ### Platform
+
+#### Added
+
+- `teslalinux-release-update` (docs/SYSTEM-UPDATES.md): GitHub's releases API, the release's own
+  SHA256SUMS and install.sh, a health check after the restart, rollback with the installer's backup
+  set. The dist's MANIFEST records the repository it was released from (`release_repo=`).
 
 #### Fixed
 

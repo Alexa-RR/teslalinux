@@ -1,0 +1,585 @@
+#!/usr/bin/env python3
+"""teslalinux-release-update: the device updates itself to a new Teslalinux release (docs/SYSTEM-UPDATES.md).
+
+    teslalinux-release-update run        one cycle (teslalinux-release-update.service: the hourly timer,
+                                         the NetworkManager hook, the settings page): the daily check
+                                         of GitHub's releases, the download (unmetered uplink only,
+                                         unless asked), the verification, the install while the car is
+                                         not connected
+    teslalinux-release-update boot       before the app starts: install a verified release (automatic
+                                         updates on)
+    teslalinux-release-update health     after an install's restart: services up and the app's first
+                                         picture, else back to the previous release
+    teslalinux-release-update status     the state as JSON
+  from the settings page (services/api/api.py, through sudo; each returns at once and starts the service):
+    check | download [--metered] | install-now | go-back | auto on|off
+
+Where releases come from: the GitHub repository the device was installed from (its MANIFEST's
+release_repo, else the installer's TL_RELEASE_REPO), the newest stable vX.Y.Z by version number.
+A release is installed only with its own files (dist tarball, MANIFEST, install.sh), each matching
+its own SHA256SUMS and the sizes GitHub gives; the install is that release's install.sh with
+--dist on the downloaded tarball, so nothing is fetched again. tools/pios/install.sh keeps the
+previous dist in /opt/teslalinux.d and a backup set of every file it replaced: a failed install or
+health check goes back to both (`teslalinux rollback`), and the release is not installed again
+automatically.
+
+Root only. Settings (/var/lib/teslalinux/release-update/settings.json {"autoUpdate"}) and state
+(state.json, progress.json) are root's, readable by everyone; nothing secret is in them.
+Log: /var/log/teslalinux/release-update.log (the installer's own: install-<time>.log).
+"""
+import fcntl
+import json
+import os
+import random
+import shutil
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+for _d in (os.environ.get("RELEASE_UPDATE_LIB"), "/usr/local/lib/teslalinux/releaseupdate", os.path.join(HERE, "releaseupdate")):
+    if _d and os.path.isfile(os.path.join(_d, "relgithub.py")):
+        sys.path.insert(0, _d)
+        break
+import relgithub as gh  # noqa: E402
+import relsystem as sysm  # noqa: E402
+
+E = os.environ.get
+STATE_DIR = E("RELEASE_UPDATE_STATE_DIR", "/var/lib/teslalinux/release-update")
+SERVICE = "teslalinux-release-update.service"
+CHECK_INTERVAL = int(E("RELEASE_UPDATE_CHECK_INTERVAL", "86400"))
+BACKOFF_BASE = int(E("RELEASE_UPDATE_BACKOFF_BASE", "900"))
+BACKOFF_MAX = int(E("RELEASE_UPDATE_BACKOFF_MAX", "86400"))
+DOWNLOAD_DEADLINE = int(E("RELEASE_UPDATE_DOWNLOAD_DEADLINE", "7200"))
+INSTALL_TIMEOUT = int(E("RELEASE_UPDATE_INSTALL_TIMEOUT", "3600"))
+HEALTH_TIMEOUT = int(E("RELEASE_UPDATE_HEALTH_TIMEOUT", "1500"))
+HEALTH_MAX_RESTARTS = int(E("RELEASE_UPDATE_HEALTH_MAX_RESTARTS", "3"))
+HEALTH_MAX_BOOTS = int(E("RELEASE_UPDATE_HEALTH_MAX_BOOTS", "3"))
+HEALTH_POLL = float(E("RELEASE_UPDATE_HEALTH_POLL", "5"))
+FLAGS = ("check", "download", "metered", "install-now", "go-back")
+# kinds of a refused release a forced check tries again (a health failure and going back by hand stay)
+RETRY_KINDS = ("verify", "install")
+
+
+def log(msg):
+    print("%s teslalinux-release-update: %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), msg), flush=True)
+
+
+def _p(*parts):
+    return os.path.join(STATE_DIR, *parts)
+
+
+def read_json(path, default=None):
+    try:
+        with open(path) as f:
+            v = json.load(f)
+        return v if isinstance(v, dict) else default
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, obj, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f, indent=1, sort_keys=True)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def load_settings():
+    raw = read_json(_p("settings.json"), {}) or {}
+    return {"autoUpdate": raw.get("autoUpdate") if isinstance(raw.get("autoUpdate"), bool) else True}
+
+
+def new_state():
+    return {"phase": "idle", "repo": None, "installed": None, "latest": None, "available": None, "pending": None,
+            "download": None, "health": None, "lastInstall": None, "meteredFor": None, "lastCheck": 0,
+            "lastCheckOk": 0, "failures": 0, "nextTryAt": 0, "lastResult": "never-run", "lastMessage": "",
+            "unavailable": None, "bad": {}, "notices": [], "history": []}
+
+
+def load_state():
+    st = new_state()
+    st.update(read_json(_p("state.json"), {}) or {})
+    return st
+
+
+def save_state(st):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.chmod(STATE_DIR, 0o755)
+    write_json(_p("state.json"), st)
+    # the health unit's start condition (ConditionPathExists) mirrors st["health"]
+    if st.get("health"):
+        write_json(_p("health.json"), st["health"])
+    elif os.path.exists(_p("health.json")):
+        os.unlink(_p("health.json"))
+
+
+def event(st, result, message, notice=False, now=None):
+    now = int(now or time.time())
+    st["lastResult"], st["lastMessage"] = result, message
+    st["history"] = (st.get("history") or [])[-29:] + [{"at": now, "result": result, "message": message}]
+    if notice:
+        st["notices"] = (st.get("notices") or [])[-9:] + [{"at": now, "result": result, "text": message}]
+    log("%s: %s" % (result, message))
+
+
+def progress(tag, done, total):
+    write_json(_p("progress.json"), {"tag": tag, "bytes": done, "total": total, "at": time.time()})
+
+
+# ---------------------------------------------------------------------------- flags (the page's requests)
+
+def set_flag(name, value="1"):
+    os.makedirs(_p("flags"), mode=0o700, exist_ok=True)
+    with open(_p("flags", name), "w") as f:
+        f.write(value)
+
+
+def take_flags():
+    out = {}
+    for name in FLAGS:
+        p = _p("flags", name)
+        if os.path.exists(p):
+            try:
+                with open(p) as f:
+                    out[name] = f.read(200).strip() or "1"
+                os.unlink(p)
+            except OSError:
+                pass
+    return out
+
+
+class Lock:
+    def __init__(self, wait):
+        os.makedirs(STATE_DIR, exist_ok=True)
+        self.f = open(_p("lock"), "w")
+        self.wait = wait
+
+    def __enter__(self):
+        try:
+            fcntl.flock(self.f, fcntl.LOCK_EX | (0 if self.wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            self.f.close()
+            return None
+        return self
+
+    def __exit__(self, *a):
+        if not self.f.closed:
+            fcntl.flock(self.f, fcntl.LOCK_UN)
+            self.f.close()
+
+
+# ---------------------------------------------------------------------------- the check
+
+def backoff_delay(failures, rnd=random.random):
+    if failures <= 0:
+        return 0
+    return int(min(BACKOFF_BASE * (2 ** min(failures - 1, 20)), BACKOFF_MAX) * (0.8 + 0.4 * rnd()))
+
+
+def check_due(st, now, rnd=random.random):
+    if now < int(st.get("nextTryAt") or 0):
+        return False
+    if int(st.get("failures") or 0) > 0:
+        return True
+    return now - int(st.get("lastCheckOk") or 0) >= CHECK_INTERVAL * (0.9 + 0.2 * rnd())
+
+
+def check(st, now):
+    """GitHub's newest stable release into st["latest"]; st["available"] when it is newer than the
+    installed one. False when GitHub could not be asked (backoff)."""
+    st["lastCheck"] = now
+    try:
+        latest = gh.latest_stable(gh.fetch_releases(st["repo"]))
+    except gh.ReleaseError as e:
+        st["failures"] = int(st.get("failures") or 0) + 1
+        st["nextTryAt"] = now + backoff_delay(st["failures"])
+        event(st, "check-failed", "%s (next try in %d min)" % (e, (st["nextTryAt"] - now) // 60), now=now)
+        return False
+    st["failures"], st["nextTryAt"], st["lastCheckOk"] = 0, 0, now
+    st["latest"] = latest
+    return True
+
+
+def offered(st):
+    """The release to update to: the latest, when newer than the installed one and not refused."""
+    lat, inst = st.get("latest"), st.get("installed") or {}
+    if not lat or not gh.newer(lat["tag"], inst.get("release")):
+        return None
+    return lat
+
+
+# ---------------------------------------------------------------------------- the download
+
+def download(st, rel, allow_metered, now):
+    """rel's four files into staging/TAG, verified, then moved to pending/TAG. True when pending."""
+    tag = rel["tag"]
+    need = rel["size"] * 12 + (1 << 30)  # the tarball, its unpacked dist, the old dist kept beside it
+    if sysm.free_bytes(STATE_DIR) < rel["size"] * 2 or sysm.free_bytes(sysm.DISTS) < need:
+        event(st, "no-space", "not enough free space for %s (needs about %d MB)" % (tag, need >> 20), now=now)
+        return False
+    staging = _p("staging", tag)
+    if os.path.isdir(_p("staging")):
+        for d in os.listdir(_p("staging")):
+            if d != tag:
+                shutil.rmtree(_p("staging", d), ignore_errors=True)
+    os.makedirs(staging, exist_ok=True)
+    total = rel["size"]
+    order = [gh.SUMS, gh.MANIFEST, gh.INSTALLER, rel["tarball"]]
+    base = sum(os.path.getsize(os.path.join(staging, n)) for n in order if os.path.exists(os.path.join(staging, n)))
+    st["phase"], st["download"] = "downloading", {"tag": tag, "total": total, "startedAt": now}
+    save_state(st)
+    last_net = [time.monotonic()]
+
+    def keep_going():
+        # the uplink may change on the way (the car drives away from home Wi-Fi): checked every 20 s
+        if allow_metered or time.monotonic() - last_net[0] < 20:
+            return None
+        last_net[0] = time.monotonic()
+        ok, why, _m = sysm.download_allowed(False)
+        return None if ok else why
+
+    try:
+        done_before = base
+        for name in order:
+            out = os.path.join(staging, name)
+            if os.path.exists(out) and os.path.getsize(out) == rel["assets"][name]:
+                continue
+            start = done_before  # the files already complete; download_file counts this one's resumed part
+            gh.download_file(gh.asset_url(st["repo"], tag, name), out, rel["assets"][name],
+                             progress=lambda d, s=start: progress(tag, min(total, s + d), total),
+                             keep_going=keep_going, deadline=now + DOWNLOAD_DEADLINE)
+            done_before = sum(os.path.getsize(os.path.join(staging, n)) for n in order if os.path.exists(os.path.join(staging, n)))
+        man = gh.verify_release(staging, rel)
+    except gh.ReleaseError as e:
+        st["phase"] = "idle"
+        if e.kind == "paused":
+            event(st, "waiting-unmetered", "the download of %s is paused: %s" % (tag, e), now=now)
+        elif e.kind == "verify":
+            shutil.rmtree(staging, ignore_errors=True)
+            st["bad"][tag] = {"at": now, "kind": "verify", "reason": str(e)}
+            event(st, "verify-failed", "%s refused: %s" % (tag, e), notice=True, now=now)
+        else:
+            if e.kind == "release":
+                shutil.rmtree(staging, ignore_errors=True)
+            event(st, "download-failed", "download of %s: %s" % (tag, e), now=now)
+        return False
+    finally:
+        st["download"] = None
+    shutil.rmtree(_p("pending"), ignore_errors=True)
+    os.makedirs(_p("pending"), exist_ok=True)
+    os.rename(staging, _p("pending", tag))
+    st["phase"] = "idle"
+    st["pending"] = {"tag": tag, "tarball": rel["tarball"], "size": rel["size"], "assets": rel["assets"], "version": man["version"],
+                     "publishedAt": rel.get("publishedAt"), "verifiedAt": now}
+    st["meteredFor"] = None
+    event(st, "downloaded", "%s downloaded and verified (%d MB)" % (tag, max(1, rel["size"] >> 20)), now=now)
+    return True
+
+
+# ---------------------------------------------------------------------------- the install
+
+def reboot(st, why):
+    save_state(st)
+    log("restarting the device: %s" % why)
+    sysm.systemctl("reboot", log=log)
+
+
+def install(st, how, now):
+    """The pending release with its own install.sh, then a restart; the health check follows at the
+    next start. On a failed install: back to the previous dist, and a restart."""
+    pend = st["pending"]
+    d = _p("pending", pend["tag"])
+    rel = {"tag": pend["tag"], "tarball": pend["tarball"], "assets": pend.get("assets") or {}}
+    try:
+        if not rel["assets"]:
+            raise gh.ReleaseError("verify", "the release's file sizes are not known")
+        gh.verify_release(d, rel)  # again: nothing on disk changed since the download
+    except gh.ReleaseError as e:
+        shutil.rmtree(_p("pending"), ignore_errors=True)
+        st["pending"] = None
+        event(st, "verify-failed", "%s refused before the install: %s" % (pend["tag"], e), notice=True, now=now)
+        return False
+    busy = sysm.other_update_busy()
+    if busy:
+        event(st, "waiting-busy", "%s is ready; it installs after %s" % (pend["tag"], busy), now=now)
+        return False
+    inst = sysm.installed() or {}
+    from_dist = inst.get("dist")
+    st["lastInstall"] = {"tag": pend["tag"], "from": inst.get("release"), "fromDist": from_dist, "how": how,
+                         "setsBefore": sysm.backup_sets(), "at": now, "result": None}
+    st["phase"] = "installing"
+    event(st, "installing", "installing %s (%s); the device restarts when it is done" % (pend["tag"], how), now=now)
+    save_state(st)
+    sysm.systemctl("stop", sysm.APP_UNIT, log=log)
+    rc = sysm.run(["bash", os.path.join(d, gh.INSTALLER), "install", "--dist", os.path.join(d, pend["tarball"]),
+                   "--yes", "--no-reboot"], log, timeout=INSTALL_TIMEOUT)
+    now = int(time.time())
+    after = sysm.installed() or {}
+    if rc != 0 or after.get("release") != pend["tag"]:
+        why = "the installer exited %d" % rc if rc != 0 else "the device runs %s afterwards" % sysm.label(after)
+        st["bad"][pend["tag"]] = {"at": now, "kind": "install", "reason": why}
+        back = bool(from_dist) and sysm.roll_back_to(from_dist, st["lastInstall"]["setsBefore"], log)
+        st["lastInstall"]["result"] = "install-failed"
+        st["pending"] = None
+        shutil.rmtree(_p("pending"), ignore_errors=True)
+        st["phase"] = "idle"
+        event(st, "install-failed", "%s did not install (%s); %s" % (pend["tag"], why, "back to %s" % inst.get("release")
+              if back else "going back to %s failed: see /var/log/teslalinux/release-update.log" % inst.get("release")),
+              notice=True, now=now)
+        reboot(st, "back to the previous release")
+        return False
+    st["pending"] = None
+    shutil.rmtree(_p("pending"), ignore_errors=True)
+    st["phase"] = "restarting"
+    st["health"] = {"tag": pend["tag"], "from": inst.get("release"), "windowStart": now, "boots": 0}
+    event(st, "restarting", "%s is installed; the device restarts to start it" % pend["tag"], now=now)
+    reboot(st, "%s installed" % pend["tag"])
+    return True
+
+
+def previous_of(st):
+    """The release going back returns to: the one this updater's last install replaced while that
+    install is the one running (its record is exact even when the installer kept no backup set),
+    else the dist the installer's latest backup set replaced."""
+    cur = sysm.installed() or {}
+    li = st.get("lastInstall") or {}
+    if li.get("tag") and li.get("tag") == cur.get("release") and li.get("fromDist") and os.path.isdir(li["fromDist"]) \
+            and os.path.realpath(li["fromDist"]) != cur.get("dist"):
+        return sysm.manifest(li["fromDist"]) or {"release": li.get("from"), "version": None, "dist": li["fromDist"]}
+    return sysm.previous()
+
+
+def health_verdict(down, frame, elapsed, restarts, boots):
+    """"ok", "wait" or "fail: why" for the first start after an install."""
+    if not down and frame:
+        return "ok"
+    if boots > HEALTH_MAX_BOOTS:
+        return "fail: the device restarted %d times before the new release was up" % (boots - 1)
+    if restarts >= HEALTH_MAX_RESTARTS:
+        return "fail: Waze stopped %d times without drawing its first picture" % restarts
+    if elapsed >= HEALTH_TIMEOUT:
+        if down:
+            return "fail: %s not running after %d min" % (", ".join(u.replace(".service", "") for u in down), HEALTH_TIMEOUT // 60)
+        return "fail: Waze drew no picture within %d min" % (HEALTH_TIMEOUT // 60)
+    return "wait"
+
+
+def go_back(st, reason, kind, now):
+    """Back to the previous release (the dist the latest install replaced, with its files): after a
+    failed health check (kind "health") or by hand ("went-back"). The release left is not installed
+    again automatically. Then a restart."""
+    cur = sysm.installed() or {}
+    prev = previous_of(st)
+    li = st.get("lastInstall") or {}
+    st["health"] = None
+    if not prev:
+        event(st, "rollback-impossible", "cannot go back from %s: no previous release is kept (%s)" % (sysm.label(cur), reason),
+              notice=True, now=now)
+        return False
+    st["phase"] = "rolling-back"
+    save_state(st)
+    sysm.systemctl("stop", sysm.APP_UNIT, log=log)
+    ok = sysm.roll_back_to(prev["dist"], li.get("setsBefore") if li.get("tag") == cur.get("release") else sysm.backup_sets()[:-1], log)
+    now = int(time.time())
+    st["phase"] = "idle"
+    if cur.get("release"):
+        st["bad"][cur["release"]] = {"at": now, "kind": kind, "reason": reason}
+    if li.get("tag") == cur.get("release"):
+        li["result"] = "rolled-back" if kind == "health" else "went-back"
+    if not ok:
+        event(st, "rollback-failed", "going back from %s to %s failed (%s): see /var/log/teslalinux/release-update.log"
+              % (sysm.label(cur), sysm.label(prev), reason), notice=True, now=now)
+        save_state(st)
+        return False
+    if kind == "health":
+        event(st, "rolled-back", "%s did not start correctly (%s); back to %s. %s is not installed again automatically."
+              % (sysm.label(cur), reason, sysm.label(prev), sysm.label(cur)), notice=True, now=now)
+    else:
+        event(st, "went-back", "back to %s by hand; %s is not installed again automatically" % (sysm.label(prev), sysm.label(cur)),
+              notice=True, now=now)
+    reboot(st, "back to %s" % sysm.label(prev))
+    return True
+
+
+def watch_health(st):
+    h = st["health"]
+    start = max(int(h.get("windowStart") or 0), int(sysm.boot_time()) - 5)
+    h["windowStart"], h["boots"] = start, int(h.get("boots") or 0) + 1
+    st["phase"] = "health"
+    save_state(st)
+    r0 = sysm.app_restarts()
+    log("health: waiting up to %d s for the services and the app's first picture (%s)" % (HEALTH_TIMEOUT, h["tag"]))
+    while True:
+        now = time.time()
+        v = health_verdict(sysm.units_down(), sysm.app_first_frame(start), now - start, sysm.app_restarts() - r0, h["boots"])
+        if v == "ok":
+            st["health"], st["phase"] = None, "idle"
+            if (st.get("lastInstall") or {}).get("tag") == h["tag"]:
+                st["lastInstall"]["result"] = "installed"
+            event(st, "installed", "Teslalinux %s is running (was %s); up %d s after the restart"
+                  % (h["tag"], h.get("from") or "?", now - start), notice=True, now=now)
+            save_state(st)
+            return True
+        if v.startswith("fail"):
+            go_back(st, v[len("fail: "):], "health", int(now))
+            save_state(st)
+            return False
+        time.sleep(HEALTH_POLL)
+
+
+# ---------------------------------------------------------------------------- the cycle
+
+def refresh(st):
+    st["installed"] = sysm.installed()
+    st["repo"] = sysm.release_repo()
+    st["unavailable"] = sysm.unavailable_reason()
+
+
+def cycle(st, flags, settings, now, booting=False):
+    refresh(st)
+    if st["unavailable"]:
+        st["phase"] = "idle"
+        event(st, "unavailable", st["unavailable"], now=now)
+        return st
+    if st.get("health"):
+        return st  # the health unit decides
+    if st.get("phase") not in ("idle", "health", "restarting"):
+        st["phase"] = "idle"  # a run cut short (power loss)
+    if "go-back" in flags:
+        go_back(st, "asked for on the settings page", "went-back", now)
+        return st
+    inst_tag = (st["installed"] or {}).get("release")
+    if st.get("pending") and not gh.newer(st["pending"]["tag"], inst_tag):
+        st["pending"] = None  # installed some other way meanwhile
+        shutil.rmtree(_p("pending"), ignore_errors=True)
+    if "check" in flags:
+        for tag in [t for t, b in st["bad"].items() if b.get("kind") in RETRY_KINDS]:
+            del st["bad"][tag]
+    if not booting and ("check" in flags or check_due(st, now)):
+        if not check(st, now):
+            return st
+    rel = offered(st)
+    st["available"] = rel
+    if rel and ("download" in flags or "metered" in flags) and rel["tag"] in st["bad"]:
+        del st["bad"][rel["tag"]]  # the driver's own choice: tried again
+    if "metered" in flags and rel:
+        st["meteredFor"] = rel["tag"]
+    if rel and rel["tag"] in st["bad"]:
+        if not st.get("pending"):
+            event(st, "skipped", "%s is not installed automatically: %s" % (rel["tag"], st["bad"][rel["tag"]]["reason"]), now=now)
+        rel = None
+    elif not rel and not st.get("pending"):
+        if st.get("latest"):
+            event(st, "up-to-date", "Teslalinux %s is the latest release" % inst_tag, now=now)
+    if rel and not (st.get("pending") and st["pending"]["tag"] == rel["tag"]) and not booting:
+        if settings["autoUpdate"] or "download" in flags or st.get("meteredFor") == rel["tag"]:
+            allowed, why, _metered = sysm.download_allowed(st.get("meteredFor") == rel["tag"])
+            if not allowed:
+                event(st, "waiting-unmetered", "%s is available; %s" % (rel["tag"], why), now=now)
+            else:
+                download(st, rel, st.get("meteredFor") == rel["tag"], now)
+        else:
+            event(st, "available", "%s is available; automatic updates are off" % rel["tag"], now=now)
+    if st.get("pending"):
+        if "install-now" in flags:
+            install(st, "Install now on the settings page", now)
+        elif booting and settings["autoUpdate"]:
+            install(st, "at the start of the device", now)
+        elif settings["autoUpdate"] and not booting:
+            idle, why = sysm.car_idle()
+            if idle:
+                install(st, "the car is not connected (%s)" % why, int(time.time()))
+            else:
+                event(st, "waiting-idle", "%s is ready; it installs when the car is not connected, or at the next start (%s)"
+                      % (st["pending"]["tag"], why), now=now)
+        else:
+            event(st, "ready", "%s is ready; Install now installs it" % st["pending"]["tag"], now=now)
+    return st
+
+
+# ---------------------------------------------------------------------------- commands
+
+def cmd_run():
+    with Lock(wait=False) as lk:
+        if lk is None:
+            log("another run holds the lock")
+            return 0
+        for _ in range(3):  # requests that arrive during a run are served by the same run
+            flags = take_flags()
+            st = load_state()
+            cycle(st, flags, load_settings(), int(time.time()))
+            save_state(st)
+            if not any(os.path.exists(_p("flags", n)) for n in FLAGS):
+                break
+    return 0
+
+
+def cmd_boot():
+    with Lock(wait=True):
+        st = load_state()
+        if st.get("pending") and not st.get("health"):
+            cycle(st, {}, load_settings(), int(time.time()), booting=True)
+            save_state(st)
+    return 0  # never fail the start: the device runs whatever is installed
+
+
+def cmd_health():
+    with Lock(wait=True):
+        st = load_state()
+        if st.get("health"):
+            refresh(st)
+            watch_health(st)
+            save_state(st)
+    return 0
+
+
+def kick():
+    if E("RELEASE_UPDATE_FAKE_SYSTEMCTL") and E("RELEASE_UPDATE_KICK_RUNS"):  # tests: the run itself
+        return cmd_run()
+    return sysm.systemctl("start", "--no-block", SERVICE, log=log, timeout=30)
+
+
+def status():
+    st = load_state()
+    refresh(st)
+    st.pop("history", None)
+    return {"settings": load_settings(), "state": st, "previous": previous_of(st), "progress": read_json(_p("progress.json"))}
+
+
+USAGE = "usage: teslalinux-release-update run|boot|health|status|check|download [--metered]|install-now|go-back|auto on|off"
+
+
+def main(argv):
+    cmd, rest = (argv[0], argv[1:]) if argv else ("", [])
+    if cmd == "run" and not rest:
+        return cmd_run()
+    if cmd == "boot" and not rest:
+        return cmd_boot()
+    if cmd == "health" and not rest:
+        return cmd_health()
+    if cmd == "status" and not rest:
+        print(json.dumps(status(), indent=1, sort_keys=True))
+        return 0
+    if (cmd, rest) in (("check", []), ("download", []), ("download", ["--metered"]), ("install-now", []), ("go-back", [])):
+        if os.geteuid() != 0 and not E("RELEASE_UPDATE_STATE_DIR"):
+            print("teslalinux-release-update: run as root", file=sys.stderr)
+            return 1
+        set_flag("metered" if rest else cmd)
+        return kick()
+    if cmd == "auto" and rest in (["on"], ["off"]):
+        s = load_settings()
+        s["autoUpdate"] = rest == ["on"]
+        write_json(_p("settings.json"), s)
+        return kick() if s["autoUpdate"] else 0
+    print(USAGE, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

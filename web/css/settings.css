@@ -1578,6 +1578,43 @@
   transform: rotate(180deg);
 }
 
+/* a release's notes (Settings > Updates > Teslalinux): plain text, the changelog's shape */
+#page-settings .relnotes {
+  margin: 4px 0 8px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--raised);
+  font-size: 14px;
+  color: var(--ink-2);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+#page-settings .relnotes h3 {
+  margin: 10px 0 2px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+#page-settings .relnotes h3:first-child {
+  margin-top: 2px;
+}
+
+#page-settings .relnotes p {
+  margin: 4px 0;
+}
+
+#page-settings .relnotes .relnotes-sub {
+  font-style: italic;
+  color: var(--ink-3);
+}
+
+#page-settings .relnotes ul {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
 #page-settings .pkgs {
   margin: 4px 0 8px;
   padding: 6px 14px;

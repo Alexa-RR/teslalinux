@@ -75,7 +75,10 @@ Changes from upstream:
     `host/teslalinux-network`, upstream's softAp and offline routes; upstream's apply-at-boot banner is
     gone), and the backup Wi-Fi, applied at once (a second USB Wi-Fi card joins a saved network when
     LTE has no internet or whenever connected; Add a network with a scan, `GET /api/wifiScan`).
-  * **Updates**: Waze's own (`tools/appupdate`, docs/APP-UPDATES.md: source, automatic updates, version
+  * **Updates**: Teslalinux itself, first (`host/teslalinux-release-update`, docs/SYSTEM-UPDATES.md:
+    installed and available release with its notes, Check now, download progress, Download over
+    mobile data, Install now, Go back, the automatic switch, or "Not available" with the reason;
+    `GET/POST /api/releaseUpdate`), Waze's own (`tools/appupdate`, docs/APP-UPDATES.md: source, automatic updates, version
     pin, LTE downloads, Check now, upload of a bundle with progress, Google Play via a token dispenser
     under Advanced; `GET /api/appUpdate`, `POST /api/appUpdateSettings`, `/api/appUpdateCheck`,
     `/api/appUpdateUpload?name=`, unbuffered in nginx), the system's (apt or apk: check, two-tap

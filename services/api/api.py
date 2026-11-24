@@ -101,6 +101,11 @@ The settings page's Status, Network and System update sections (new routes only)
 * GET  /api/systemUpdate  the OS updater's state (teslalinux-system-update: apt or apk), updates
                           available, last check/upgrade, reboot needed, log tail, current uplink kind
 * POST /api/systemUpdate  JSON {action: "check"|"upgrade"|"reboot"}; 409 while a run is going on
+* GET  /api/releaseUpdate the Teslalinux release updater (host/teslalinux-release-update, docs/SYSTEM-UPDATES.md):
+                          supported (or why not), the installed, available, downloaded and previous release,
+                          the release notes, phase, download progress, last check and result, notices
+* POST /api/releaseUpdate JSON {action: "check"|"download"|"downloadMetered"|"installNow"|"goBack"} or
+                          {autoUpdate: bool}: the helper (root, one sudoers rule) records it and runs; {ok, message}
 
 PalGate gates (services/gates/gates.py, docs/GATES.md), new routes only:
 * GET/POST /api/gates*    forwarded unchanged to teslalinux-gates on 127.0.0.1:8082 (TESLALINUX_GATES_URL):
@@ -226,10 +231,10 @@ DISPLAY_FIELDS = (("width", tp.VD_WIDTH), ("height", tp.VD_HEIGHT), ("density", 
 REAR_DISPLAY_FIELDS = ("isRearDisplayEnabled", "isRearDisplayPrioritised")
 ROUTES_GET = {"configuration", "displayState", "deviceInfo", "health", "openUpdater", "certificate", "appState",
               "appUpdate", "locale", "keyboard", "appInterface", "status", "network", "systemUpdate", "wifiScan",
-              "gpuSpeed", "audioOutput"}
+              "gpuSpeed", "audioOutput", "releaseUpdate"}
 ROUTES_POST = set(TEXT_ROUTES) | {"displayState", "appRestart", "appUpdateSettings", "appUpdateCheck", "appUpdateUpload",
                                   "locale", "keyboard", "appInterface", "network", "systemUpdate", "gpuSpeed",
-                                  "audioOutput"}
+                                  "audioOutput", "releaseUpdate"}
 
 
 def props():
@@ -1929,6 +1934,133 @@ def sysupdate_action(action):
     return 200, "ok"
 
 
+# ---------------------------------------------------------------------------- Teslalinux releases
+
+RELEASE_UPDATE = os.environ.get("TESLALINUX_RELEASE_UPDATE", "/usr/local/bin/teslalinux-release-update")
+RELEASE_UPDATE_DIR = os.environ.get("TESLALINUX_RELEASE_UPDATE_DIR", "/var/lib/teslalinux/release-update")
+# POST /api/releaseUpdate {"action": ...}: the helper's command for each (exactly the sudoers rule's)
+RELEASE_ACTIONS = {"check": ["check"], "download": ["download"], "downloadMetered": ["download", "--metered"],
+                   "installNow": ["install-now"], "goBack": ["go-back"]}
+RELEASE_PHASES = ("idle", "downloading", "installing", "restarting", "health", "rolling-back")
+
+
+def release_update_running():
+    import fcntl
+    try:
+        fd = os.open(os.path.join(RELEASE_UPDATE_DIR, "lock"), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def release_unsupported():
+    """Why this device does not update itself to a release (as AOSP reports a missing feature), or None."""
+    if (_env_file("/etc/os-release").get("ID") or "") == "alpine":
+        return "The Alpine image is updated by writing a new image to its card. Releases install on Raspberry Pi OS."
+    if not os.path.exists(RELEASE_UPDATE):
+        return "This installation has no release updater. Install a release with install.sh to get it."
+    return None
+
+
+def release_update_state():
+    """GET /api/releaseUpdate: the release updater's state (root's file, world-readable, nothing secret
+    in it), the installed and previous release, the download's progress and whether a run is going on."""
+    why = release_unsupported()
+    st = _read_json(os.path.join(RELEASE_UPDATE_DIR, "state.json")) or {}
+    why = why or st.get("unavailable")
+    raw = _read_json(os.path.join(RELEASE_UPDATE_DIR, "settings.json")) or {}
+    running = release_update_running()
+    phase = st.get("phase") if st.get("phase") in RELEASE_PHASES else "idle"
+    if not running and phase in ("downloading", "installing", "rolling-back"):
+        phase = "idle"  # a run cut short
+    prog = _read_json(os.path.join(RELEASE_UPDATE_DIR, "progress.json")) if phase == "downloading" else None
+
+    def rel(v):
+        if not isinstance(v, dict) or not isinstance(v.get("tag"), str):
+            return None
+        return {"tag": v["tag"], "publishedAt": v.get("publishedAt"), "size": v.get("size"),
+                "notes": v.get("notes") if isinstance(v.get("notes"), str) else ""}
+    avail = rel(st.get("available"))
+    pend = rel(st.get("pending"))
+    if pend and avail and avail["tag"] == pend["tag"]:
+        pend["notes"] = avail["notes"]
+    li = st.get("lastInstall") if isinstance(st.get("lastInstall"), dict) else {}
+    inst = dist_info()
+    prev = None
+    if li.get("tag") and inst and li.get("tag") == inst.get("release") and isinstance(li.get("fromDist"), str) \
+            and os.path.isdir(li["fromDist"]) and os.path.realpath(li["fromDist"]) != os.path.realpath(os.path.dirname(DIST_MANIFEST)):
+        prev = li.get("from") or os.path.basename(li["fromDist"])
+    else:
+        prev = release_previous_from_backups()
+    bad = st.get("bad") if isinstance(st.get("bad"), dict) else {}
+    iface, _gw = default_route()
+    return {
+        "supported": why is None, "unsupportedReason": why,
+        "settings": {"autoUpdate": raw.get("autoUpdate") if isinstance(raw.get("autoUpdate"), bool) else True},
+        "installed": inst, "repo": st.get("repo"), "previous": prev,
+        "available": avail, "pending": pend, "skipped": bad.get(avail["tag"]) if avail else None,
+        "phase": phase, "running": running,
+        "progress": {"bytes": prog.get("bytes"), "total": prog.get("total")} if isinstance(prog, dict) else None,
+        "health": {"tag": st["health"].get("tag")} if isinstance(st.get("health"), dict) else None,
+        "lastCheck": st.get("lastCheck") or 0, "lastCheckOk": st.get("lastCheckOk") or 0,
+        "lastResult": st.get("lastResult") or "never-run", "lastMessage": st.get("lastMessage") or "",
+        "notices": (st.get("notices") or [])[-5:],
+        "uplink": iface_kind(iface) if iface else None,
+    }
+
+
+def release_previous_from_backups():
+    """The release `teslalinux rollback` returns to (the installer's latest backup set's dist.before),
+    when it is on disk and not the active one: its release tag or build name."""
+    root = os.environ.get("TESLALINUX_BACKUP_ROOT", "/var/lib/teslalinux/backup")
+    try:
+        sets = sorted(n for n in os.listdir(root) if n[:1] == "2")
+    except OSError:
+        return None
+    if not sets:
+        return None
+    before = (_read(os.path.join(root, sets[-1], "dist.before")) or "").strip()
+    if not before or not os.path.isdir(before) or os.path.realpath(before) == os.path.realpath(os.path.dirname(DIST_MANIFEST)):
+        return None
+    for line in (_read(os.path.join(before, "MANIFEST")) or "").splitlines():
+        if line.startswith("release=") and DIST_VALUE_RE.fullmatch(line[8:].strip()):
+            return line[8:].strip()
+    return os.path.basename(before)
+
+
+def release_update_action(req):
+    """POST /api/releaseUpdate {"action": check|download|downloadMetered|installNow|goBack} or
+    {"autoUpdate": bool}: the helper (root, one sudoers rule) records the request and starts its
+    service; (http code, message)"""
+    if not isinstance(req, dict) or len(req) != 1:
+        return 400, "invalid request"
+    if "autoUpdate" in req:
+        if not isinstance(req["autoUpdate"], bool):
+            return 400, "invalid request"
+        args = ["auto", "on" if req["autoUpdate"] else "off"]
+    elif req.get("action") in RELEASE_ACTIONS:
+        args = RELEASE_ACTIONS[req["action"]]
+    else:
+        return 400, "invalid request"
+    why = release_unsupported()
+    if why:
+        return 409, why
+    try:
+        r = subprocess.run(_root([RELEASE_UPDATE] + args), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        return 500, str(e)
+    if r.returncode != 0:
+        return 500, (r.stderr.strip().splitlines() or ["failed"])[-1]
+    return 200, "ok"
+
+
 # ---------------------------------------------------------------------------- certificate
 
 def certificate_state():
@@ -2060,6 +2192,8 @@ class Handler(BaseHTTPRequestHandler):
             q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             log_from = (q.get("log") or [None])[0]
             return self._json(sysupdate_state(int(log_from) if log_from and log_from.isdigit() else None))
+        if route == "releaseUpdate":
+            return self._json(release_update_state())
         if route == "openUpdater":
             # Upstream runs `am start -a android.settings.SYSTEM_UPDATE_SETTINGS` on the Android
             # screen. This platform has no system-update activity (the car image is replaced as a
@@ -2191,6 +2325,13 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(req, dict) or req.get("action") not in ("check", "upgrade", "reboot"):
                 return self._error()
             code, msg = sysupdate_action(req["action"])
+            return self._send(code, json.dumps({"ok": code == 200, "message": msg}).encode(), "application/json")
+        if route == "releaseUpdate":
+            try:
+                req = json.loads(body.decode("utf-8") or "null")
+            except (ValueError, UnicodeDecodeError):
+                return self._error()
+            code, msg = release_update_action(req)
             return self._send(code, json.dumps({"ok": code == 200, "message": msg}).encode(), "application/json")
         if route == "displayState":
             try:
