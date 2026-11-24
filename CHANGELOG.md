@@ -15,6 +15,14 @@ version's.
 
 ## [Unreleased]
 
+### The installer shows it is working
+
+*Installing or updating on the Pi.*
+
+- The long steps (the package lists, ART's boot image, compiling Waze) show a running timer instead
+  of minutes of silence, and say how long they usually take.
+- No more "ignored null byte" warning while Waze is compiled.
+
 ## [0.6.0] - 2026-11-24
 
 Teslalinux now updates itself from Settings. Grok can file Waze reports, Grok's setup takes one

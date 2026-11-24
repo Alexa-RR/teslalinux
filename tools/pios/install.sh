@@ -91,6 +91,32 @@ TTY_OK=0
 log() { printf '\033[1;36m[teslalinux]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[teslalinux] WARNING:\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[teslalinux] ERROR:\033[0m %s\n' "$*"; exit 1; }
+# A step that would print nothing for minutes: runs "$@" with its output in $PROGRESS_OUT (NUL bytes
+# removed afterwards: ART's output can hold them) and shows the time so far, every second on a
+# terminal and every 30 s otherwise (the updater's log). Returns the command's status; the caller
+# removes $PROGRESS_OUT.
+PROGRESS_OUT=
+run_progress() {
+  local label=$1 pid t0=$SECONDS rc=0 shown=0 e
+  shift
+  PROGRESS_OUT=$(mktemp)
+  "$@" >"$PROGRESS_OUT" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    e=$((SECONDS - t0))
+    if [[ -t 1 ]]; then
+      printf '\r  %s ... %d:%02d ' "$label" $((e / 60)) $((e % 60))
+    elif (( e >= (shown + 1) * 30 )); then
+      shown=$((e / 30))
+      printf '  %s ... %d s\n' "$label" "$e"
+    fi
+    sleep 1
+  done
+  wait "$pid" || rc=$?
+  if [[ -t 1 ]]; then printf '\r\033[K'; fi
+  tr -d '\0' <"$PROGRESS_OUT" >"$PROGRESS_OUT.t" && mv "$PROGRESS_OUT.t" "$PROGRESS_OUT"
+  return "$rc"
+}
 ask() { # QUESTION: true on yes; --yes answers yes, no terminal answers no
   [[ ${YES:-0} == 1 ]] && return 0
   [[ $TTY_OK == 1 ]] || return 1
@@ -445,7 +471,12 @@ step_dist() {
 step_packages() {
   export DEBIAN_FRONTEND=noninteractive
   log "  apt-get update"
-  apt-get update -q >/dev/null
+  if ! run_progress "updating the package lists" apt-get update -q; then
+    tail -5 "$PROGRESS_OUT" | sed 's/^/  /'
+    rm -f "$PROGRESS_OUT"
+    die "apt-get update failed"
+  fi
+  rm -f "$PROGRESS_OUT"
   local want=() avail=() missing=() p
   read -r -a want <<<"$(manifest_get packages) ${RUNTIME_PKGS[*]}"
   for p in "${want[@]}"; do
@@ -966,14 +997,16 @@ step_prewarm() {
   # This step runs when the dist changed or no image exists: whatever is cached is stale.
   rm -rf "$TESLA_HOME/.cache/art"
   install -d -o tesla -g tesla "$TESLA_HOME/.cache" "$TESLA_HOME/android-data"
-  log "  building ART's boot image as tesla"
+  log "  building ART's boot image as tesla (a few minutes on a Pi 4)"
   # -Ximage: the location ATL's runtime uses. ART names the cached image after the image location;
   # dalvikvm alone derives it from its own real path (/opt/teslalinux.d/<dist>/bin/../lib/art/..),
   # ATL from where libart.so was loaded (/opt/teslalinux/lib/art/..), so without this the app's first
   # start built a second image of its own (checked on a Pi 4: ATL takes this one as it is)
-  runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
+  run_progress "building the boot image" runuser -u tesla -- env -i HOME="$TESLA_HOME" \
+    PATH="$PREFIX/bin:/usr/bin:/bin" LD_LIBRARY_PATH="$PREFIX/lib" \
     ANDROID_DATA="$TESLA_HOME/android-data" timeout 1800 "$PREFIX/bin/dalvikvm" \
-    "-Ximage:$PREFIX/lib/art/../java/dex/art/oat/boot.art" >/dev/null 2>&1 || true
+    "-Ximage:$PREFIX/lib/art/../java/dex/art/oat/boot.art" || true
+  rm -f "$PROGRESS_OUT"
   if ls "$TESLA_HOME"/.cache/art/*/*boot*.art >/dev/null 2>&1; then
     log "  boot image ready ($(du -sh "$TESLA_HOME/.cache/art" | cut -f1))"
   else
@@ -984,15 +1017,16 @@ step_prewarm() {
   # --compile: android.atl.TlPrewarm in the same class loaders); about 3 minutes for Waze on a Pi 4,
   # which the first start in the car no longer spends
   if [[ -f /var/lib/teslalinux/apps/com.waze/base.apk ]]; then
-    log "  compiling Waze as tesla"
-    local t0=$SECONDS out
-    if out=$(runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH=/usr/bin:/bin ATL_PREFIX="$PREFIX" \
-          timeout 1800 /usr/local/bin/teslalinux-atl --compile 2>&1); then
+    log "  compiling Waze as tesla (about 3 minutes on a Pi 4)"
+    local t0=$SECONDS
+    if run_progress "compiling Waze" runuser -u tesla -- env -i HOME="$TESLA_HOME" PATH=/usr/bin:/bin \
+          ATL_PREFIX="$PREFIX" timeout 1800 /usr/local/bin/teslalinux-atl --compile; then
       log "  Waze compiled in $((SECONDS - t0)) s"
     else
-      printf '%s\n' "$out" | tail -5 | sed 's/^/  /'
+      tail -5 "$PROGRESS_OUT" | sed 's/^/  /'
       warn "Waze was not compiled now; its first start compiles it"
     fi
+    rm -f "$PROGRESS_OUT"
   fi
 }
 
