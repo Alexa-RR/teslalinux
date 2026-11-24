@@ -61,13 +61,25 @@ class FakeCarHost:
         self.tracking = True
         self.reports = []
         self.kinds = []
+        self.stops = []
+        self.route, self.chosen, self.avoid, self.sound = 0, None, [False, False, False], 0
+        self.zooms, self.zoom_open = [], False
         self.reset()
 
     # the app's screens ---------------------------------------------------------------
 
     def reset(self):
-        self.navigating, self.trip = False, None
+        """Waze back on its map, not navigating; told to every connected renderer, as the host
+        tells them every change."""
+        was = self.navigating or self.trip is not None
+        self.navigating, self.trip, self.stops = False, None, []
+        self.route, self.zoom_open = 0, False
         self.stack = [self._map()]
+        if self.clients:
+            if was:
+                self.state({"type": "navigation", "active": False})
+                self.state({"type": "trip", "trip": None})
+            self.publish()
 
     def _map(self):
         # Waze's map strip: its Report button while the map follows the car, else center-on-me
@@ -221,14 +233,106 @@ class FakeCarHost:
             time.sleep(0.2)
             self.trip = trip_for(name, address)
             self.state({"type": "trip", "trip": self.trip})
-            self.stack = [self._screen("NavigationTemplate", {"actionStrip": {"$": "ActionStrip", "actions": [action(90, "icon_outline_search_30px")]}})]
+            self.stops = []
+            self.stack = [self._nav()]
             self.publish()
         threading.Thread(target=later, daemon=True).start()
+
+    def _nav(self):
+        """Waze's navigation screen: search while the drive has no stop (Waze hides it with one),
+        routes and sound; its estimate counts the stops."""
+        sound = ["on", "brief", "alerts", "off"][self.sound]
+        acts = [action(91, "icon_outline_routes_30px"), action(92, "t1_sound_%s_outline_32px" % sound)]
+        if not self.stops:
+            acts.insert(0, action(90, "icon_outline_search_30px"))
+        est = dict(self.trip["destinationTravelEstimates"][0]) if self.trip and self.trip.get("destinationTravelEstimates") else {}
+        if self.stops:
+            est["tripText"] = "‎%d stop⁨" % len(self.stops)
+        # the zoom controls fold into one button until it is pressed
+        zoom = [action(95, "icon_outline_zoom_in_30px"), action(96, "icon_outline_zoom_out_30px")] if self.zoom_open else [action(93, "icon_outline_zoom_in_out_30px")]
+        return self._screen("NavigationTemplate", {"actionStrip": {"$": "ActionStrip", "actions": acts},
+                                                   "destinationTravelEstimate": dict(est, **{"$": "TravelEstimate"}),
+                                                   "mapActionStrip": {"$": "ActionStrip", "actions": zoom + [action(94, "icon_report_button")]}})
+
+    # Waze's routes list ("Alternate routes"), its route options and its sound list, as the VM showed
+    # them with Waze 5.27 (callbacks: routes list select 700, Go 701, settings 702; toggles 710-712;
+    # sound select 720)
+    ROUTES = [(4680, 117.2, "Via 40; 90"), (5640, 136.3, "Via 40; 12")]
+    SOUNDS = ["Normal", "Less chatty", "Only alerts", "Off"]
+
+    def _routes(self):
+        rows = [{"$": "Row", "title": {"$": "CarText", "text": "E", "spans": [{"start": 0, "end": 1, "span": {"$": "DurationSpan", "durationSeconds": s}}]},
+                 "texts": [{"$": "CarText", "text": "D • " + via, "spans": [{"start": 0, "end": 1, "span": {"$": "DistanceSpan", "distance": {"$": "Distance", "displayDistance": d, "displayUnit": 3}}}]}]}
+                for s, d, via in self.ROUTES]
+        return {"header": {"$": "Header", "title": "Alternate routes", "endHeaderActions": [action(702, "icon_outline_settings_30px")]},
+                "itemList": {"$": "ItemList", "items": rows, "selectedIndex": self.route, "onSelectedDelegate": {"$": "OnSelectedDelegateImpl", "$cb": 700}},
+                "navigateAction": action(701, title="Go")}
+
+    def _options(self):
+        rows = []
+        for i, (title, icon) in enumerate((("Avoid toll roads", "icon_tolls_88px"), ("Avoid ferries", "icon_ferries_88px"), ("Avoid freeways", "icon_highways_88px"))):
+            t = {"$": "Toggle", "onCheckedChangeDelegate": {"$": "OnCheckedChangeDelegateImpl", "$cb": 710 + i}, "enabled": True}
+            if self.avoid[i]:
+                t["checked"] = True
+            rows.append({"$": "Row", "title": title, "toggle": t, "image": {"$": "CarIcon", "icon": {"$": "IconCompat", "resName": icon, "type": 2}}})
+        return {"header": {"$": "Header", "title": "Route options"}, "itemList": {"$": "ItemList", "items": rows}}
+
+    def _sound(self):
+        return {"header": {"$": "Header", "title": "Sound"}, "itemList": {"$": "ItemList", "items": [{"$": "Row", "title": s} for s in self.SOUNDS],
+                                                                          "selectedIndex": self.sound, "onSelectedDelegate": {"$": "OnSelectedDelegateImpl", "$cb": 720}}}
+
+    def _on_more(self, c, m):
+        """The routes, route options, sound and zoom messages; whether it was one of them."""
+        t, top = m.get("type"), self.stack[-1]
+        cb = m.get("cb")
+        if t == "click" and top[1] == "NavigationTemplate" and cb == 91:
+            self.push("RoutePreviewNavigationTemplate", self._routes())
+        elif t == "selected" and cb == 700:
+            self.route = m["index"]
+            self.stack[-1] = self._screen("RoutePreviewNavigationTemplate", self._routes())
+            self.stack[-1] = (top[0],) + self.stack[-1][1:]
+            self.publish()
+        elif t == "click" and cb == 701 and top[1] == "RoutePreviewNavigationTemplate":
+            self.chosen = self.route
+            self.stack = [self._nav()]
+            self.publish()
+        elif t == "click" and cb == 702:
+            self.push("MapTemplate", self._options())
+        elif t == "checked" and 710 <= cb <= 712:
+            self.avoid[cb - 710] = m["checked"]  # Waze keeps it without sending the screen again
+        elif t == "click" and top[1] == "NavigationTemplate" and cb == 92:
+            self.push("MapTemplate", self._sound())
+        elif t == "selected" and cb == 720:
+            self.sound = m["index"]
+            self.stack = self.stack[:-1]  # Waze goes back to the map with the new sound icon
+            self.stack[-1] = self._nav()
+            self.publish()
+        elif t == "click" and cb in (93, 95, 96):
+            self.zooms.append({93: "open", 95: "in", 96: "out"}[cb])
+            self.zoom_open = True
+            self.stack[-1] = self._nav()
+            self.publish()
+        else:
+            return False
+        return True
+
+    def _add_stop(self, i):
+        name, addr, _ = PLACES[i]
+        self.stops.append(name)
+        # the trip keeps the destination's name; its estimate is the stop's now
+        est = self.trip["destinationTravelEstimates"][0]
+        self.trip = dict(self.trip, destinationTravelEstimates=[dict(est, remainingDistance={"$": "Distance", "displayDistance": 2.1, "displayUnit": 2},
+                                                                     remainingTimeSeconds=240)])
+        self.state({"type": "trip", "trip": self.trip})
+        self.stack = [self._nav()]
+        self.publish()
 
     def _on(self, c, m):
         self.received.append(m)
         t = m.get("type")
         top = self.stack[-1]
+        if self.navigating and self._on_more(c, m):
+            return
         if t == "navigate":
             if self.refuse_navigate:
                 return self._reply(c, m, False, self.refuse_navigate)
@@ -293,12 +397,24 @@ class FakeCarHost:
             self.publish()
         elif t == "click":
             cb = m["cb"]
-            if top[1] in ("MapWithContentTemplate", "NavigationTemplate") and cb in (24, 90):
-                self.push("SearchTemplate", {"searchCallbackDelegate": {"$": "SearchCallbackDelegateImpl", "$cb": 42}, "searchHint": "Where to?"})
-            elif top[1] == "PlaceListNavigationTemplate" and 55 <= cb < 55 + len(PLACES):
-                name, addr, _ = PLACES[cb - 55]
+            if top[1] == "MapWithContentTemplate" and cb == 24 or top[1] == "NavigationTemplate" and cb == 90 and not self.stops:
+                # Waze's search screen: the field, and its own lists (Recent; Home and Work only once set)
+                recent = dict(row(70, "Recent"), image={"$": "CarIcon", "icon": {"$": "IconCompat", "resName": "icon_t2_history_32px", "type": 2}})
+                self.push("SearchTemplate", {"searchCallbackDelegate": {"$": "SearchCallbackDelegateImpl", "$cb": 42}, "searchHint": "Where to?",
+                                             "itemList": {"$": "ItemList", "items": [recent]}})
+            elif top[1] == "SearchTemplate" and cb == 70:
+                self.push("ListTemplate", {"header": {"$": "Header", "title": "Recent"},
+                                           "singleList": {"$": "ItemList", "items": [row(55 + i, n) for i, (n, a, d) in enumerate(PLACES)]}})
+            elif top[1] in ("PlaceListNavigationTemplate", "ListTemplate") and 55 <= cb < 55 + len(PLACES):
+                i = cb - 55
+                name, addr, _ = PLACES[i]
+                # Waze's card: Go now; during a drive New drive and Add a stop (its primary action)
+                acts = [action(146 + i, title="New drive"), dict(action(160 + i, title="Add a stop"), flags=1)] if self.navigating \
+                    else [action(146 + i, title="Go now")]
                 self.push("MapTemplate", {"pane": {"$": "Pane", "rows": [row(None, name, ["Open now"]), row(None, "‎Location⁩", [addr])],
-                                                   "actions": [action(146 + cb - 55, title="Go now")]}})
+                                                   "actions": acts}})
+            elif top[1] == "MapTemplate" and 160 <= cb < 160 + len(PLACES):
+                self._add_stop(cb - 160)
             elif top[1] == "MapTemplate" and cb >= 146:
                 name, addr, _ = PLACES[cb - 146]
                 self._start_drive(name, addr)
@@ -310,6 +426,24 @@ class FakeCarHost:
                                                           {"start": 0, "end": 22, "span": {"$": "DistanceSpan", "distance": {"$": "Distance", "displayDistance": d, "displayUnit": 1}}}]}])
                     for i, (n, a, d) in enumerate(PLACES)]
             self.push("PlaceListNavigationTemplate", {"itemList": {"$": "ItemList", "items": rows}})
+
+
+class FakeGpsFeed:
+    """services/gps/gps.py's feed: the latest fix as one line to every new reader."""
+
+    def __init__(self, line="29.55800 34.95100 25.0 172.0 8.0 %d\n"):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.addr = "127.0.0.1:%d" % self.sock.getsockname()[1]
+        self.line = line
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            c, _ = self.sock.accept()
+            with c:
+                c.sendall((self.line % int(time.time() * 1000) if "%d" in self.line else self.line).encode())
 
 
 class FakeIntentChannel:

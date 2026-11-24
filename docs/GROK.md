@@ -1,8 +1,10 @@
 # Grok remote control
 
-Grok, the assistant in the car, can drive Waze on the device: start navigation, search places with
-Waze's own search, say when you will arrive and what the next turn is, end the drive, and send Waze
-reports (police, a crash, a hazard, traffic, ...) when you ask for one. It does
+Grok, the assistant in the car, can drive Waze on the device: start navigation to a place given in
+any form (an address, a map link, coordinates, ...), add a stop, choose a route, search places with
+Waze's own search, change Waze's sound and map, say when you will arrive and what the next turn is,
+end the drive, send Waze reports when you ask for one, and, if you allow it, open your PalGate
+gates. It does
 this through a remote MCP server (Model Context Protocol) that runs on the device and is reached
 through a Cloudflare Tunnel on **your own domain**, behind Cloudflare Access. Nothing of the
 teslalinux project is in the path, and the device is not reachable from the internet until you
@@ -21,20 +23,103 @@ Grok (grok.com connector) --HTTPS--> mcp.<your-domain>   Cloudflare Access: you 
 
 ## What Grok can do
 
-| Tool | Car mode | Phone mode |
-|---|---|---|
-| `navigate_to` (an address or place name, coordinates, or a search result) | yes: Waze's car session gets the destination as Android Auto hands one over, and Waze starts driving | text and coordinates: Waze's deep link (`waze://?q=...&navigate=yes`) |
-| `search_places` (Waze's own search, around the car) | yes: name, address, distance and a `resultId` for `navigate_to` | no |
-| `trip_status` (destination, arrival time, distance and time left, next turn) | yes: what Waze reports to the car | no |
-| `stop_navigation` | yes | no: Waze offers other apps no way to end a drive |
-| `report` (a Waze report at the car's position: category and kind) | yes: through Waze's own Report button and screens | no: Waze's report screens are not reachable from outside the app |
-| `report_types` (the categories and kinds Waze offers now) | yes | no |
+One tool per thing Waze's car screen does or shows; no tool does "anything". Car mode is Settings >
+Waze interface: Car. In Phone mode only `navigate_to` (Waze's deep link), `car_position`,
+`device_status` and the gates work; the others say they need Car mode.
 
-A tool that cannot do its job says why, in plain words, so Grok can tell you. Searching works on
-Waze's search screens out of sight: the car screen keeps its panels (the turn card holds still for
-the few seconds it takes), but Waze's map may move to the results and back. Waze's car search
-looks around the car's position only and does not give coordinates. Every request is logged on
-the device (Settings > Grok, "What Grok asked for").
+**Driving**
+
+| Tool | What it does |
+|---|---|
+| `navigate_to` | Starts a drive. The place in any form (below), or `destinations`: places in visiting order, Waze drives to the last and the ones before go in as stops as far as Waze allows. Answers with the trip, or "Waze is waiting on the route preview" (Go now, Routes, Avoid), or Waze's own refusal ("Something went wrong - try again") |
+| `start_drive` | Presses the button Waze waits on: Go now on its route preview, Go now / Resume drive on its "Driving to ...?" card (never an error's OK) |
+| `stop_navigation` | Ends the drive (Waze's end-drive callback) |
+| `add_stop` | During a drive, adds a stop before the destination the way the car screen does: the place's card, **Add a stop** |
+| `remove_stop` | Says what to do instead: Waze's car interface has no way to remove a stop |
+| `route_options` | The routes Waze offers: on its route preview, or during a drive its "Alternate routes": time, distance, via, Waze's labels (tolls, traffic, ...) and which is selected |
+| `choose_route` | Drives route N of `route_options` (Waze's list, the route, Go) |
+| `set_avoid_tolls`, `set_avoid_ferries`, `set_avoid_freeways` | Waze's three Route options toggles (from its route preview or during a drive) |
+
+**Places**
+
+| Tool | What it does |
+|---|---|
+| `search_places` | Waze's own search around the car: name, distance, Waze's info line and a `resultId`; `addresses: true` also reads each place's card |
+| `place_details` | Everything Waze's card shows for a result: address, hours, rating, prices, its buttons |
+| `recent_places`, `saved_places` | Waze's own lists from its search screen, with `resultId`s (saved places only when the Waze account has some) |
+
+**Waze's controls**
+
+| Tool | What it does |
+|---|---|
+| `set_sound`, `mute_voice`, `unmute_voice` | Waze's Sound modes (Normal, Less chatty, Only alerts, Off); from the map during a drive, from Waze's settings otherwise |
+| `zoom_in`, `zoom_out`, `recenter` | Waze's map buttons (`steps` presses) and center-on-car; the driver sees these, as intended |
+| `answer_alert` | Presses a button of the alert Waze shows ("Still there" / "Not there" for a report ahead) |
+| `report`, `report_types` | Waze reports (below) |
+
+**Reading** (answered from what Waze last sent the car screen, without touching Waze; at once, even while another tool works)
+
+| Tool | What it returns | Not known when |
+|---|---|---|
+| `trip_status` | Navigating or not, destination, arrival, time and distance left, the stops Waze counts ("1 stop", the estimates are then to the stop), the stop added by `add_stop`, the next turn | Phone mode; before Waze's car session starts |
+| `next_turn` | The next turn and the one after: instruction, maneuver, road, distance, roundabout exit, lanes when Waze gives them, the current road | Waze gives no junction pictures |
+| `current_speed` | Speed and the road's limit as Waze's speedometer shows them | the device reads Waze's speedometer only for the Waze versions it knows |
+| `waze_alerts` | Waze's alerts and messages of the last minutes (title, subtitle, buttons) | |
+| `current_screen` | What Waze's car screen shows: kind, titles, items, what it waits for, its controls, day or night, driving restrictions | |
+| `car_position` | The car's GPS fix: latitude, longitude, heading, speed, accuracy, age | no fix in the last 10 s (Settings > Waze > Car's position) |
+| `device_status` | The connection: LTE / Wi-Fi / Ethernet, LTE operator and signal, Wi-Fi network and signal, internet and its latency, the car hotspot's clients, CPU temperature; battery: not applicable | the settings service does not answer |
+
+A tool that cannot do its job says why, in plain words, so Grok can tell you. Every request, reads
+included, is logged on the device (Settings > Grok, "What Grok asked for"). Nothing is sent to
+anyone else: Waze's car interface has no way to share a drive, and calling a place needs a phone.
+
+### Places in any form
+
+`navigate_to` (`destination` or `link`) and `add_stop` (`place` or `link`) take a place however it is
+written, and the answer says what it was read as and how (`understood`):
+
+- An address or a place name in any language (Hebrew too): Waze's own search near the car.
+- Map links, read on the device: Waze (`waze.com/ul/h<geohash>`, `?ll=`, `?q=`, `waze://`),
+  Google Maps (`/@lat,lon`, the place's `!3d…!4d…`, `?q=`, `?query=`, `?destination=`,
+  `/maps/dir/…`, `/maps/search/…`, a place name), Apple Maps (`?ll=`, `?coordinate=`, `?daddr=`,
+  `?q=`, `?address=`, `?sll=`), OpenStreetMap (`?mlat=&mlon=`, `#map=z/lat/lon`), Bing (`sp=point.`,
+  `where1=`, `cp=lat~lon`), HERE (`/l/lat,lon`), `geo:` URIs. A link that names a place without
+  coordinates goes to Waze's search with that name. Short links (`maps.app.goo.gl`, `goo.gl/maps`)
+  are followed: HEAD requests only, redirects only, only to those hosts, 5 s, at most 5 hops, no
+  cookies; nothing else is fetched.
+- Coordinates: decimal degrees with signs or N/S/E/W, degrees and minutes, degrees minutes seconds,
+  `lat lon` or `lat, lon` (longitude first only when the numbers or the letters leave no doubt).
+- Plus Codes (full; a short one from the car's position), geohashes, Israeli grid (ITM, the New
+  Israeli Grid) `E N` or `N E` pairs (converted on the device, within about 3 m of PROJ).
+- Home, Work (on Waze's search screen once set), a saved place by name (`saved: …`), "my last
+  destination" (Waze's recent places).
+- what3words is not supported: it needs what3words' paid online service.
+
+### Stops
+
+Waze's car interface takes **one stop per drive**: its place card offers **Add a stop** during a
+drive, and while a stop is set its navigation screen hides search. It has no list of stops and no
+way to remove one. With a stop, Waze's trip keeps the final destination's name and its estimate is
+to the stop; the car page shows Waze's "1 stop" with the destination's name after it, in both looks.
+
+### Speed
+
+The service keeps one connection to Waze's car host open (`services/grok/carlink.py`): the reader
+keeps Waze's latest screen, trip, alerts and speedometer, so the reading tools answer in a few
+milliseconds, and every tap waits on the exact screen it causes (no fixed pauses; a press Waze drops
+while it changes screens is made again with the screen's current callback). What a tool learns
+about Waze's screens (the report categories and kinds, the "Add a stop" button) is kept per Waze
+version (`flows.json`); `report_types` answers from it at once and is read again when Waze's menu
+changes.
+
+### PalGate gates
+
+`list_gates` lists the gates the driver shows on the map (Settings > Gates): id, name, the outputs of
+a two-output gate, auto-open, and the distance when the car's and the gate's positions are known.
+`open_gate` opens one (by id or name, `output` for a two-output gate) through the gates service the
+car page uses (`docs/GATES.md`) and returns PalGate's answer. Opening is a physical action: it needs
+Settings > Grok > **Let Grok open gates** (off by default) and `confirm: true` on every call, and
+every call is in the log. Tested against the gates service's PalGate mock only.
 
 ### Reports
 
@@ -62,8 +147,6 @@ too, and the tool returns it. A failure comes back as Waze's own error.
 - Reports go to Waze's live service and other drivers see them, so Grok is told to report only what
   the driver asks for.
 
-Not offered to Grok: PalGate gates (`docs/GATES.md`). They could become a separate opt-in later.
-
 ## What you need
 
 - A domain on your Cloudflare account (its DNS on Cloudflare). Any plan.
@@ -82,7 +165,7 @@ Not offered to Grok: PalGate gates (`docs/GATES.md`). They could become a separa
 2. Sign in to Cloudflare. On the consent page, check that the app is **Teslalinux**, choose the account
    with your domain, and allow it. It asks for exactly what the setup needs: DNS Write, Zone Read,
    Access: Apps and Policies Write, Access: Organizations, Identity Providers, and Groups Read,
-   Cloudflare One Connectors Write (the tunnel), Account Settings Read (which accounts you allowed)
+   Cloudflare One Connector: cloudflared Write (the tunnel), Account Settings Read (which accounts you allowed)
    and User Details Read (your email address, for the Access rule).
 3. Cloudflare sends you back to the device (`https://car.alexahub.dev/api/grok/oauth/callback`). The
    device creates (or, run again, updates) a tunnel named `teslalinux-<hostname>`, the DNS record for
@@ -193,7 +276,7 @@ to sign in again after two weeks.
 - The tunnel token lives in `/etc/teslalinux/grok/tunnel.env` (root, 0600); systemd hands it to
   cloudflared, which runs as a user of its own. The API token of the automatic setup is never
   written anywhere.
-- Grok can only use the six tools above.
+- Grok can only use the tools above. Opening a gate also needs its own switch and `confirm: true`.
 
 ## On the device
 
@@ -206,7 +289,9 @@ to sign in again after two weeks.
 | Tunnel token | `/etc/teslalinux/grok/tunnel.env` (root, 0600) |
 | Tunnel | `teslalinux-cloudflared.service`, `/opt/teslalinux/bin/cloudflared` (pinned in `tools/debvm/versions.env`), metrics on `127.0.0.1:20241` |
 | Action log | `/var/lib/teslalinux/grok/actions.jsonl` (the service user's, 0600) |
-| Waze | ATL's car app channel `127.0.0.1:9995` (Car mode) and intent channel `127.0.0.1:9993` (Phone mode) |
+| What it learned of Waze's screens | `/var/lib/teslalinux/grok/flows.json`, per Waze versionCode (from the app's `installed.json`) |
+| Waze | ATL's car app channel `127.0.0.1:9995` (Car mode, one connection kept open) and intent channel `127.0.0.1:9993` (Phone mode) |
+| Reads | the GPS feed `127.0.0.1:9997`, the settings API's `/api/status` (`127.0.0.1:8081`), the gates service `127.0.0.1:8082` |
 
 The MCP server speaks Streamable HTTP, statelessly: the current revision (2026-07-28: no
 handshake, `server/discover`, the version in every request) and the earlier ones (2025-03-26 to
@@ -243,9 +328,13 @@ Its scopes, all required, and what each is for. The device requests exactly thes
 | Zone Read | `zone.read` | the domains the login allows, and each one's account |
 | Access: Apps and Policies Write | `access.write` | the Access application with Managed OAuth and its email rule |
 | Access: Organizations, Identity Providers, and Groups Read | `access-acct.read` | the team domain and the login methods |
-| Cloudflare One Connectors Write | `teams-connectors.write` | the tunnel: list, create, its token, its route |
+| Cloudflare One Connector: cloudflared Write | `teams-connector-cloudflared.write` | the tunnel: list, create, its token, its route (the narrowest permission all four accept) |
 | Account Settings Read | `account-settings.read` | the accounts the driver allowed (named when a login has no domain) |
 | User Details Read | `user-details.read` | the driver's email address (`GET /user`) for the Access rule |
+
+Until v0.6.1 the tunnel scope was the wider Cloudflare One Connectors Write (`teams-connectors.write`);
+the client in the dashboard must carry the narrower `teams-connector-cloudflared.write` now, or a
+consent asks for a scope the client does not have.
 
 `Access: Apps and Policies Write` has an account-level id (`access.write`) and a zone-level one
 (`zone-access.write`); the setup uses account-level Access applications, so the client must carry

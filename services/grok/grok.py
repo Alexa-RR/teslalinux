@@ -44,7 +44,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import accessjwt
 import cfoauth
 import cfsetup
+import controls
+import gatectl
+import info
 import mcp
+import routes
+import stops
 import waze
 
 VERSION = "1.0"
@@ -110,6 +115,7 @@ def settings():
         "email": e.get("TESLALINUX_GROK_EMAIL", ""),
         "tunnelId": e.get("TESLALINUX_GROK_TUNNEL_ID", ""),
         "tokenSet": e.get("TESLALINUX_GROK_TOKEN_SET") == "1",
+        "gates": e.get("TESLALINUX_GROK_GATES") == "1",
     }
 
 
@@ -174,11 +180,13 @@ TOOL_LOCK = threading.Lock()
 
 # ------------------------------------------------------------------ the tools
 
-def _tool(fn, name):
+def _tool(fn, name, lock=True):
+    """A tool's handler: logged, and run one at a time when it works Waze's screens (lock); a read
+    tool that answers from the state the car link keeps runs at once, beside them."""
     def run(args, context):
         who = (context or {}).get("who")
         t0 = time.time()
-        if not TOOL_LOCK.acquire(timeout=TOOL_WAIT_S):
+        if lock and not TOOL_LOCK.acquire(timeout=TOOL_WAIT_S):
             text, structured, err = "Another request is still working with Waze; try again in a moment.", None, True
         else:
             try:
@@ -187,7 +195,8 @@ def _tool(fn, name):
             except waze.WazeError as e:
                 text, structured, err = str(e), None, True
             finally:
-                TOOL_LOCK.release()
+                if lock:
+                    TOOL_LOCK.release()
         ACTIONS.add({"t": round(t0, 3), "tool": name, "args": args, "ok": not err, "result": text[:300],
                      "ms": int((time.time() - t0) * 1000), "who": who})
         log("%s %s by %s: %s" % (name, json.dumps(args, ensure_ascii=False)[:200], who or "?", "ok" if not err else "error: " + text[:120]))
@@ -195,39 +204,171 @@ def _tool(fn, name):
     return run
 
 
-DESTINATION = {"type": "string", "description": "Where to go: an address or a place name, searched by Waze (for example 'Dizengoff Center, Tel Aviv')."}
+DESTINATION = {"type": "string", "description": "Where to go, in any form: an address or place name in any language (Waze's "
+                                                "search), a map link (Waze, Google, Apple, OpenStreetMap, Bing, HERE, geo:), "
+                                                "coordinates (decimal, DM, DMS, N/S/E/W), a Plus Code, a geohash, an Israeli "
+                                                "grid (ITM) E N pair, Home, Work, a saved place's name, or 'my last destination'."}
+LATITUDE = {"type": "number", "minimum": -90, "maximum": 90}
+LONGITUDE = {"type": "number", "minimum": -180, "maximum": 180}
+RESULT_ID = {"type": "string", "description": "A resultId from search_places, recent_places or saved_places."}
+LINK = {"type": "string", "description": "A map link (the same as giving it as destination): read on the device; a short "
+                                         "link (maps.app.goo.gl) is followed to its target first."}
+PLACE = {"type": "object", "properties": {
+    "destination": DESTINATION, "latitude": LATITUDE, "longitude": LONGITUDE,
+    "name": {"type": "string", "description": "A name for the coordinates, used in the answer only."},
+    "resultId": RESULT_ID, "link": LINK}, "additionalProperties": False}
+READ = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
+
+
+def navigate(a):
+    if a.get("destinations") is not None:
+        if any(a.get(k) is not None for k in PLACE["properties"]):
+            raise waze.WazeError("give either destinations or one destination, not both")
+        return stops.navigate_many(a["destinations"])
+    return waze.navigate_to(a)
+
+
+ACT = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
+NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
+AVOID = {"type": "object", "properties": {"avoid": {"type": "boolean", "description": "true: avoid them; false: allow them."}},
+         "required": ["avoid"], "additionalProperties": False}
+STEPS = {"type": "object", "properties": {"steps": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1}},
+         "additionalProperties": False}
+
+
+def tool(name, title, description, schema, fn, hints, lock=True):
+    return mcp.Tool(name, title, description, schema, _tool(fn, name, lock), hints)
+
+
+EXTRA_TOOLS = [
+    tool("route_options", "Route options", "The routes Waze offers now: on its route preview before a drive starts, or "
+         "during a drive (its alternate routes). Each with its time, distance, the roads it goes via and Waze's labels "
+         "(tolls, traffic, ...), and which one is selected. Car mode.", NO_ARGS, lambda a: routes.route_options(a), READ),
+    tool("choose_route", "Choose a route", "Drive one of the routes route_options listed (Waze's routes list: the route, "
+         "then Go). Car mode.", {"type": "object", "properties": {"route": {"type": "integer", "minimum": 1, "maximum": 10,
+                                                                             "description": "The route's number from route_options."}},
+                                  "required": ["route"], "additionalProperties": False},
+         lambda a: routes.choose_route(a), dict(ACT, idempotentHint=False)),
+    tool("start_drive", "Start the drive", "Press the button Waze waits on to start a drive: Go now on its route preview, "
+         "or Go now / Resume drive on its 'Driving to ...?' card. Car mode.", NO_ARGS, lambda a: routes.start_drive(a), ACT),
+    tool("set_avoid_tolls", "Avoid toll roads", "Turn Waze's 'Avoid toll roads' route option on or off. Car mode, "
+         "on Waze's route preview or during a drive.", AVOID, lambda a: routes.set_avoid("tolls", a), ACT),
+    tool("set_avoid_ferries", "Avoid ferries", "Turn Waze's 'Avoid ferries' route option on or off. Car mode, on "
+         "Waze's route preview or during a drive.", AVOID, lambda a: routes.set_avoid("ferries", a), ACT),
+    tool("set_avoid_freeways", "Avoid freeways", "Turn Waze's 'Avoid freeways' route option on or off. Car mode, on "
+         "Waze's route preview or during a drive.", AVOID, lambda a: routes.set_avoid("freeways", a), ACT),
+    tool("set_sound", "Waze's sound", "Set Waze's sound to one of its modes: Normal, Less chatty, Only alerts, Off (and "
+         "Smart mute or Beep where Waze offers them). Car mode.",
+         {"type": "object", "properties": {"mode": {"type": "string", "description": "A mode as Waze names it."}},
+          "required": ["mode"], "additionalProperties": False}, lambda a: controls.set_sound(a), ACT),
+    tool("mute_voice", "Mute Waze", "Turn Waze's sound off (its Sound mode Off). Car mode.", NO_ARGS,
+         lambda a: controls.set_sound({"mode": "Off"}), ACT),
+    tool("unmute_voice", "Unmute Waze", "Turn Waze's sound back on (its Sound mode Normal). Car mode.", NO_ARGS,
+         lambda a: controls.set_sound({"mode": "Normal"}), ACT),
+    tool("zoom_in", "Zoom in", "Zoom Waze's map in, as its zoom button does (steps presses). Car mode.", STEPS,
+         lambda a: controls.zoom("in", a), dict(ACT, idempotentHint=False)),
+    tool("zoom_out", "Zoom out", "Zoom Waze's map out, as its zoom button does (steps presses). Car mode.", STEPS,
+         lambda a: controls.zoom("out", a), dict(ACT, idempotentHint=False)),
+    tool("recenter", "Center on the car", "Make Waze's map follow the car again after it was moved. Car mode.", NO_ARGS,
+         lambda a: controls.recenter(a), ACT),
+    tool("answer_alert", "Answer Waze's alert", "Press a button of the alert Waze shows now (for example 'Still there' "
+         "or 'Not there' when it asks about a report ahead). Other drivers see the answer. Car mode.",
+         {"type": "object", "properties": {"answer": {"type": "string", "description": "The button's title."}},
+          "required": ["answer"], "additionalProperties": False}, lambda a: controls.answer_alert(a),
+         dict(ACT, idempotentHint=False, openWorldHint=True)),
+    tool("recent_places", "Recent places", "Waze's recent destinations, as its search screen lists them, with a resultId "
+         "for navigate_to, add_stop or place_details. Car mode.", NO_ARGS, lambda a: waze.place_list("recent", a), READ),
+    tool("saved_places", "Saved places", "Waze's saved places (when the driver's Waze account has some), with a resultId "
+         "for navigate_to, add_stop or place_details. Car mode.", NO_ARGS, lambda a: waze.place_list("saved", a), READ),
+    tool("next_turn", "Next turn", "Waze's next turn and the one after: instruction, maneuver, road, distance, roundabout "
+         "exit and lanes when Waze gives them, and the current road. Car mode; answered from what Waze last sent.",
+         NO_ARGS, lambda a: info.next_turn(a), READ, lock=False),
+    tool("current_speed", "Speed and limit", "The car's speed and the road's speed limit as Waze's speedometer shows "
+         "them, in Waze's unit. Car mode; answered from Waze's last reading.", NO_ARGS, lambda a: info.speed(a), READ, lock=False),
+    tool("waze_alerts", "Waze's alerts", "The alerts and messages Waze showed on the car screen in the last minutes "
+         "(police or hazards ahead, report confirmations, ...). Car mode.",
+         {"type": "object", "properties": {"minutes": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10}},
+          "additionalProperties": False}, lambda a: info.waze_alerts(a), READ, lock=False),
+    tool("current_screen", "Waze's screen", "What Waze's car screen shows now: the kind of screen, its titles and "
+         "items, the buttons it waits for and the controls it offers, and day or night. Car mode.", NO_ARGS,
+         lambda a: info.current_screen(a), READ, lock=False),
+    tool("car_position", "Car position", "The car's GPS position, heading and speed, from the fix the car's browser "
+         "sends the device.", NO_ARGS, lambda a: info.car_position(a), READ, lock=False),
+    tool("device_status", "Device status", "The device's connection: LTE, Wi-Fi or Ethernet, signal, internet "
+         "reachability and latency, and the car hotspot.", NO_ARGS, lambda a: info.device_status(a), READ, lock=False),
+    tool("list_gates", "PalGate gates", "The PalGate gates the driver shows on the map: id, name, outputs (two-output "
+         "gates), whether they open by themselves on arrival, and the distance from the car when both positions are known.",
+         NO_ARGS, lambda a: gatectl.list_gates(a), dict(READ, openWorldHint=True), lock=False),
+    tool("open_gate", "Open a gate", "Open a PalGate gate shown on the map, by id or name (output: which one of a "
+         "two-output gate). A physical action: only when the driver asks, with confirm: true, and only while the driver "
+         "allows it (Settings > Grok > Let Grok open gates). Returns PalGate's answer.",
+         {"type": "object", "properties": {
+             "gate": {"type": "string", "description": "The gate's id or name from list_gates."},
+             "output": {"type": "integer", "minimum": 1, "maximum": 2, "description": "For a two-output gate: 1 or 2."},
+             "confirm": {"type": "boolean", "description": "Must be true: the driver asked to open this gate now."},
+         }, "required": ["gate", "confirm"], "additionalProperties": False},
+         lambda a: gatectl.open_gate(a, settings()["gates"]),
+         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}, lock=False),
+]
+
 TOOLS = [
     mcp.Tool(
         "navigate_to", "Navigate to a place",
-        "Start Waze navigation on the car screen. Give destination (text Waze searches), or latitude and longitude, "
-        "or the resultId of a search_places result. Returns the trip once Waze is driving.",
-        {"type": "object", "properties": {
-            "destination": DESTINATION,
-            "latitude": {"type": "number", "minimum": -90, "maximum": 90},
-            "longitude": {"type": "number", "minimum": -180, "maximum": 180},
-            "name": {"type": "string", "description": "A name for the coordinates, used in the answer only."},
-            "resultId": {"type": "string", "description": "A resultId from search_places."},
-        }, "additionalProperties": False},
-        _tool(lambda a: waze.navigate_to(a), "navigate_to"),
+        "Start Waze navigation: destination (text Waze searches), latitude and longitude, a Waze link, or a resultId. Or "
+        "destinations, places in visiting order: Waze drives to the last, the others become stops as far as Waze "
+        "allows (one per drive; the answer says what was not added). Returns the trip, or what Waze waits for.",
+        {"type": "object", "properties": dict(PLACE["properties"], destinations={
+            "type": "array", "minItems": 1, "maxItems": 10, "items": PLACE,
+            "description": "Several places in visiting order, each {destination} or {latitude, longitude} or {resultId}."}),
+         "additionalProperties": False},
+        _tool(navigate, "navigate_to"),
         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}),
     mcp.Tool(
         "search_places", "Search places in Waze",
-        "Search with Waze's own search, around the car's position (Car mode only). Returns up to limit places with "
-        "name, address, distance and a resultId to pass to navigate_to. The car screen keeps its panels; Waze's map "
-        "may show the results for a few seconds.",
+        "Waze's own search around the car (Car mode): places with name, distance, Waze's info line and a resultId for "
+        "navigate_to, add_stop or place_details. addresses: true also reads each place's card (slower). The car "
+        "screen keeps its panels.",
         {"type": "object", "properties": {
             "query": {"type": "string", "description": "What to look for: a name, an address, or a kind of place ('gas station')."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
+            "addresses": {"type": "boolean", "default": False, "description": "Read each place's address from its card."},
         }, "required": ["query"], "additionalProperties": False},
         _tool(lambda a: waze.search_places(a), "search_places"),
-        {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
+        READ),
+    mcp.Tool(
+        "place_details", "A place's card",
+        "What Waze's card shows for a search_places result: its address, opening hours, rating, prices or other "
+        "lines Waze has, and the actions it offers (Car mode only).",
+        {"type": "object", "properties": {"resultId": RESULT_ID}, "required": ["resultId"], "additionalProperties": False},
+        _tool(lambda a: waze.place_details(a), "place_details"),
+        READ),
+    mcp.Tool(
+        "add_stop", "Add a stop",
+        "During a drive, add a stop before the destination as Waze's car screen does (a place's card, Add a stop): "
+        "place (Waze's first result is taken), latitude and longitude, a Waze link, or a resultId. One stop per drive; "
+        "a second is refused with the reason (Car mode).",
+        {"type": "object", "properties": {
+            "place": {"type": "string", "description": "A name or an address Waze searches."},
+            "latitude": LATITUDE, "longitude": LONGITUDE,
+            "name": {"type": "string", "description": "A name for the coordinates, used in the answer only."},
+            "resultId": RESULT_ID, "link": LINK,
+        }, "additionalProperties": False},
+        _tool(lambda a: stops.add_stop(a), "add_stop"),
+        {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False}),
+    mcp.Tool(
+        "remove_stop", "Remove a stop",
+        "Remove the drive's stop. Waze's car interface has no way to remove a stop, so this explains what to do instead.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        _tool(lambda a: stops.remove_stop(a), "remove_stop", lock=False),
+        {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
     mcp.Tool(
         "trip_status", "Current trip",
-        "Waze's current trip: whether it is navigating, the destination, arrival time, distance and time left, and the "
-        "next turn (Car mode only).",
+        "Waze's current trip: whether it is navigating, the destination, arrival time, distance and time left, the "
+        "stops Waze counts (with the estimates then to the next stop), and the next turn (Car mode only). Answered "
+        "from what Waze last sent, without touching its screens.",
         {"type": "object", "properties": {}, "additionalProperties": False},
-        _tool(lambda a: waze.trip_status(a), "trip_status"),
-        {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
+        _tool(lambda a: waze.trip_status(a), "trip_status", lock=False),
+        READ),
     mcp.Tool(
         "stop_navigation", "Stop navigation",
         "End Waze's current navigation (Car mode only).",
@@ -253,7 +394,7 @@ TOOLS = [
         {"type": "object", "properties": {}, "additionalProperties": False},
         _tool(lambda a: waze.report_types(a), "report_types"),
         {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}),
-]
+] + EXTRA_TOOLS
 SERVER = mcp.Server("teslalinux-waze", VERSION, TOOLS, INSTRUCTIONS)
 
 
@@ -381,7 +522,7 @@ def status():
 
 def post_settings(req):
     out = {}
-    for k in ("enabled", "hostname", "teamDomain", "aud"):
+    for k in ("enabled", "hostname", "teamDomain", "aud", "gates"):
         if k in req:
             out[k] = req[k]
     if not out:

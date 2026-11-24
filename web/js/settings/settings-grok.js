@@ -228,8 +228,8 @@
     const groups = [];
 
     // on / off and the state
-    const sw = UI.row({ id: "grok.enabled", title: "Let Grok control Waze", detail: ready ? "Navigate, search places, read the trip, stop" : "Set it up first (below)",
-      more: ["Grok in the car reaches this device through your own Cloudflare domain: it can start and stop Waze's navigation, search places with Waze, and read the trip. Nothing else.",
+    const sw = UI.row({ id: "grok.enabled", title: "Let Grok control Waze", detail: ready ? "Navigate, stops, routes, search, reports, Waze's sound and map, the trip" : "Set it up first (below)",
+      more: ["Grok in the car reaches this device through your own Cloudflare domain: it can do in Waze what Waze's car screen offers (navigate, add a stop, choose a route, search, report, its sound and map buttons) and read what Waze shows (the trip, the next turn, alerts, the speed), the car's position and the device's connection. Gates only with the switch below.",
         "Off, the tunnel is stopped and the device is not reachable from the internet at all."] });
     const tog = UI.toggle(s.enabled, async (v) => {
       const ok = await UI.save(sw, () => API.post("grokSettings", { enabled: v }), v ? "On" : "Off");
@@ -245,7 +245,16 @@
         st.lastRequest && !st.lastRequest.ok ? "warn" : null],
       ["Waze interface", st.interface === "car" ? "Car (every tool)" : "Phone (navigate only; Car mode for the rest)"],
     ]);
-    groups.push(UI.group("Grok remote control", [sw, facts],
+    // gates: a physical action, so a switch of its own, off until the driver turns it on
+    const gates = UI.row({ id: "grok.gates", title: "Let Grok open gates", detail: s.gates ? "On: Grok may open the PalGate gates shown on the map" : "Off",
+      more: ["With this on, Grok can open a PalGate gate you show on the map (Settings > Gates), when you ask it to: it has to confirm each open, and every open is in the log below.",
+        "Off, Grok can list the gates but never open one."] });
+    UI.setControl(gates, UI.toggle(!!s.gates, async (v) => {
+      const ok = await UI.save(gates, () => API.post("grokSettings", { gates: v }), v ? "On" : "Off");
+      if (ok && token === this._renderToken) this._rerender();
+      return ok;
+    }, "Let Grok open gates"));
+    groups.push(UI.group("Grok remote control", [sw, gates, facts],
       ready ? "On grok.com: Connectors > New Connector > Custom, and the connector address above." : null));
 
     // the automatic setup
@@ -333,6 +342,7 @@
       });
       ctrl.index.push(
         ["grok.enabled", "grok", "Let Grok control Waze", "grok assistant voice remote mcp control connector ai"],
+        ["grok.gates", "grok", "Let Grok open gates", "grok gates palgate open barrier remote"],
         ["grok.connect", "grok", "Connect Cloudflare", "grok cloudflare connect sign in login oauth setup domain"],
         ["grok.setup", "grok", "Set up Grok with an API token", "grok cloudflare tunnel domain access api token setup advanced"],
         ["grok.token", "grok", "Grok tunnel token", "grok cloudflare tunnel token cloudflared"],

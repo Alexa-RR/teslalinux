@@ -93,6 +93,31 @@ def mint(claims=None, key=KEY1, kid="k1", alg="RS256", header=None):
 
 CAR = fake_carhost.FakeCarHost().start()
 INTENT = fake_carhost.FakeIntentChannel()
+sys.path.insert(0, os.path.join(REPO, "services", "gates"))
+sys.path.insert(0, os.path.join(REPO, "services", "gates", "test"))
+import mock_palgate  # noqa: E402
+PALGATE = mock_palgate.MockPalGate().start()
+GPS = fake_carhost.FakeGpsFeed()
+STATUS = {"uplink": {"interface": "wwan0", "kind": "lte"}, "internet": {"reachable": True, "latencyMs": 48},
+          "modem": {"operator": "Partner", "technology": "LTE", "signalPercent": 80, "state": "connected"},
+          "hotspot": {"running": True, "clients": [{"mac": "aa"}]}, "failover": {"wifi": {"ssid": None}},
+          "system": {"cpuTemperature": 51.2}}
+
+
+class StatusApi(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps(STATUS).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+STATUS_SRV = ThreadingHTTPServer(("127.0.0.1", 0), StatusApi)
+threading.Thread(target=STATUS_SRV.serve_forever, daemon=True).start()
 IFACE = os.path.join(TMP, "interface.env")
 CONF = os.path.join(TMP, "grok.env")
 SECRETS = os.path.join(TMP, "secret")
@@ -101,8 +126,14 @@ os.environ.update({
     "TESLALINUX_GROK_HELPER": os.path.join(REPO, "host", "teslalinux-set-grok"), "TESLALINUX_GROK_HELPER_SUDO": "0",
     "TESLALINUX_GROK_NO_SYSTEMCTL": "1", "TESLALINUX_GROK_CARAPP": CAR.addr, "TESLALINUX_GROK_INTENT": INTENT.addr,
     "TESLALINUX_GROK_INTERFACE_ENV": IFACE, "TESLALINUX_GROK_MCP_PORT": "0", "TESLALINUX_GROK_ADMIN_PORT": "0",
-    "TESLALINUX_GROK_TUNNEL_METRICS": "http://127.0.0.1:9/ready",
+    "TESLALINUX_GROK_TUNNEL_METRICS": "http://127.0.0.1:9/ready", "TESLALINUX_GROK_APP_DIR": os.path.join(TMP, "app"),
+    "TESLALINUX_GROK_GPS_FEED": GPS.addr, "TESLALINUX_GROK_API_STATUS": "http://127.0.0.1:%d/api/status" % STATUS_SRV.server_address[1],
+    # the gates service (services/gates) in this process, against its own PalGate mock
+    "TESLALINUX_GATES_DIR": os.path.join(TMP, "gates"), "TESLALINUX_GATES_API": PALGATE.base, "TESLALINUX_GATES_GPS_FEED": "",
 })
+os.makedirs(os.path.join(TMP, "app"))
+with open(os.path.join(TMP, "app", "installed.json"), "w") as f:
+    f.write('{"package":"com.waze","versionCode":1030750,"versionName":"5.27.5.0"}\n')
 
 import accessjwt  # noqa: E402
 import cfoauth  # noqa: E402
@@ -112,7 +143,6 @@ import grok  # noqa: E402
 import mcp  # noqa: E402
 import waze  # noqa: E402
 
-waze.STATE_QUIET_S = 0.15
 
 
 def set_mode(m):
@@ -120,10 +150,10 @@ def set_mode(m):
         f.write("TESLALINUX_APP_INTERFACE=%s\n" % m)
 
 
-def configure(enabled=True):
+def configure(enabled=True, gates=False):
     with open(CONF, "w") as f:
         f.write("TESLALINUX_GROK_ENABLED=%d\nTESLALINUX_GROK_HOSTNAME=mcp.example.com\nTESLALINUX_GROK_TEAM_DOMAIN=%s\n"
-                "TESLALINUX_GROK_AUD=%s\n" % (1 if enabled else 0, TEAM, AUD))
+                "TESLALINUX_GROK_AUD=%s\n%s" % (1 if enabled else 0, TEAM, AUD, "TESLALINUX_GROK_GATES=1\n" if gates else ""))
 
 
 MCP_SRV = grok.serve(0, grok.McpHandler)
@@ -266,9 +296,15 @@ class TestProtocol(unittest.TestCase):
     def test_tools_list(self):
         code, r = rpc("tools/list", version="2025-11-25")
         names = [t["name"] for t in r["result"]["tools"]]
-        self.assertEqual(names, ["navigate_to", "search_places", "trip_status", "stop_navigation", "report", "report_types"])
+        self.assertEqual(names, ["navigate_to", "search_places", "place_details", "add_stop", "remove_stop", "trip_status",
+                                 "stop_navigation", "report", "report_types", "route_options", "choose_route", "start_drive",
+                                 "set_avoid_tolls", "set_avoid_ferries", "set_avoid_freeways", "set_sound", "mute_voice",
+                                 "unmute_voice", "zoom_in", "zoom_out", "recenter", "answer_alert", "recent_places",
+                                 "saved_places", "next_turn", "current_speed", "waze_alerts", "current_screen",
+                                 "car_position", "device_status", "list_gates", "open_gate"])
+        self.assertEqual(len(set(names)), len(names))
         for t in r["result"]["tools"]:
-            self.assertTrue(t["description"] and len(t["description"]) < 320)
+            self.assertTrue(t["description"] and len(t["description"]) < 320, t["name"])
             self.assertEqual(t["inputSchema"]["type"], "object")
         code, r = rpc("tools/list", modern=True)
         self.assertEqual(code, 200)
@@ -328,7 +364,7 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(code, 202)
 
     def test_unknown_tool_and_bad_args(self):
-        code, r = rpc("tools/call", {"name": "open_gate", "arguments": {}}, version="2025-06-18")
+        code, r = rpc("tools/call", {"name": "unlock_doors", "arguments": {}}, version="2025-06-18")
         self.assertEqual(r["error"]["code"], mcp.INVALID_PARAMS)
         text, _, err = call("navigate_to", {})
         self.assertTrue(err)
@@ -375,7 +411,7 @@ class TestWazeCar(unittest.TestCase):
         self.assertEqual(st["sent"], "geo:32.0809,34.7806?q=32.0809,34.7806")
         call("stop_navigation", {})
         CAR.refuse_navigate = "the app's car session is not running yet"
-        text, st, err = call("navigate_to", {"destination": "home"})
+        text, st, err = call("navigate_to", {"destination": "Haifa"})
         self.assertTrue(err)
         self.assertIn("not running yet", text)
 
@@ -386,12 +422,19 @@ class TestWazeCar(unittest.TestCase):
         CAR.seen_by[id(page)] = []
         text, st, err = call("search_places", {"query": "gas station", "limit": 2})
         self.assertFalse(err, text)
+        self.assertNotIn("address", st["results"][0], "the list alone, no cards")
+        text, st, err = call("search_places", {"query": "gas station", "limit": 2, "addresses": True})
+        self.assertFalse(err, text)
         self.assertEqual([r["name"] for r in st["results"]], ["Dor Alon", "Paz"])
         self.assertEqual(st["results"][0]["address"], "37 Derech Shlomo, Tel Aviv")
+        text, det, err = call("place_details", {"resultId": st["results"][0]["resultId"]})
+        self.assertFalse(err, text)
+        self.assertEqual((det["name"], det["address"], det["actions"]), ("Dor Alon", "37 Derech Shlomo, Tel Aviv", ["Go now"]))
+        self.assertIn("Location: 37 Derech Shlomo", text)
         self.assertEqual(st["results"][1]["distance"]["text"], "1200 m")
         self.assertIn("not given", st["coordinates"])
         # the car page saw none of the search screens: only the map again on the release
-        self.assertEqual(CAR.seen_by[id(page)], ["MapWithContentTemplate"])
+        self.assertTrue(CAR.seen_by[id(page)] and set(CAR.seen_by[id(page)]) == {"MapWithContentTemplate"}, CAR.seen_by[id(page)])
         self.assertEqual(len(CAR.stack), 1, "the search screens were popped back")
         rid = st["results"][1]["resultId"]
         text, st, err = call("navigate_to", {"resultId": rid})
@@ -406,12 +449,91 @@ class TestWazeCar(unittest.TestCase):
         self.assertTrue(err)
         self.assertIn("car's position", text)
 
+    def test_stops(self):
+        text, st, err = call("add_stop", {"place": "gas station"})
+        self.assertTrue(err)
+        self.assertIn("only during a drive", text)
+        text, st, err = call("navigate_to", {"destination": "Eilat"})
+        self.assertFalse(err, text)
+        text, st, err = call("add_stop", {"place": "gas station"})
+        self.assertFalse(err, text)
+        self.assertEqual(st["stop"]["name"], "Dor Alon")
+        self.assertEqual((st["added"], st["stops"], st["tripText"]), (True, 1, "1 stop"))
+        self.assertEqual(CAR.stops, ["Dor Alon"])
+        self.assertEqual(len(CAR.stack), 1, "Waze is back on its navigation screen")
+        text, st, err = call("trip_status", {})
+        self.assertEqual((st["stops"], st["nextStop"], st["estimatesTo"]), (1, {"name": "Dor Alon"}, "the next stop"))
+        self.assertEqual(st["destination"]["name"], "Eilat")
+        self.assertIn("Next stop: Dor Alon", text)
+        text, st, err = call("add_stop", {"place": "pizza"})
+        self.assertTrue(err)
+        self.assertIn("one stop per drive", text)
+        text, st, err = call("remove_stop", {})
+        self.assertTrue(err)
+        self.assertIn("no way to remove", text)
+        call("stop_navigation", {})
+        # several places: the last is the destination, the first goes in as the stop, the rest is refused
+        text, st, err = call("navigate_to", {"destinations": [{"destination": "gas station"}, {"destination": "pizza"},
+                                                              {"latitude": 29.55, "longitude": 34.95, "name": "Eilat port"}]})
+        self.assertFalse(err, text)
+        self.assertEqual(st["stopsAdded"], ["Dor Alon"])
+        self.assertEqual([k["place"] for k in st["notAdded"]], ["pizza"])
+        self.assertIn("one stop per drive", st["notAdded"][0]["why"])
+        self.assertIn("Not added: pizza", text)
+        call("stop_navigation", {})
+        set_mode("phone")
+        text, st, err = call("add_stop", {"place": "gas station"})
+        self.assertIn("needs Car mode", text)
+        text, st, err = call("navigate_to", {"destinations": [{"destination": "a"}, {"destination": "b"}]})
+        self.assertIn("need Car mode", text)
+        set_mode("car")
+
+    def test_places_through_the_tools(self):
+        # nothing is fetched for a link with coordinates: the geo: URI carries them; the result says how
+        text, st, err = call("navigate_to", {"link": "https://waze.com/ul/hsv2g9qef9"})
+        self.assertFalse(err, text)
+        self.assertEqual(st["sent"], "geo:30.182641,34.864833?q=30.182641,34.864833")
+        self.assertEqual(st["understood"]["source"], "Waze link")
+        self.assertIn("Read as Waze link (the location code after /ul/h): 30.182641, 34.864833.", text)
+        call("stop_navigation", {})
+        text, st, err = call("navigate_to", {"destination": "https://www.google.com/maps/search/?api=1&query=Eilat"})
+        self.assertEqual(st["sent"], "geo:0,0?q=Eilat")
+        self.assertEqual(st["understood"], {"source": "Google Maps link", "how": "its query= text", "query": "Eilat"})
+        text, st, err = call("add_stop", {"place": "https://waze.com/ul?q=gas%20station"})
+        self.assertFalse(err, text)
+        self.assertEqual(st["stop"]["name"], "Dor Alon")
+        call("stop_navigation", {})
+        text, st, err = call("navigate_to", {"destination": "32°04'51.2\"N 34°46'50.2\"E"})
+        self.assertEqual(st["sent"], "geo:32.080889,34.780611?q=32.080889,34.780611")
+        call("stop_navigation", {})
+        text, st, err = call("navigate_to", {"destination": "home"})
+        self.assertTrue(err)
+        self.assertIn("no Home place set", text)
+        text, st, err = call("navigate_to", {"destination": "my last destination"})
+        self.assertFalse(err, text)
+        self.assertEqual(st["understood"]["source"], "Waze's recent places")
+        self.assertEqual(st["place"], "Dor Alon")
+        call("stop_navigation", {})
+        text, st, err = call("navigate_to", {"destination": "///filled.count.soap"})
+        self.assertIn("not supported", text)
+        text, st, err = call("navigate_to", {"link": "https://waze.com/ul?ll=1,2", "destination": "x"})
+        self.assertIn("not both", text)
+        set_mode("phone")
+        text, st, err = call("navigate_to", {"link": "https://waze.com/ul/hsv2g9qef9"})
+        self.assertEqual(st["sent"], "waze://?ll=30.182641,34.864833&navigate=yes")
+        text, st, err = call("navigate_to", {"destination": "home"})
+        self.assertIn("Car mode", text)
+        set_mode("car")
+
     def test_holder_that_vanishes(self):
-        s = waze.CarSession(CAR.addr)
-        s.request({"type": "hold", "on": True})
-        s.click(24)
-        s.wait_template(lambda m: m.get("$") == "SearchTemplate", 3, "search")
-        s.ws.sock.close()  # gone without releasing
+        ws = waze.WebSocket(CAR.addr)   # a holder of its own, apart from the service's link
+        ws.send_text(json.dumps({"type": "hold", "on": True, "id": 1}))
+        ws.send_text(json.dumps({"type": "click", "cb": 24}))
+        deadline = time.time() + 3
+        while time.time() < deadline and CAR.stack[-1][1] != "SearchTemplate":
+            time.sleep(0.05)
+        self.assertEqual(CAR.stack[-1][1], "SearchTemplate")
+        ws.sock.close()  # gone without releasing
         deadline = time.time() + 3
         while time.time() < deadline and len(CAR.stack) > 1:
             time.sleep(0.05)
@@ -433,6 +555,287 @@ class TestWazeCar(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
 
+class FakeRedirects:
+    """An opener for maplinks.follow: short link -> its target, as the map sites answer a HEAD."""
+
+    def __init__(self, hops):
+        self.hops, self.asked = hops, []
+
+    def open(self, req, timeout=None):
+        self.asked.append((req.get_method(), req.full_url, timeout, req.get_header("Cookie")))
+        if req.full_url in self.hops:
+            raise urllib.error.HTTPError(req.full_url, 302, "Found", {"Location": self.hops[req.full_url]}, None)
+        raise AssertionError("fetched a URL that is not a short link: " + req.full_url)
+
+
+class TestPlaces(unittest.TestCase):
+    def where(self, text, near=None):
+        import locate
+        r = locate.resolve(text, near)
+        return {k: r[k] for k in ("latitude", "longitude", "query", "list", "source") if k in r}
+
+    def test_coordinates(self):
+        ll = {"latitude": 32.0809, "longitude": 34.7806, "source": "decimal degrees"}
+        for t in ("32.0809, 34.7806", "32.0809 34.7806", "32.0809N 34.7806E", "N32.0809 E34.7806", "32.0809° N, 34.7806° E",
+                  "34.7806E, 32.0809N"):
+            self.assertEqual(self.where(t), ll, t)
+        self.assertEqual(self.where("32°04.854'N, 34°46.836'E"), dict(ll, source="degrees and minutes"))
+        dms = {"latitude": 32.0808889, "longitude": 34.7806111, "source": "degrees, minutes and seconds"}
+        self.assertEqual(self.where("32°04'51.2\"N 34°46'50.2\"E"), dms)
+        self.assertEqual(self.where("32 4 51.2 N 34 46 50.2 E"), dms)
+        self.assertEqual(self.where("33° 52' S, 151° 12' E"), {"latitude": -33.8666667, "longitude": 151.2, "source": "degrees and minutes"})
+        # longitude first only when the numbers leave no doubt
+        self.assertEqual(self.where("151.2093, -33.8688"), {"latitude": -33.8688, "longitude": 151.2093, "source": "decimal degrees"})
+        self.assertEqual(self.where("34.78, 32.08"), {"latitude": 34.78, "longitude": 32.08, "source": "decimal degrees"})
+        self.assertEqual(self.where("32 61 0 N 34 0 0 E"), {"query": "32 61 0 N 34 0 0 E", "source": "an address or place name"})
+
+    def test_codes_and_grids(self):
+        self.assertEqual(self.where("8G4P9VJ2+QR"), {"latitude": 32.3819375, "longitude": 34.8520625, "source": "Plus Code"})
+        self.assertEqual(self.where("9VJ2+QR", near=(32.08, 34.78)), {"latitude": 32.3819375, "longitude": 34.8520625, "source": "Plus Code (short)"})
+        with self.assertRaises(waze.WazeError):
+            self.where("9VJ2+QR")
+        self.assertEqual(self.where("sv2g9qef9"), {"latitude": 30.1826406, "longitude": 34.8648334, "source": "geohash"})
+        # ITM, checked against PROJ's EPSG:2039 (within 2 m)
+        for t in ("180000 665000", "665000, 180000", "ITM 180000/665000"):
+            r = self.where(t)
+            self.assertEqual(r["source"], "Israeli grid (ITM)")
+            self.assertAlmostEqual(r["latitude"], 32.077602, delta=0.00002)
+            self.assertAlmostEqual(r["longitude"], 34.786538, delta=0.00002)
+        with self.assertRaises(waze.WazeError) as e:
+            self.where("///filled.count.soap")
+        self.assertIn("what3words", str(e.exception))
+
+    def test_links(self):
+        cases = {
+            "https://waze.com/ul/hsv2g9qef9": (30.1826406, 34.8648334, "Waze link"),
+            "waze://?ll=29.55,34.95&navigate=yes": (29.55, 34.95, "Waze link"),
+            "https://www.waze.com/live-map/directions?to=ll.30.18264%2C34.86483": (30.18264, 34.86483, "Waze link"),
+            "https://www.google.com/maps/place/Azrieli/@32.0742,34.7922,17z/data=!3m1!4b1!8m2!3d32.0745!4d34.7915": (32.0745, 34.7915, "Google Maps link"),
+            "https://www.google.com/maps/@32.0742,34.7922,15z": (32.0742, 34.7922, "Google Maps link"),
+            "https://maps.google.com/?q=32.0742,34.7922": (32.0742, 34.7922, "Google Maps link"),
+            "https://www.google.com/maps/search/?api=1&query=32.07,34.79": (32.07, 34.79, "Google Maps link"),
+            "https://www.google.com/maps/dir/?api=1&destination=32.07,34.79": (32.07, 34.79, "Google Maps link"),
+            "https://www.google.com/maps/dir/32.1,34.8/32.07,34.79/@32.4,34.9,9z": (32.07, 34.79, "Google Maps link"),
+            "https://maps.apple.com/?ll=32.08,34.78&q=Rabin%20Square": (32.08, 34.78, "Apple Maps link"),
+            "https://maps.apple.com/?coordinate=32.08,34.78": (32.08, 34.78, "Apple Maps link"),
+            "https://maps.apple.com/?daddr=32.08,34.78": (32.08, 34.78, "Apple Maps link"),
+            "https://www.openstreetmap.org/?mlat=32.08&mlon=34.78#map=17/32.1/34.7": (32.08, 34.78, "OpenStreetMap link"),
+            "https://www.openstreetmap.org/#map=16/32.0809/34.7806": (32.0809, 34.7806, "OpenStreetMap link"),
+            "https://www.bing.com/maps?cp=32.08~34.78&lvl=15": (32.08, 34.78, "Bing Maps link"),
+            "https://www.bing.com/maps?where1=32.08,34.78": (32.08, 34.78, "Bing Maps link"),
+            "https://share.here.com/l/32.08,34.78,Rabin%20Square": (32.08, 34.78, "HERE link"),
+            "geo:32.08,34.78?q=32.08,34.78(Rabin Square)": (32.08, 34.78, "geo: URI"),
+            "geo:32.08,34.78": (32.08, 34.78, "geo: URI"),
+        }
+        for link, (lat, lon, src) in cases.items():
+            self.assertEqual(self.where(link), {"latitude": lat, "longitude": lon, "source": src}, link)
+        names = {"waze://?q=Dizengoff%20Center": "Dizengoff Center", "https://www.google.com/maps/search/?api=1&query=Some+Cafe": "Some Cafe",
+                 "https://www.google.com/maps/dir/Tel+Aviv/Haifa+Port/@32.4,34.9,9z": "Haifa Port",
+                 "https://www.google.com/maps/place/Cafe+Xoho/": "Cafe Xoho",
+                 "https://maps.apple.com/?address=66+Allenby,+Tel+Aviv": "66 Allenby, Tel Aviv", "https://maps.apple.com/?daddr=Dizengoff+Center": "Dizengoff Center",
+                 "https://www.bing.com/maps?where1=Haifa%20Port": "Haifa Port", "geo:0,0?q=Dizengoff%20Center": "Dizengoff Center"}
+        for link, q in names.items():
+            self.assertEqual(self.where(link)["query"], q, link)
+        for bad, why in (("https://waze.com/ul?place=ChIJabc", "Waze's own id"), ("https://evil.com/maps?ll=1,2", "not one this device reads"),
+                         ("https://waze.com/ul/hsv2!", "geohash"), ("https://waze.com/ul?navigate=yes", "no place")):
+            with self.assertRaises(waze.WazeError) as e:
+                self.where(bad)
+            self.assertIn(why, str(e.exception))
+
+    def test_short_links_followed(self):
+        import maplinks
+        op = FakeRedirects({"https://maps.app.goo.gl/AbC123": "https://www.google.com/maps/place/X/data=!3d32.0745!4d34.7915"})
+        r = maplinks.parse("https://maps.app.goo.gl/AbC123", opener=op)
+        self.assertEqual((r["latitude"], r["longitude"]), (32.0745, 34.7915))
+        self.assertIn("after following the short link", r["how"])
+        self.assertEqual(op.asked, [("HEAD", "https://maps.app.goo.gl/AbC123", 5.0, None)])
+        # a short link leading anywhere but a map site is refused, not fetched
+        op = FakeRedirects({"https://maps.app.goo.gl/Evil": "https://evil.example/x"})
+        r = None
+        with self.assertRaises(waze.WazeError) as e:
+            maplinks.parse("https://maps.app.goo.gl/Evil", opener=op)
+        self.assertIn("not one this device reads", str(e.exception))
+        self.assertEqual(len(op.asked), 1)
+        loop = FakeRedirects({"https://goo.gl/maps/a": "https://goo.gl/maps/b", "https://goo.gl/maps/b": "https://goo.gl/maps/a"})
+        with self.assertRaises(waze.WazeError) as e:
+            maplinks.parse("https://goo.gl/maps/a", opener=loop)
+        self.assertIn("too many", str(e.exception))
+        self.assertEqual(len(loop.asked), 5)
+
+    def test_names(self):
+        self.assertEqual(self.where("home"), {"list": "home", "source": "Waze's Home"})
+        self.assertEqual(self.where("בית"), {"list": "home", "source": "Waze's Home"})
+        self.assertEqual(self.where("Work."), {"list": "work", "source": "Waze's Work"})
+        self.assertEqual(self.where("my last destination"), {"list": "recent", "source": "Waze's recent places"})
+        self.assertEqual(self.where("דיזנגוף סנטר"), {"query": "דיזנגוף סנטר", "source": "an address or place name"})
+        self.assertEqual(self.where("Dizengoff 50, Tel Aviv"), {"query": "Dizengoff 50, Tel Aviv", "source": "an address or place name"})
+
+
+class TestGates(unittest.TestCase):
+    """list_gates and open_gate through the real gates service, against its PalGate mock."""
+
+    @classmethod
+    def setUpClass(cls):
+        import gates
+        gates.GATES = gates.Gates()
+        cls.srv = gates.ThreadingHTTPServer(("127.0.0.1", 0), gates.Handler)
+        cls.srv.daemon_threads = True
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        import gatectl
+        gatectl.GATES_URL = "http://127.0.0.1:%d" % cls.srv.server_address[1]
+        cls.gates = gates
+
+    def post(self, route, body):
+        r = urllib.request.Request("http://127.0.0.1:%d/api/%s" % (self.srv.server_address[1], route), data=json.dumps(body).encode(),
+                                   method="POST", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(r, timeout=20) as resp:
+            return json.loads(resp.read())
+
+    def test_gates(self):
+        configure()
+        text, st, err = call("list_gates", {})
+        self.assertTrue(err)
+        self.assertIn("No PalGate account is linked", text)
+        # link as the phone app would (the mock approves), then the gate list
+        self.post("gatesLink", {"action": "start"})
+        deadline = time.time() + 10
+        while not PALGATE.pending and time.time() < deadline:
+            time.sleep(0.05)
+        PALGATE.approve(PALGATE.pending)
+        while not self.gates.GATES.gates and time.time() < deadline:
+            time.sleep(0.05)
+        self.post("gatesSettings", {"gates": [{"id": "4G600002", "label": "Office barrier"}]})
+        text, st, err = call("list_gates", {})
+        self.assertFalse(err, text)
+        self.assertEqual([g["id"] for g in st["gates"]], ["4G600001", "4G600002"], "the Bluetooth-only door is not shown")
+        self.assertEqual(st["gates"][1]["name"], "Office barrier")
+        self.assertEqual(st["gates"][0]["outputs"], [1, 2])
+        self.assertIn("2 (Pedestrian door)", text)
+        # opening: the switch, then confirm, then PalGate's own answer
+        text, st, err = call("open_gate", {"gate": "Office barrier", "confirm": True})
+        self.assertTrue(err)
+        self.assertIn("Let Grok open gates", text)
+        configure(gates=True)
+        text, st, err = call("open_gate", {"gate": "Office barrier", "confirm": False})
+        self.assertIn("confirm: true", text)
+        self.assertEqual(PALGATE.opens, [])
+        text, st, err = call("open_gate", {"gate": "office barrier", "confirm": True})
+        self.assertFalse(err, text)
+        self.assertEqual((st["opened"], st["palgate"]), (True, "Opened"))
+        text, st, err = call("open_gate", {"gate": "4G600001", "output": 2, "confirm": True})
+        self.assertFalse(err, text)
+        self.assertEqual(PALGATE.opens[-2:], [("4G600002", 1), ("4G600001", 2)])
+        text, st, err = call("open_gate", {"gate": "4G600002", "output": 2, "confirm": True})
+        self.assertIn("output 1 only", text)
+        text, st, err = call("open_gate", {"gate": "Bluetooth door", "confirm": True})
+        self.assertIn("No gate shown on the map", text)
+        self.gates.GATES.opening.clear()  # the service's 3 s repeat guard
+        PALGATE.fail_open = ("device error", "check device")
+        text, st, err = call("open_gate", {"gate": "4G600001", "confirm": True})
+        PALGATE.fail_open = None
+        self.assertTrue(err)
+        self.assertIn("did not open", text)
+        # every call is in the log (Settings > Grok)
+        with open(os.path.join(TMP, "state", "actions.jsonl")) as f:
+            log = [json.loads(line) for line in f]
+        self.assertEqual(len([e for e in log if e["tool"] == "open_gate"]), 7)
+        configure()
+
+
+class TestControls(unittest.TestCase):
+    def setUp(self):
+        configure()
+        set_mode("car")
+        CAR.reset()
+        CAR.received.clear()
+        CAR.refuse_navigate = None
+        CAR.avoid, CAR.sound, CAR.zooms = [False, False, False], 0, []
+
+    def tearDown(self):
+        call("stop_navigation", {})
+
+    def drive(self):
+        text, st, err = call("navigate_to", {"destination": "Eilat"})
+        self.assertFalse(err, text)
+
+    def test_routes_and_options(self):
+        text, st, err = call("route_options", {})
+        self.assertTrue(err)
+        self.assertIn("route preview", text)
+        self.drive()
+        text, st, err = call("route_options", {})
+        self.assertFalse(err, text)
+        self.assertEqual(st["routes"][1], {"route": 2, "selected": False, "minutes": 94, "time": "94 min", "distance": "136.3 km", "via": "40; 12"})
+        self.assertTrue(st["routes"][0]["selected"])
+        self.assertEqual(len(CAR.stack), 1, "back on the drive")
+        text, st, err = call("choose_route", {"route": 2})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.chosen, 1)
+        text, st, err = call("choose_route", {"route": 3})
+        self.assertIn("there is no route 3", text)
+        text, st, err = call("set_avoid_tolls", {"avoid": True})
+        self.assertFalse(err, text)
+        self.assertEqual((CAR.avoid, st["changed"]), ([True, False, False], True))
+        text, st, err = call("set_avoid_tolls", {"avoid": True})
+        self.assertIn("already on", text)
+        text, st, err = call("set_avoid_freeways", {"avoid": False})
+        self.assertIn("already off", text)
+        self.assertEqual(len(CAR.stack), 1)
+
+    def test_sound_zoom_and_screen(self):
+        self.drive()
+        text, st, err = call("mute_voice", {})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.sound, 3)
+        text, st, err = call("current_screen", {})
+        self.assertIn("sound (off)", st["controls"])
+        text, st, err = call("set_sound", {"mode": "only alerts"})
+        self.assertEqual(CAR.sound, 2)
+        text, st, err = call("set_sound", {"mode": "loud"})
+        self.assertIn("Normal, Less chatty, Only alerts, Off", text)
+        text, st, err = call("unmute_voice", {})
+        self.assertEqual(CAR.sound, 0)
+        text, st, err = call("zoom_in", {"steps": 2})
+        self.assertFalse(err, text)
+        self.assertEqual(CAR.zooms, ["open", "in", "in"])
+        text, st, err = call("recenter", {})
+        self.assertIn("already follows", text)
+
+    def test_reads(self):
+        text, st, err = call("current_speed", {})
+        self.assertFalse(st["known"])
+        CAR.state({"type": "speedometer", "speed": 72.4, "units": "km/h", "speedLimit": 80, "speedKph": 72.4, "miles": False})
+        time.sleep(0.2)
+        text, st, err = call("current_speed", {})
+        self.assertEqual((st["speed"], st["speedLimit"], st["unit"]), (72, 80, "km/h"))
+        CAR.state({"type": "alert", "alert": {"$": "Alert", "alertId": 9, "title": "Police reported ahead", "durationMillis": 10000,
+                                              "actions": [fake_carhost.action(801, title="Still there"), fake_carhost.action(802, title="Not there")]}})
+        time.sleep(0.2)
+        text, st, err = call("waze_alerts", {})
+        self.assertEqual(st["alerts"][0]["title"], "Police reported ahead")
+        self.assertEqual(st["alerts"][0]["buttons"], ["Still there", "Not there"])
+        text, st, err = call("answer_alert", {"answer": "maybe"})
+        self.assertIn("Still there, Not there", text)
+        text, st, err = call("answer_alert", {"answer": "still there"})
+        self.assertFalse(err, text)
+        self.assertIn({"type": "click", "cb": 801}, CAR.received)
+        self.drive()
+        text, st, err = call("next_turn", {})
+        self.assertEqual(st["next"]["maneuver"], "turn right")
+        self.assertIn("Turn right onto Arlozorov in 150 m", text)
+        text, st, err = call("car_position", {})
+        self.assertEqual((st["latitude"], st["longitude"], st["headingDegrees"], st["speedKmh"]), (29.558, 34.951, 172, 90))
+        text, st, err = call("device_status", {})
+        self.assertEqual((st["connection"], st["lte"]["signalPercent"], st["carHotspot"]["clients"]), ("lte", 80, 1))
+        self.assertIn("LTE signal 80%", text)
+        set_mode("phone")
+        for tool in ("current_speed", "next_turn", "route_options", "mute_voice", "recent_places"):
+            text, st, err = call(tool, {})
+            self.assertTrue(err, tool)
+            self.assertIn("Car mode", text)
+        set_mode("car")
+
+
 class TestReports(unittest.TestCase):
     def setUp(self):
         configure()
@@ -440,7 +843,7 @@ class TestReports(unittest.TestCase):
         CAR.tracking = True
         CAR.reset()
         CAR.reports.clear()
-        waze._types_cache.update(t=0.0, types=None)
+        waze.flows.forget("reports")
 
     def test_types_read_from_waze(self):
         text, st, err = call("report_types", {})
@@ -632,20 +1035,23 @@ class TestConnectCloudflare(unittest.TestCase):
 
     # the permissions Cloudflare's API schema accepts for each call (x-api-token-group, Nov 2026), and
     # the project client's scope ids with their permission names (GET /client/v4/oauth/scopes)
+    TUNNEL_WRITE = {"Cloudflare One Connectors Write", "Cloudflare One Connector: cloudflared Write", "Cloudflare Tunnel Write"}
     NEEDS = [("GET", r"/user$", {"User Details Read", "User Details Write"}),
              ("GET", r"/accounts$", None),  # lists the accounts the grant has; no permission of its own
              ("GET", r"/zones$", {"Zone Read"}),
              ("GET", r"/accounts/\w+/access/(organizations|identity_providers)$", {"Access: Organizations, Identity Providers, and Groups Read"}),
-             ("GET|POST", r"/accounts/\w+/cfd_tunnel$", {"Cloudflare One Connectors Write"}),
-             ("GET", r"/accounts/\w+/cfd_tunnel/[\w-]+/token$", {"Cloudflare One Connectors Write"}),
-             ("PUT", r"/accounts/\w+/cfd_tunnel/[\w-]+/configurations$", {"Cloudflare One Connectors Write"}),
+             # list (also accepts the Read variants), create, token, configurations: all accept these three
+             ("GET|POST", r"/accounts/\w+/cfd_tunnel$", TUNNEL_WRITE),
+             ("GET", r"/accounts/\w+/cfd_tunnel/[\w-]+/token$", TUNNEL_WRITE),
+             ("PUT", r"/accounts/\w+/cfd_tunnel/[\w-]+/configurations$", TUNNEL_WRITE),
              ("GET|POST", r"/accounts/\w+/access/apps$", {"Access: Apps and Policies Write"}),
              ("PUT", r"/accounts/\w+/access/apps/[\w-]+$", {"Access: Apps and Policies Write"}),
              ("GET|POST", r"/zones/\w+/dns_records$", {"DNS Write"}),
              ("PATCH", r"/zones/\w+/dns_records/\w+$", {"DNS Write"})]
     SCOPE_NAMES = {"dns.write": "DNS Write", "zone.read": "Zone Read", "access.write": "Access: Apps and Policies Write",
                    "access-acct.read": "Access: Organizations, Identity Providers, and Groups Read",
-                   "teams-connectors.write": "Cloudflare One Connectors Write", "account-settings.read": "Account Settings Read",
+                   "teams-connector-cloudflared.write": "Cloudflare One Connector: cloudflared Write",
+                   "account-settings.read": "Account Settings Read",
                    "user-details.read": "User Details Read"}
 
     def test_every_call_is_in_the_scopes(self):

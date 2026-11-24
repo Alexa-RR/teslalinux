@@ -5,7 +5,8 @@ Called by services/grok/grok.py (Settings > Grok on the car page) through one su
 one JSON object on its standard input (so a token is never on a command line):
 
   {"enabled": true|false, "hostname": "mcp.example.com", "teamDomain": "https://team.cloudflareaccess.com",
-   "aud": "<64 hex>", "email": "driver@example.com", "tunnelToken": "eyJ...", "clearToken": true}
+   "aud": "<64 hex>", "email": "driver@example.com", "tunnelToken": "eyJ...", "clearToken": true,
+   "gates": true|false}   (gates: whether Grok may open PalGate gates; off by default)
 
 Every key is optional; what is given is checked and changed, the rest kept. Writes:
   /etc/teslalinux/grok.env          the settings (0644: no secrets; grok.py reads it)
@@ -28,7 +29,7 @@ SECRET_DIR = os.environ.get("TESLALINUX_GROK_SECRET_DIR", "/etc/teslalinux/grok"
 UNIT = "teslalinux-cloudflared.service"
 HOST_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 EMAIL_RE = re.compile(r"^[^@\s\"'\\]{1,64}@[^@\s\"'\\]{1,255}$")
-KEYS = ("ENABLED", "HOSTNAME", "TEAM_DOMAIN", "AUD", "EMAIL", "TUNNEL_ID", "TOKEN_SET")
+KEYS = ("ENABLED", "HOSTNAME", "TEAM_DOMAIN", "AUD", "EMAIL", "TUNNEL_ID", "TOKEN_SET", "GATES")
 
 
 def die(msg, code=2):
@@ -153,6 +154,10 @@ def main():
     if "enabled" in req:
         conf["ENABLED"] = "1" if req["enabled"] is True else "0"
         done.append("on" if req["enabled"] is True else "off")
+    if "gates" in req:
+        # whether Grok may open PalGate gates (off unless the driver turns it on)
+        conf["GATES"] = "1" if req["gates"] is True else "0"
+        done.append("gates " + ("allowed" if req["gates"] is True else "not allowed"))
     lines = ["# teslalinux Grok remote control (teslalinux-set-grok, from the settings page; docs/GROK.md)"]
     for k in KEYS:
         if conf.get(k):

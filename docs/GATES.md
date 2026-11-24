@@ -47,8 +47,10 @@ browser geolocation --> gps.py --> feed 9997 --> teslalinux-gates: auto-open nea
   with only that directory writable). They are never logged, never sent to the page (it sees the
   last three digits of the phone number), never in the repository or a release, and never leave
   the device except to PalGate's API. Gate positions are in `settings.json`, also 0600.
-* An open is a real-world action: the service only opens on the driver's tap or the driver's
-  auto-open setting for that gate. Tests run against a local mock of the API
+* An open is a real-world action: the service only opens on the driver's tap, the driver's
+  auto-open setting for that gate, or Grok when the driver asks it and has turned on Settings >
+  Grok > Let Grok open gates (off by default; each open also needs `confirm: true`,
+  `docs/GROK.md`). Tests run against a local mock of the API
   (`services/gates/test/mock_palgate.py`), never PalGate.
 
 ## The service (`services/gates/`)

@@ -554,7 +554,10 @@ step_files() {
   # and the root helper that stores its settings and the tunnel token (root-only)
   install -d -m 0755 "$LIB/grok"
   install -m 0644 "$P/services/grok/grok.py" "$P/services/grok/mcp.py" "$P/services/grok/accessjwt.py" \
-    "$P/services/grok/waze.py" "$P/services/grok/cfsetup.py" "$P/services/grok/cfoauth.py" "$LIB/grok/"
+    "$P/services/grok/waze.py" "$P/services/grok/cfsetup.py" "$P/services/grok/cfoauth.py" \
+    "$P/services/grok/carlink.py" "$P/services/grok/flows.py" "$P/services/grok/stops.py" "$P/services/grok/routes.py" \
+    "$P/services/grok/controls.py" "$P/services/grok/info.py" "$P/services/grok/places.py" "$P/services/grok/locate.py" \
+    "$P/services/grok/maplinks.py" "$P/services/grok/gatectl.py" "$LIB/grok/"
   install -d -m 0700 -o tesla -g tesla "$STATE_DIR/grok"
   put_file "$P/host/teslalinux-set-grok" /usr/local/bin/teslalinux-set-grok 0755
   install -m 0644 "$P/tools/atl-vm/mk-android-tzdata.py" "$LIB/mk-android-tzdata.py"

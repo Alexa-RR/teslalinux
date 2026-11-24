@@ -24,18 +24,20 @@ import json
 import os
 import re
 import socket
-import struct
 import time
 import urllib.parse
+
+import carlink
+import flows
+from carlink import WazeError, WebSocket, _addr, depth  # noqa: F401 (the tools' names for them)
 
 CARAPP_ADDR = os.environ.get("TESLALINUX_GROK_CARAPP", "127.0.0.1:9995")
 INTENT_ADDR = os.environ.get("TESLALINUX_GROK_INTENT", "127.0.0.1:9993")
 INTERFACE_ENV = os.environ.get("TESLALINUX_GROK_INTERFACE_ENV", "/etc/teslalinux/interface.env")
 
-STATE_QUIET_S = 0.4      # the burst of state a new renderer gets is over after this much quiet
-STATE_MAX_S = 4.0
-REPLY_S = 10.0           # the host's answer to navigate / stopNavigation
 START_WAIT_S = 25.0      # how long navigate_to waits to see the drive start
+SETTLE_S = 0.2           # a new screen is complete once Waze sent no refresh of it for this long
+REACT_S = 4.0            # Waze shows a destination's search or route within this (1-2 s in the VM)
 
 DISTANCE_UNITS = {1: "m", 2: "km", 3: "km", 4: "mi", 5: "mi", 6: "ft", 7: "yd"}
 # androidx.car.app.navigation.model.Maneuver TYPE_* constants
@@ -55,15 +57,6 @@ MANEUVERS = {
 }
 
 
-class WazeError(Exception):
-    """Something the caller is told as a tool error."""
-
-
-def _addr(s):
-    host, _, port = s.rpartition(":")
-    return host, int(port)
-
-
 def interface():
     """"car" or "phone": the app interface chosen on the settings page (interface.env)."""
     try:
@@ -78,247 +71,9 @@ def interface():
     return "phone"
 
 
-# ------------------------------------------------------------------ a minimal WebSocket client
-
-class WebSocket:
-    """RFC 6455 client for one loopback text-frame channel: masked frames out, pings answered."""
-
-    def __init__(self, addr, timeout=5.0):
-        host, port = _addr(addr)
-        try:
-            self.sock = socket.create_connection((host, port), timeout=timeout)
-        except OSError as e:
-            raise WazeError("Waze's car interface is not reachable (%s:%d: %s). Waze may be starting or stopped." % (host, port, e.strerror or e))
-        key = base64.b64encode(os.urandom(16)).decode()
-        req = ("GET / HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-               "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n") % (host, port, key)
-        self.sock.sendall(req.encode())
-        self.buf = b""
-        head = self._read_until(b"\r\n\r\n", 16384)
-        if not head.startswith(b"HTTP/1.1 101"):
-            self.close()
-            raise WazeError("the car app channel refused the connection")
-
-    def _read_until(self, mark, limit):
-        while mark not in self.buf:
-            if len(self.buf) > limit:
-                raise WazeError("bad handshake")
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise WazeError("the car app channel closed")
-            self.buf += chunk
-        head, self.buf = self.buf.split(mark, 1)
-        return head
-
-    def _read_exact(self, n):
-        while len(self.buf) < n:
-            chunk = self.sock.recv(max(4096, n - len(self.buf)))
-            if not chunk:
-                raise ConnectionError("closed")
-            self.buf += chunk
-        out, self.buf = self.buf[:n], self.buf[n:]
-        return out
-
-    def send_text(self, text):
-        self._send(0x1, text.encode("utf-8"))
-
-    def _send(self, opcode, payload):
-        mask = os.urandom(4)
-        n = len(payload)
-        hdr = bytes([0x80 | opcode])
-        if n < 126:
-            hdr += bytes([0x80 | n])
-        elif n < 65536:
-            hdr += bytes([0x80 | 126]) + struct.pack(">H", n)
-        else:
-            hdr += bytes([0x80 | 127]) + struct.pack(">Q", n)
-        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        self.sock.sendall(hdr + mask + masked)
-
-    def recv_text(self, timeout):
-        """The next text message, or None when nothing came within timeout seconds."""
-        self.sock.settimeout(timeout)
-        message = b""
-        while True:
-            try:
-                b0, b1 = self._read_exact(2)
-            except socket.timeout:
-                return None
-            self.sock.settimeout(5.0)  # the rest of a frame that has begun
-            opcode, n = b0 & 0x0F, b1 & 0x7F
-            if n == 126:
-                n = struct.unpack(">H", self._read_exact(2))[0]
-            elif n == 127:
-                n = struct.unpack(">Q", self._read_exact(8))[0]
-            mask = self._read_exact(4) if b1 & 0x80 else None
-            payload = self._read_exact(n)
-            if mask:
-                payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-            if opcode == 0x9:
-                self._send(0xA, payload)
-            elif opcode == 0x8:
-                raise ConnectionError("closed by the host")
-            elif opcode in (0x0, 0x1):
-                message += payload
-                if b0 & 0x80:
-                    return message.decode("utf-8", "replace")
-            self.sock.settimeout(timeout)
-
-    def close(self):
-        try:
-            self._send(0x8, b"\x03\xe8")
-        except OSError:
-            pass
-        try:
-            self.sock.close()
-        except OSError:
-            pass
-
-
-class CarSession:
-    """One short connection to the car app channel: the state it sends, then requests."""
-
-    def __init__(self, addr=None):
-        self.ws = WebSocket(addr or CARAPP_ADDR)
-        self.navigating = None
-        self.trip = None
-        self.template = None
-        self.seen_trip = False
-        # the app's alerts (IAppHost.showAlert) and toasts that arrived while connected
-        self.alerts = []
-        self.toasts = []
-        self._id = 0
-        try:
-            self._drain(STATE_QUIET_S, STATE_MAX_S)
-        except (OSError, ConnectionError) as e:
-            self.ws.close()
-            raise WazeError("the car app channel failed: %s" % e)
-
-    def close(self):
-        self.ws.close()
-
-    def _take(self, text):
-        try:
-            m = json.loads(text)
-        except ValueError:
-            return None
-        t = m.get("type")
-        if t == "navigation":
-            self.navigating = bool(m.get("active"))
-        elif t == "trip":
-            self.trip = m.get("trip")
-            self.seen_trip = True
-        elif t == "template":
-            self.template = m.get("template")
-        elif t == "alert" and isinstance(m.get("alert"), dict):
-            self.alerts.append(m["alert"])
-        elif t == "toast" and isinstance(m.get("text"), str):
-            self.toasts.append(m["text"])
-        return m
-
-    def _drain(self, quiet, most):
-        end = time.monotonic() + most
-        while time.monotonic() < end:
-            text = self.ws.recv_text(quiet)
-            if text is None:
-                return
-            self._take(text)
-
-    def request(self, msg):
-        """Sends a request with an id; its answer ({ok, error}) or WazeError."""
-        self._id += 1
-        msg = dict(msg, id=self._id)
-        want = msg["type"] + "Result"
-        try:
-            self.ws.send_text(json.dumps(msg))
-            end = time.monotonic() + REPLY_S
-            while time.monotonic() < end:
-                text = self.ws.recv_text(max(0.05, end - time.monotonic()))
-                if text is None:
-                    break
-                m = self._take(text)
-                if m and m.get("type") == want and m.get("id") == self._id:
-                    return m
-        except (OSError, ConnectionError) as e:
-            raise WazeError("the car app channel failed: %s" % e)
-        raise WazeError("the car host did not answer (this runtime may not support %s)" % msg["type"])
-
-    def wait(self, until, seconds):
-        """Reads state until until(self) is true or seconds pass; whether it became true."""
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
-            if until(self):
-                return True
-            try:
-                text = self.ws.recv_text(max(0.05, min(1.0, end - time.monotonic())))
-            except (OSError, ConnectionError):
-                return until(self)
-            if text is not None:
-                self._take(text)
-        return until(self)
-
-    def send(self, msg):
-        try:
-            self.ws.send_text(json.dumps(msg))
-        except OSError as e:
-            raise WazeError("the car app channel failed: %s" % e)
-
-    # the app's screens ---------------------------------------------------------------
-
-    def inner(self):
-        """The current template's own model (the wrapper's "template"), or {}."""
-        return (self.template or {}).get("template") or {}
-
-    def stack(self):
-        return [i.get("templateId") for i in (self.template or {}).get("templateInfosForScreenStack") or [] if isinstance(i, dict)]
-
-    def wait_template(self, pred, seconds, what):
-        """Waits for a template the predicate accepts (given the inner model); WazeError if none comes."""
-        if self.wait(lambda x: bool(x.template) and pred(x.inner()), seconds):
-            return self.inner()
-        raise WazeError("Waze did not show %s within %d s." % (what, seconds))
-
-    def settle(self, quiet=0.8, most=4.0):
-        """Reads templates until none came for `quiet` seconds (an app refreshes a screen a few times)."""
-        end = time.monotonic() + most
-        while time.monotonic() < end:
-            try:
-                text = self.ws.recv_text(quiet)
-            except (OSError, ConnectionError):
-                return
-            if text is None:
-                return
-            self._take(text)
-
-    def click(self, cb):
-        if not isinstance(cb, int):
-            raise WazeError("Waze's screen has nothing to tap there.")
-        self.send({"type": "click", "cb": cb})
-
-    def back_to(self, base, seconds=10.0):
-        """Back, one at a time, each after the template answering the one before, until the app's
-        screen stack is `base` again (as the host does for screens a renderer left open)."""
-        end = time.monotonic() + seconds
-        for _ in range(12):
-            if depth(self.stack(), base) == 0:
-                return True
-            t0 = self.template
-            self.send({"type": "back"})
-            if not self.wait(lambda x: x.template is not t0, max(0.1, end - time.monotonic())):
-                return False
-        return depth(self.stack(), base) == 0
-
-
-def depth(stack, base):
-    """How many screens lie above `base` in `stack` (template ids, top first), as ATL's host counts
-    them: the screens under the base's top keep their ids; the base's top may be refreshed."""
-    n = len(base)
-    if n == 0:
-        return 0
-    under = base[1:]
-    if len(stack) > n and (not under or stack[-len(under):] == under):
-        return len(stack) - n
-    return 0
+def CarSession(addr=None):
+    """A tool's view of the service's persistent link to the car host (carlink.py)."""
+    return carlink.CarSession(addr or CARAPP_ADDR)
 
 
 def start_intent(uri, addr=None):
@@ -447,16 +202,21 @@ def sentence(st):
     parts = []
     d = st.get("destination") or {}
     name = d.get("name") or d.get("address")
-    parts.append("Navigating to %s." % name if name else "Navigating.")
+    parts.append("Navigating to %s%s." % (name, (" (%s)" % st["tripText"]) if st.get("tripText") else "") if name else "Navigating.")
+    to = ""
+    if st.get("stops"):
+        stop = (st.get("nextStop") or {}).get("name")
+        parts.append("Next stop: %s." % stop if stop else "Waze does not name the stop.")
+        to = " to the next stop"
     if "eta" in st:
-        parts.append("Arrival at %s." % st["eta"]["local"])
+        parts.append(("Arrival at the next stop: %s." if to else "Arrival at %s.") % st["eta"]["local"])
     if "timeLeftMinutes" in st or "distanceLeft" in st:
         left = []
         if "timeLeftMinutes" in st:
             left.append("%d min" % st["timeLeftMinutes"])
         if "distanceLeft" in st:
             left.append(st["distanceLeft"]["text"])
-        parts.append(" and ".join(left) + " left.")
+        parts.append(" and ".join(left) + " left%s." % to)
     n = st.get("nextTurn")
     if n:
         what = n.get("instruction") or n.get("maneuver")
@@ -516,23 +276,85 @@ def parse_row(row):
     return out
 
 
-def result_id(query, index, name):
+# Waze's own lists on its search screen, by their rows' icons: what recent_places and saved_places read
+LIST_ICONS = {"recent": "icon_t2_history_32px", "saved": "car_lib_icon_t2_save_32px"}
+ID_PREFIX = {"search": "wz1.", "recent": "wzr1.", "saved": "wzs1."}
+
+
+def result_id(query, index, name, kind="search"):
     raw = json.dumps({"q": query, "i": index, "t": name}, ensure_ascii=False, separators=(",", ":")).encode()
-    return "wz1." + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return ID_PREFIX[kind] + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def parse_any_id(rid):
+    """(kind, query, index, name) of an id from search_places, recent_places or saved_places."""
+    bad = WazeError("resultId is not an id from search_places, recent_places or saved_places")
+    kind = [k for k, p in ID_PREFIX.items() if isinstance(rid, str) and rid.startswith(p)]
+    if not kind or len(rid) > 2000:
+        raise bad
+    body = rid[len(ID_PREFIX[kind[0]]):]
+    try:
+        d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode())
+        q, i, t = d["q"], d["i"], d["t"]
+    except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+        raise bad
+    if not isinstance(q, str) or not isinstance(i, int) or not isinstance(t, str):
+        raise bad
+    return kind[0], q, i, t
 
 
 def parse_result_id(rid):
-    if not isinstance(rid, str) or not rid.startswith("wz1.") or len(rid) > 2000:
-        raise WazeError("resultId is not an id from search_places")
-    try:
-        raw = base64.urlsafe_b64decode(rid[4:] + "=" * (-len(rid[4:]) % 4))
-        d = json.loads(raw.decode())
-        q, i, t = d["q"], d["i"], d["t"]
-    except (ValueError, KeyError, TypeError, UnicodeDecodeError):
-        raise WazeError("resultId is not an id from search_places")
-    if not isinstance(q, str) or not isinstance(i, int) or not isinstance(t, str):
-        raise WazeError("resultId is not an id from search_places")
-    return q, i, t
+    """(query, index, name) of any place id (query is empty for Waze's own lists)."""
+    return parse_any_id(rid)[1:]
+
+
+def search_actions(model):
+    return [a for a in walk(model) if a.get("$") == "Action" and SEARCH_ICON.search(icon_name(a) or "")]
+
+
+def first_search(model):
+    a = search_actions(model)
+    return cb_of(a[0]) if a else None
+
+
+def has_search(model):
+    return bool(search_actions(model))
+
+
+def estimate_words(st):
+    """'13 min and 2.3 km left, arrival at 11:36' from a summary, or None."""
+    left = []
+    if "timeLeftMinutes" in st:
+        left.append("%d min" % st["timeLeftMinutes"])
+    if "distanceLeft" in st:
+        left.append(st["distanceLeft"]["text"])
+    out = " and ".join(left) + " left" if left else ""
+    if "eta" in st:
+        out += (", " if out else "") + "arrival at %s" % st["eta"]["local"]
+    return out or None
+
+
+def span_text(v):
+    """A CarText with its spans' values put in (Waze writes "_DISTANCE_PLACEHOLDER_ away" with a
+    DistanceSpan or DurationSpan over the placeholder), as plain text."""
+    if not isinstance(v, dict) or not v.get("spans"):
+        return plain(text_of(v))
+    s = text_of(v) or ""
+    reps = []
+    for sp in v.get("spans") or []:
+        span = (sp or {}).get("span") or {}
+        if span.get("$") == "DistanceSpan":
+            d = distance_of(span.get("distance"))
+            rep = d["text"] if d else None
+        elif span.get("$") == "DurationSpan" and isinstance(span.get("durationSeconds"), (int, float)):
+            rep = "%d min" % max(1, round(span["durationSeconds"] / 60.0))
+        else:
+            rep = None
+        if rep is not None and isinstance(sp.get("start"), int) and isinstance(sp.get("end"), int):
+            reps.append((sp["start"], sp["end"], rep))
+    for a, b, rep in sorted(reps, reverse=True):
+        s = s[:a] + rep + s[b:]
+    return plain(s)
 
 
 class HeldSearch:
@@ -566,11 +388,12 @@ class HeldSearch:
     def results(self, query):
         """Opens Waze's search, submits the query, and returns the result list's model."""
         s = self.s
-        acts = [a for a in walk(s.inner()) if a.get("$") == "Action" and SEARCH_ICON.search(icon_name(a) or "")]
+        acts = search_actions(s.inner())
         if not acts:
+            if s.navigating and s.inner().get("$") == "NavigationTemplate":
+                raise WazeError("Waze's navigation screen offers no search now (Waze hides it while the drive has a stop).")
             raise WazeError("Waze's current car screen offers no search (it may be showing a question or a menu).")
-        s.click(cb_of(acts[0]))
-        box = s.wait_template(lambda m: m.get("$") == "SearchTemplate", 8, "its search screen")
+        box = s.press(first_search, lambda m: m.get("$") == "SearchTemplate", 8, "search button")
         cb = (box.get("searchCallbackDelegate") or {}).get("$cb")
         if not isinstance(cb, int):
             raise WazeError("Waze's search screen takes no text.")
@@ -583,8 +406,31 @@ class HeldSearch:
         self.list_stack = s.stack()
         return model
 
+    def open_list(self, kind):
+        """Opens one of Waze's own lists from its search screen (recent or saved places)."""
+        s = self.s
+        acts = search_actions(s.inner())
+        if not acts:
+            raise WazeError("Waze's current car screen offers no search, where it keeps its %s places." % kind)
+        s.press(first_search, lambda m: m.get("$") == "SearchTemplate", 8, "search button")
+        s.settle(SETTLE_S, 1.0)
+        box = s.inner()
+        rows = [r for r in walk(box) if r.get("$") == "Row" and (((r.get("image") or {}).get("icon")) or {}).get("resName") == LIST_ICONS[kind]]
+        if not rows:
+            offered = [plain(text_of(r.get("title"))) for r in walk(box) if r.get("$") == "Row"]
+            raise WazeError("Waze lists no %s places now (its search offers: %s)%s." % (
+                kind, ", ".join(o for o in offered if o) or "nothing",
+                "; it lists saved places once some are saved in the driver's Waze account" if kind == "saved" else ""))
+        s.click(cb_of(rows[0]))
+        s.wait_template(lambda m: m.get("$") in ("ListTemplate", PLACE_LIST) and not m.get("loading"), 10, "its %s places" % kind)
+        s.settle(SETTLE_S, 1.0)
+        self.list_stack = s.stack()
+        return s.inner()
+
     def rows(self):
-        return [r for r in ((self.s.inner().get("itemList") or {}).get("items") or []) if isinstance(r, dict) and r.get("$") == "Row"]
+        m = self.s.inner()
+        items = (m.get("itemList") or m.get("singleList") or {}).get("items") or []
+        return [r for r in items if isinstance(r, dict) and r.get("$") == "Row"]
 
     def details(self, index):
         """Opens result `index`'s place card, reads it, and returns to the list: [(title, text)], the
@@ -595,18 +441,18 @@ class HeldSearch:
             raise WazeError("the result is no longer in Waze's list")
         s.click(cb_of(rows[index]))
         s.wait_template(lambda m: m.get("$") == "MapTemplate" and isinstance(m.get("pane"), dict), 10, "the place's card")
-        s.settle(0.6, 3.0)
+        s.settle(SETTLE_S, 1.5)
         pane = s.inner().get("pane") or {}
         out = []
         for r in pane.get("rows") or []:
             if isinstance(r, dict):
-                out.append((plain(text_of(r.get("title"))) or "", " ".join(x for x in (plain(text_of(t)) for t in r.get("texts") or []) if x)))
+                out.append((span_text(r.get("title")) or "", " • ".join(x for x in (span_text(t) for t in r.get("texts") or []) if x)))
         return out, pane
 
     def back_to_list(self):
         if not self.s.back_to(self.list_stack, 8.0):
             raise WazeError("Waze did not go back to its search results.")
-        self.s.settle(0.5, 2.0)
+        self.s.settle(SETTLE_S, 1.0)
 
 
 def address_of(details, name):
@@ -634,6 +480,9 @@ def search_places(args, mode=None, carapp=None, limit=SEARCH_LIMIT):
     if (mode or interface()) != "car":
         raise WazeError("Searching needs Car mode (Settings > Waze interface: Car). In Phone mode Waze's "
                         "search runs only on its own screen; navigate_to with the place's name searches it there.")
+    addresses = args.get("addresses", False)
+    if not isinstance(addresses, bool):
+        raise WazeError("addresses must be true or false")
     h = HeldSearch(carapp)
     try:
         h.results(query)
@@ -643,15 +492,16 @@ def search_places(args, mode=None, carapp=None, limit=SEARCH_LIMIT):
             r = parse_row(row)
             if not r.get("name"):
                 continue
-            try:
-                det, _ = h.details(i)
-                addr = address_of(det, r["name"])
-                if addr:
-                    r["address"] = addr
-                h.back_to_list()
-            except WazeError:
-                # the card did not open: the row's own line is all there is
-                h.back_to_list()
+            if addresses:
+                # Waze's list shows no address: each place's card has it (one card at a time)
+                try:
+                    det, _ = h.details(i)
+                    addr = address_of(det, r["name"])
+                    if addr:
+                        r["address"] = addr
+                    h.back_to_list()
+                except WazeError:
+                    h.back_to_list()  # the card did not open: the row's own line is all there is
             r["resultId"] = result_id(query, i, r["name"])
             out.append(r)
     finally:
@@ -667,34 +517,99 @@ def search_places(args, mode=None, carapp=None, limit=SEARCH_LIMIT):
     return ("Waze's results for %r (navigate_to with a resultId drives there):\n" % query) + "\n".join(lines), st
 
 
-def navigate_result(rid, carapp=None, wait_s=START_WAIT_S):
-    """Drives to a search_places result: Waze's search again with the same query, the same place
-    picked (by its name; its position in the list when the name repeats), and its card's first
-    action (Waze's "Go now")."""
-    query, index, name = parse_result_id(rid)
+def find_result(h, rid):
+    """Runs a search_places result's search again and finds the same place (by its name; its
+    position in the list when the name repeats): (index, name)."""
+    kind, query, index, name = parse_any_id(rid)
+    if kind == "search":
+        h.results(query)
+    else:
+        h.open_list(kind)
+    names = [parse_row(r).get("name") for r in h.rows()]
+    if index < len(names) and names[index] == name:
+        return index, name
+    if name in names:
+        return names.index(name), name
+    if kind != "search":
+        raise WazeError("%s is no longer among Waze's %s places." % (name, kind))
+    raise WazeError("%s is no longer among Waze's results for %r; search again." % (name, query))
+
+
+def place_list(kind, args, mode=None, carapp=None):
+    """Waze's recent or saved places, as its search screen lists them: names and ids for
+    navigate_to, add_stop or place_details."""
+    if (mode or interface()) != "car":
+        raise WazeError("Waze's %s places are listed in Car mode only (Settings > Waze interface: Car)." % kind)
     h = HeldSearch(carapp)
     try:
-        h.results(query)
-        rows = h.rows()
-        names = [parse_row(r).get("name") for r in rows]
-        if index < len(names) and names[index] == name:
-            pick = index
-        elif name in names:
-            pick = names.index(name)
-        else:
-            raise WazeError("%s is no longer among Waze's results for %r; search again." % (name, query))
+        h.open_list(kind)
+        out = []
+        for i, r in enumerate(h.rows()[:20]):
+            p = parse_row(r)
+            if p.get("name"):
+                p["resultId"] = result_id("", i, p["name"], kind)
+                out.append(p)
+    finally:
+        h.close()
+    st = {"places": out, "list": kind}
+    if not out:
+        return "Waze's %s places list is empty." % kind, st
+    return ("Waze's %s places (navigate_to or add_stop with a resultId):\n" % kind) + "\n".join(
+        "%d. %s%s resultId=%s" % (k + 1, p["name"], (" · " + p["info"]) if p.get("info") else "", p["resultId"]) for k, p in enumerate(out)), st
+
+
+def place_details(args, mode=None, carapp=None):
+    """What Waze's card for a search_places result shows: its rows (the place, its address, its
+    hours or other lines Waze has) and the actions it offers."""
+    rid = args.get("resultId")
+    parse_result_id(rid)
+    if (mode or interface()) != "car":
+        raise WazeError("Place details need Car mode (Settings > Waze interface: Car).")
+    h = HeldSearch(carapp)
+    try:
+        i, name = find_result(h, rid)
+        det, pane = h.details(i)
+    finally:
+        h.close()
+    acts = [plain(text_of(a.get("title"))) for a in pane.get("actions") or [] if isinstance(a, dict)]
+    st = {"name": name, "address": address_of(det, name), "rows": [{"title": t, "text": x} for t, x in det if t or x],
+          "actions": [a for a in acts if a], "resultId": rid,
+          "coordinates": "not given: Waze's car card shows no coordinates"}
+    lines = ["%s%s" % (t, (": " + x) if x else "") for t, x in det if t or x]
+    return ("Waze's card for %s:\n" % name) + "\n".join(lines) + \
+        ("\nIt offers: %s." % ", ".join(st["actions"]) if st["actions"] else ""), st
+
+
+def navigate_result(rid, carapp=None, wait_s=START_WAIT_S, place=None):
+    """Drives to a search_places result (Waze's search again with the same query, the same place
+    picked), or to one of Waze's own places (place: Home, Work, saved, recent), by its card's first
+    action (Waze's "Go now", or "New drive" during a drive)."""
+    import places
+    if place is None:
+        parse_result_id(rid)
+    h = HeldSearch(carapp)
+    try:
+        pick, name = places.find_in_list(h, place) if place else find_result(h, rid)
         _, pane = h.details(pick)
         go = [a for a in pane.get("actions") or [] if isinstance(a, dict) and isinstance(cb_of(a), int)]
         if not go:
             raise WazeError("Waze's card for %s offers no way to drive there." % name)
+        n0 = h.s.seq
         h.s.click(cb_of(go[0]))
         started = h.s.wait(lambda x: bool(x.navigating and isinstance(x.trip, dict)
-                                          and x.trip.get("destinationTravelEstimates")), wait_s)
-        if h.s.navigating:
-            h.keep = True  # the drive is what the car screen shows now
+                                          and x.trip.get("destinationTravelEstimates"))
+                           and x.inner().get("$") == "NavigationTemplate"
+                           or x.seq > n0 and is_route_preview(x.inner()), wait_s)
+        preview = not h.s.navigating and is_route_preview(h.s.inner())
+        if h.s.navigating or preview:
+            h.keep = True  # the drive, or Waze's route preview for it, is what the car screen shows now
         st = summarize(h.s.trip, h.s.navigating)
+        waits = [b["title"] for b in question_of(h.s.inner())[1]] if preview else []
     finally:
         h.close()
+    if preview:
+        return ("Waze is waiting on the route preview for %s: start_drive presses Go now, route_options lists the "
+                "routes." % name), dict(st, mode="car", place=name, waitsFor=waits)
     if started:
         return sentence(st), dict(st, mode="car", place=name)
     if st.get("navigating"):
@@ -720,8 +635,6 @@ REPORT_ERROR_ICON = "icon_report_error"
 # Waze's diagnostics entry in the same grid (it sends Waze's logs, not a road report)
 NOT_A_REPORT = {"icon_report_debug"}
 REPORT_RESULT_S = 12.0
-TYPES_CACHE_S = 1800
-_types_cache = {"t": 0.0, "types": None}
 
 
 def report_id(res_name, title):
@@ -776,9 +689,8 @@ class HeldReports(HeldSearch):
         if not acts():
             raise WazeError("Waze's car screen offers no Report button now (Waze shows it on its map while the map "
                             "follows the car, not over another screen or question).")
-        s.click(cb_of(acts()[0]))
-        s.wait_template(is_report_grid, 8, "its report menu")
-        s.settle(0.6, 3.0)
+        s.press(lambda m: (lambda a: cb_of(a[0]) if a else None)(acts()), is_report_grid, 8, "Report button")
+        s.settle(SETTLE_S, 1.5)
         self.menu_stack = s.stack()
         return [i for i in grid_items(s.inner()) if i["res"] not in NOT_A_REPORT]
 
@@ -786,17 +698,17 @@ class HeldReports(HeldSearch):
         """The category's kinds (a grid), or None when Waze answers the tap with a question of its own
         (a closure while driving: "Report a closure on your route", Report or Cancel)."""
         s = self.s
-        t0 = s.template
-        s.click(item["cb"])
-        s.wait_template(lambda m: s.template is not t0 and len(s.stack()) > len(self.menu_stack),
-                        8, "the kinds of %s" % item["title"])
-        s.settle(0.6, 3.0)
+        # the category by its id on the menu as it is now (a press Waze dropped is made again with
+        # the menu's current callback)
+        find = lambda m: next((i["cb"] for i in grid_items(m) if i["id"] == item["id"]), None)
+        s.press(find, lambda m: len(s.stack()) > len(self.menu_stack), 8, "%s button" % item["title"])
+        s.settle(SETTLE_S, 1.5)
         return grid_items(s.inner()) if is_report_grid(s.inner()) else None
 
     def back_to_menu(self):
         if not self.s.back_to(self.menu_stack, 8.0):
             raise WazeError("Waze did not go back to its report menu.")
-        self.s.settle(0.5, 2.0)
+        self.s.settle(SETTLE_S, 1.0)
 
 
 def report_types(args=None, mode=None, carapp=None, fresh=False):
@@ -804,10 +716,9 @@ def report_types(args=None, mode=None, carapp=None, fresh=False):
     if (mode or interface()) != "car":
         raise WazeError("Reports need Car mode (Settings > Waze interface: Car). In Phone mode Waze's report "
                         "screens are not reachable from outside the app.")
-    now = time.monotonic()
-    if not fresh and _types_cache["types"] is not None and now - _types_cache["t"] < TYPES_CACHE_S:
-        types = _types_cache["types"]
-    else:
+    types = None if fresh or (args or {}).get("fresh") else flows.get("reports")
+    learned = types is not None
+    if types is None:
         h = HeldReports(carapp)
         try:
             types = []
@@ -826,11 +737,13 @@ def report_types(args=None, mode=None, carapp=None, fresh=False):
                 h.back_to_menu()
         finally:
             h.close()
-        _types_cache.update(t=time.monotonic(), types=types)
-    lines = ["%s (%s): %s" % (c["title"], c["id"], ", ".join("%s (%s)" % (k["title"], k["id"]) for k in c["kinds"])
+        flows.put("reports", types)
+    lines =["%s (%s): %s" % (c["title"], c["id"], ", ".join("%s (%s)" % (k["title"], k["id"]) for k in c["kinds"])
                               if c["kinds"] else "no kinds; Waze asks: %s (%s)" % (c["asks"]["question"], ", ".join(c["asks"]["answers"])))
              for c in types]
-    return "Waze's report types (category: kinds; ids in brackets):\n" + "\n".join(lines), {"categories": types}
+    return ("Waze's report types (category: kinds; ids in brackets):\n" + "\n".join(lines),
+            {"categories": types, "source": "learned from Waze %s's screens earlier" % (flows.version_code() or "")
+             if learned else "read from Waze's screens now"})
 
 
 def report(args, mode=None, carapp=None):
@@ -848,9 +761,13 @@ def report(args, mode=None, carapp=None):
     s = h.s
     answered = None
     try:
-        cat = pick(h.open_menu(), category, "report category")
-        before = len(s.alerts)
-        verdict = lambda x: [a for a in x.alerts[before:] if alert_icon(a) in (REPORTED_ICON, REPORT_ERROR_ICON)]
+        menu = h.open_menu()
+        known = flows.get("reports")
+        if known is not None and [c["id"] for c in known] != [c["id"] for c in menu]:
+            flows.forget("reports")  # Waze's menu changed: report_types reads it again
+        cat = pick(menu, category, "report category")
+        before = s.alert_count
+        verdict = lambda x: [a for a in x.alerts_since(before) if alert_icon(a) in (REPORTED_ICON, REPORT_ERROR_ICON)]
         kinds = h.open_category(cat)
         if kinds is None:
             # the category is the report itself, and Waze asks to confirm it (a closure)
@@ -860,6 +777,9 @@ def report(args, mode=None, carapp=None):
             answered = answer(s, option, cat["title"])
             s.wait(lambda x: bool(verdict(x)), REPORT_RESULT_S)
         else:
+            was = [c for c in known or [] if c["id"] == cat["id"]]
+            if was and [x["id"] for x in was[0]["kinds"]] != [x["id"] for x in kinds]:
+                flows.forget("reports")
             if kind and kind.strip():
                 k = pick(kinds, kind, "kind of %s" % cat["title"])
             else:
@@ -877,7 +797,7 @@ def report(args, mode=None, carapp=None):
             asks = lambda x: x.template is not t0 and not is_report_grid(x.inner()) and depth(x.stack(), h.base) > 0
             s.wait(lambda x: bool(verdict(x)) or asks(x), REPORT_RESULT_S)
             if not verdict(s) and asks(s):
-                s.settle(0.5, 2.0)
+                s.settle(SETTLE_S, 1.0)
                 answered = answer(s, option, k["title"])
                 s.wait(lambda x: bool(verdict(x)), REPORT_RESULT_S)
         got = verdict(s)
@@ -955,57 +875,69 @@ def _num(x):
     return ("%.6f" % float(x)).rstrip("0").rstrip(".")
 
 
-def check_destination(args):
-    """(destination, lat, lon, name) from navigate_to's arguments, or WazeError."""
-    dest = args.get("destination")
-    lat, lon, name = args.get("latitude"), args.get("longitude"), args.get("name")
-    if dest is not None and not isinstance(dest, str):
-        raise WazeError("destination must be text")
-    dest = (dest or "").strip() or None
-    if (lat is None) != (lon is None):
-        raise WazeError("give both latitude and longitude, or neither")
-    if lat is not None:
-        if isinstance(lat, bool) or isinstance(lon, bool) or not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-            raise WazeError("latitude and longitude must be numbers")
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            raise WazeError("latitude must be -90..90 and longitude -180..180")
-    if dest is None and lat is None:
-        raise WazeError("give a destination (an address or place name) or latitude and longitude")
-    if dest is not None and len(dest) > 300:
-        raise WazeError("destination is longer than 300 characters")
-    if name is not None and not isinstance(name, str):
-        raise WazeError("name must be text")
-    return (None if lat is not None else dest), lat, lon, (name or "").strip() or None
+def understood_words(p):
+    """What the answer says it took the place for."""
+    u = p.get("understood") or {}
+    what = ("%s, %s" % (_num(u["latitude"]), _num(u["longitude"]))) if "latitude" in u else u.get("query") or u.get("name")
+    return "Read as %s (%s)%s." % (u.get("source", "a place"), u.get("how", ""), (": " + what) if what else "")
 
 
 def navigate_to(args, mode=None, carapp=None, intent=None, wait_s=START_WAIT_S):
-    rid = args.get("resultId")
-    if rid is not None:
-        if any(args.get(k) is not None for k in ("destination", "latitude", "longitude")):
-            raise WazeError("give either resultId or a destination, not both")
-        if (mode or interface()) != "car":
-            raise WazeError("Search results exist in Car mode only; give the destination as text instead.")
-        return navigate_result(rid, carapp, wait_s)
-    dest, lat, lon, name = check_destination(args)
-    label = name or dest or "%s,%s" % (_num(lat), _num(lon))
+    import places
+    p = places.resolve_args(args)
     mode = mode or interface()
+    if "resultId" in p:
+        if mode != "car":
+            raise WazeError("Search results exist in Car mode only; give the destination as text instead.")
+        return navigate_result(p["resultId"], carapp, wait_s)
+    if "list" in p:
+        if mode != "car":
+            raise WazeError("Waze's own places (Home, Work, saved, recent) are reachable in Car mode only.")
+        text, st = navigate_result(None, carapp, wait_s, place=p)
+    else:
+        text, st = navigate_geo(p.get("query"), p.get("latitude"), p.get("longitude"), p["label"], mode, carapp, intent, wait_s)
+    if p["understood"].get("source") not in ("coordinates", "an address or place name"):
+        text = understood_words(p) + " " + text
+    return text, dict(st, understood=p["understood"])
+
+
+def navigate_geo(dest, lat, lon, label, mode, carapp=None, intent=None, wait_s=START_WAIT_S):
+    """Hands Waze the place as Android Auto's assistant would (geo:), or its deep link in Phone mode."""
     if mode == "car":
         uri = geo_uri(dest, lat, lon)
         s = CarSession(carapp)
-        try:
+        n0 = s.seq
+        r = s.request({"type": "navigate", "uri": uri})
+        if not r.get("ok"):
+            raise WazeError("Waze did not take the destination: %s" % r.get("error"))
+        # started: navigating, with a trip that has its estimates (the first trip Waze reports
+        # is often an empty one, before the route is computed); or Waze shows its route preview
+        # and waits for the driver (Go now, Routes, Avoid)
+        done = lambda x: bool(x.navigating and isinstance(x.trip, dict) and x.trip.get("destinationTravelEstimates")) \
+            or (x.seq > n0 and (is_route_preview(x.inner()) or is_message(x.inner())))
+        depth0 = len(s.stack())
+        # Waze drops a destination that comes while it is still ending a drive (seen right after
+        # stop_navigation): no screen of its own within REACT_S, and it goes once more
+        if not s.wait(lambda x: done(x) or len(x.stack()) > depth0 or bool(x.navigating), REACT_S):
             r = s.request({"type": "navigate", "uri": uri})
             if not r.get("ok"):
                 raise WazeError("Waze did not take the destination: %s" % r.get("error"))
-            # started: navigating, with a trip that has its estimates (the first trip Waze reports
-            # is often an empty one, before the route is computed)
-            started = s.wait(lambda x: bool(x.navigating and isinstance(x.trip, dict)
-                                            and x.trip.get("destinationTravelEstimates")), wait_s)
-            st = summarize(s.trip, s.navigating)
-            # Waze may show the route first and wait for the driver (its route preview: Go now,
-            # Avoid ...): say what it waits for
-            waits = [b["title"] for b in question_of(s.inner())[1]] if not s.navigating else []
-        finally:
-            s.close()
+        started = s.wait(done, wait_s - REACT_S)
+        if not s.navigating and is_message(s.inner()):
+            # Waze's own refusal ("Something went wrong - try again", no route): said as it is; its
+            # dialog is closed (its only button) so the car's map is free again
+            q, buttons = question_of(s.inner())
+            if len(buttons) == 1:
+                s.click(buttons[0]["cb"])
+            raise WazeError("Waze could not start a drive to %s. Waze says: %s" % (label, q or "an error"))
+        st = summarize(s.trip, s.navigating)
+        started = bool(s.navigating) and started
+        waits = [b["title"] for b in question_of(s.inner())[1]] if not s.navigating else []
+        if waits and is_route_preview(s.inner()):
+            route = " ".join(x for x in (span_text(r.get("title")) for r in walk(s.inner()) if r.get("$") == "Row") if x)
+            return ("Waze is waiting on the route preview for %s%s: start_drive presses Go now, route_options lists "
+                    "the routes." % (label, (" (%s)" % route.replace("\n", ", ")) if route else "")), \
+                dict(st, sent=uri, mode="car", waitsFor=waits, routePreview=route or None)
         if started:
             return sentence(st), dict(st, sent=uri, mode="car")
         if s.navigating:
@@ -1021,23 +953,63 @@ def navigate_to(args, mode=None, carapp=None, intent=None, wait_s=START_WAIT_S):
             "in Phone mode the trip cannot be read back." % label), {"sent": uri, "mode": "phone"}
 
 
+def is_message(model):
+    """A message of Waze's (its MessageTemplate, alone or over the map): an error or a question."""
+    return model.get("$") == "MessageTemplate" or (model.get("contentTemplate") or {}).get("$") == "MessageTemplate"
+
+
+def is_start_card(model):
+    """Waze's "Driving to X? Go now" / "Still driving to X? Resume drive" card: a pane on the map
+    with one primary button."""
+    pane = model.get("pane") if model.get("$") == "MapTemplate" else None
+    if not isinstance(pane, dict):
+        return False
+    prim = [a for a in pane.get("actions") or [] if isinstance(a, dict) and (a.get("flags") or 0) & 1]
+    return len(prim) == 1
+
+
+def is_route_preview(model):
+    """Waze's route preview: a primary Go button beside its Routes button or Avoid."""
+    _, buttons = question_of(model)
+    if not any(b["primary"] for b in buttons):
+        return False
+    return any(b["title"].lower() == "avoid" for b in buttons) or any(
+        a.get("$") == "Action" and re.search(r"(^|_)routes(_|$)", icon_name(a) or "") for a in walk(model))
+
+
 def trip_status(args, mode=None, carapp=None):
     mode = mode or interface()
     if mode != "car":
         raise WazeError("Trip status is only known in Car mode (Settings > Waze interface: Car). "
                         "In Phone mode Waze does not report its trip to the device.")
     s = CarSession(carapp)
-    try:
-        if s.navigating and not s.seen_trip:
-            s.wait(lambda x: x.seen_trip, 2.0)
-        st = summarize(s.trip, s.navigating)
-    finally:
-        s.close()
+    if s.navigating and not s.seen_trip:
+        s.wait(lambda x: x.seen_trip, 2.0)
+    st = summarize(s.trip, s.navigating)
     if s.navigating is None and s.template is None:
         st = {"navigating": False, "known": False, "note": "Waze's car session has not started yet."}
         return "Waze's car session has not started yet, so the trip is not known.", st
+    if st.get("navigating"):
+        add_stops(st, s)
     # the host sends the navigation state once a drive started or ended: none yet is not navigating
     return sentence(st), st
+
+
+def add_stops(st, s):
+    """The stops Waze's navigation screen counts ("1 stop"), the one this service added, and what
+    the estimates then measure (Waze gives them to the next stop)."""
+    import stops  # stops.py builds on this module
+    nav = s.nav_screen
+    if not nav:
+        return
+    n = stops.stop_count(nav)
+    st["stops"] = n
+    if n:
+        st["tripText"] = stops.trip_text(nav)
+        st["estimatesTo"] = "the next stop"
+        name = stops.added_stop(s)
+        if name:
+            st["nextStop"] = {"name": name}
 
 
 def stop_navigation(args, mode=None, carapp=None, intent=None):

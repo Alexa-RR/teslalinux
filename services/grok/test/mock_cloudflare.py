@@ -41,7 +41,7 @@ class State:
         assert q["response_type"] == "code" and q["client_id"] == self.client_id, q
         assert q["code_challenge_method"] == "S256" and q["code_challenge"][0].isalnum(), q
         # exactly the project client's scopes (all required; Cloudflare refuses others)
-        assert q["scope"].split() == ["dns.write", "zone.read", "access.write", "access-acct.read", "teams-connectors.write",
+        assert q["scope"].split() == ["dns.write", "zone.read", "access.write", "access-acct.read", "teams-connector-cloudflared.write",
                                       "account-settings.read", "user-details.read"], q
         code = uuid.uuid4().hex
         self.codes[code] = {"challenge": q["code_challenge"], "redirect_uri": q["redirect_uri"], "client_id": q["client_id"],

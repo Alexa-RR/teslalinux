@@ -19,7 +19,9 @@ auth "none", no secret), so its id can be in the repository. The flow, all on th
 
 Scopes: exactly the project client's (Cloudflare's OAuth scope ids, from GET /client/v4/oauth/scopes,
 for the permissions each call needs):
-  teams-connectors.write  Cloudflare One Connectors Write: the tunnel (list, create, token, routes)
+  teams-connector-cloudflared.write
+                          Cloudflare One Connector: cloudflared Write: the tunnel (list, create, token,
+                          routes; each of these accepts it, the narrowest permission that does)
   access.write            Access: Apps and Policies Write: the Access application (list, create, update)
   access-acct.read        Access: Organizations, Identity Providers, and Groups Read: the team domain,
                           the login methods
@@ -44,7 +46,7 @@ import cfsetup
 # the project's OAuth client (docs/GROK.md, "For the maintainer"); a fork sets its own
 DEFAULT_CLIENT_ID = "a3ec02d7b50d47e2ec23d7772fa51e31"
 OAUTH_BASE = "https://dash.cloudflare.com/oauth2"
-SCOPES = ["dns.write", "zone.read", "access.write", "access-acct.read", "teams-connectors.write",
+SCOPES = ["dns.write", "zone.read", "access.write", "access-acct.read", "teams-connector-cloudflared.write",
           "account-settings.read", "user-details.read"]
 STATE_TTL_S = 600
 CALLBACK_PATH = "/api/grok/oauth/callback"

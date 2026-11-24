@@ -22,6 +22,41 @@ version's.
 - Since 0.6.2, Hebrew and Arabic names on Waze's map were drawn in bold. They are back to the
   regular letters they had before, and moving the map stays smooth.
 
+### Grok does what Waze's car screen does
+
+*Settings > Grok, docs/GROK.md.*
+
+- Stops: add a stop during a drive, or give `navigate_to` several places in order. Waze's car
+  screen takes one stop per drive and cannot remove one; Grok says so.
+- Routes: list the routes Waze offers, choose one, avoid tolls, ferries or freeways, and start the
+  drive Waze shows in its preview.
+- Waze's sound, zoom and center-on-car, its alerts' buttons, its recent and saved places, a
+  place's card.
+- Read without touching Waze: the next turn and lanes, the speed and the limit, Waze's alerts, what
+  its screen shows, the car's position, the device's connection.
+- Any way of naming a place: an address in any language, Waze, Google, Apple, OpenStreetMap, Bing
+  or HERE links (short Google links are followed), coordinates in any common form, Plus Codes,
+  geohashes, Israeli grid pairs, Home, Work, "my last destination". The answer says how it read it.
+- PalGate gates: list them, and open one when you allow it (Settings > Grok > Let Grok open gates,
+  off by default) and the request confirms it.
+- Faster: the device keeps one connection to Waze and remembers its screens per Waze version, so
+  reading tools answer at once and actions no longer start from the top. Reports' categories come
+  back instantly.
+- Waze's own refusals ("Something went wrong") come back as they are, without a long wait.
+
+### The car page shows the stop
+
+*Car mode, both looks, day and night.*
+
+- With a stop on the drive the trip card shows Waze's "1 stop" and the destination's name.
+- A place's card no longer cuts its buttons short ("Add a s..."): two that do not fit side by side
+  stack.
+
+### Platform
+
+- Connect Cloudflare asks for the narrower tunnel permission, Cloudflare One Connector: cloudflared
+  Write. The OAuth client in the dashboard must carry it.
+
 ## [0.6.2] - 2026-11-24
 
 The map no longer freezes while you move it, and a tidier Connect Cloudflare.
