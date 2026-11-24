@@ -105,7 +105,9 @@ os.environ.update({
 })
 
 import accessjwt  # noqa: E402
+import cfoauth  # noqa: E402
 import cfsetup  # noqa: E402
+import urllib.parse  # noqa: E402
 import grok  # noqa: E402
 import mcp  # noqa: E402
 import waze  # noqa: E402
@@ -530,6 +532,133 @@ class TestReports(unittest.TestCase):
             last = json.loads(r.read())["actions"][0]
         self.assertEqual((last["tool"], last["args"], last["ok"]), ("report", {"category": "Police", "kind": "police"}, True))
         self.assertIn("Reported Police: Police", last["result"])
+
+
+class TestConnectCloudflare(unittest.TestCase):
+    """Connect Cloudflare (services/grok/cfoauth.py) against mocks of Cloudflare's OAuth endpoints and API."""
+
+    def setUp(self):
+        configure()
+        self.st = mock_cloudflare.State()
+        self.api, base = mock_cloudflare.start(self.st)
+        self.oauth, obase = mock_cloudflare.start_oauth(self.st)
+        envf = os.path.join(TMP, "device.env")
+        with open(envf, "w") as f:
+            f.write("DEVICE_HOST=car.example.test\n")
+        self.saved = (grok.CF_API, grok.DEVICE_ENV, grok.OAUTH.client_id, grok.OAUTH.oauth_base, grok.OAUTH.now)
+        grok.CF_API, grok.DEVICE_ENV = base, envf
+        grok.OAUTH.client_id, grok.OAUTH.oauth_base = self.st.client_id, obase
+        grok.OAUTH.pending, grok.OAUTH.last = {}, None
+
+    def tearDown(self):
+        grok.CF_API, grok.DEVICE_ENV, grok.OAUTH.client_id, grok.OAUTH.oauth_base, grok.OAUTH.now = self.saved
+        self.api.shutdown()
+        self.oauth.shutdown()
+        configure()
+
+    def start(self, **body):
+        req = urllib.request.Request(ADMIN_URL + "/api/grokOAuthStart", method="POST", headers={"Content-Type": "application/json"},
+                                     data=json.dumps(body).encode())
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return json.loads(e.read())
+
+    def back(self, params):
+        with urllib.request.urlopen(ADMIN_URL + "/api/grok/oauth/callback?" + urllib.parse.urlencode(params), timeout=30) as r:
+            return r.read().decode()
+
+    def test_sign_in_sets_up_and_revokes(self):
+        out = self.start()
+        self.assertTrue(out["ok"], out)
+        q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(out["url"]).query))
+        self.assertEqual(q["redirect_uri"], "https://car.example.test/api/grok/oauth/callback")
+        self.assertTrue(out["shortUrl"].startswith("https://car.example.test/api/grok/oauth/go?s="))
+        if "qr" in out:
+            self.assertIn("<svg", out["qr"])
+        # the short link a phone opens sends it to the same consent page
+        import http.client
+        c = http.client.HTTPConnection(ADMIN_URL[7:], timeout=5)
+        c.request("GET", out["shortUrl"].split("car.example.test", 1)[1])
+        r = c.getresponse()
+        self.assertEqual((r.status, r.getheader("Location")), (302, out["url"]))
+        page = self.back(self.st.consent(out["url"]))
+        self.assertIn("Grok remote control is set up", page)
+        self.assertIn("mcp.example.com/mcp", page)
+        s = grok.settings()
+        self.assertTrue(s["enabled"] and s["tokenSet"])
+        self.assertEqual((s["hostname"], s["email"], s["teamDomain"]), ("mcp.example.com", "driver@example.com", "https://myteam.cloudflareaccess.com"))
+        app = list(self.st.apps.values())[0]
+        self.assertEqual(app["policies"][0]["include"], [{"email": {"email": "driver@example.com"}}])
+        self.assertEqual(len(self.st.revoked), 1, "the sign-in is revoked")
+        self.assertEqual(self.st.oauth_tokens, {})
+        for root, _, files in os.walk(TMP):
+            for fn in files:
+                with open(os.path.join(root, fn), "rb") as f:
+                    self.assertNotIn(self.st.revoked[0].encode(), f.read(), fn)
+        with urllib.request.urlopen(ADMIN_URL + "/api/grok", timeout=5) as r:
+            last = json.loads(r.read())["connect"]["last"]
+        self.assertTrue(last["ok"])
+        # the code and the state are single use
+        self.assertIn("expired or was already used", self.back({"code": "x", "state": q["state"]}))
+
+    def test_declined_unknown_and_expired(self):
+        out = self.start()
+        state = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(out["url"]).query))["state"]
+        self.assertIn("did not allow access", self.back({"error": "access_denied", "state": state}))
+        self.assertIn("expired", self.back({"code": "c", "state": state}))
+        self.assertIn("expired", self.back({"code": "c", "state": "made-up"}))
+        out = self.start()
+        t0 = time.time()
+        grok.OAUTH.now = lambda: t0 + cfoauth.STATE_TTL_S + 5
+        self.assertIn("expired", self.back(self.st.consent(out["url"])))
+        self.assertEqual(self.st.revoked, [], "an expired state never reaches the token exchange")
+        self.assertEqual(self.st.apps, {}, "nothing was set up")
+
+    def test_wrong_account_and_domain(self):
+        self.st.zone = None
+        out = self.start()
+        self.assertIn("sees no domain", self.back(self.st.consent(out["url"])))
+        self.assertEqual(len(self.st.revoked), 1, "revoked after a failure too")
+        self.st.zone = "example.com"
+        out = self.start(domain="other.org")
+        self.assertIn("other.org is not among the domains", self.back(self.st.consent(out["url"])))
+        self.assertEqual(len(self.st.revoked), 2)
+        self.assertEqual(self.st.apps, {})
+        self.st.userinfo_email = ""
+        out = self.start()
+        self.assertIn("no verified email", self.back(self.st.consent(out["url"], email="")))
+
+    def test_choose_among_domains(self):
+        self.st.more_zones = ["other.org"]
+        out = self.start()
+        page = self.back(self.st.consent(out["url"]))
+        self.assertIn("Which domain?", page)
+        self.assertIn('value="other.org"', page)
+        self.assertEqual(self.st.revoked, [], "kept for the choice")
+        state = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(out["url"]).query))["state"]
+        req = urllib.request.Request(ADMIN_URL + "/api/grok/oauth/choose", method="POST",
+                                     data=urllib.parse.urlencode({"state": state, "zone": "example.com"}).encode(),
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            self.assertIn("is set up", r.read().decode())
+        self.assertEqual(len(self.st.revoked), 1)
+        # a held choice that times out is revoked
+        out = self.start()
+        self.back(self.st.consent(out["url"]))
+        t0 = time.time()
+        grok.OAUTH.now = lambda: t0 + cfoauth.STATE_TTL_S + 5
+        self.start()
+        self.assertEqual(len(self.st.revoked), 2)
+
+    def test_without_a_client_id(self):
+        grok.OAUTH.client_id = ""
+        out = self.start()
+        self.assertFalse(out["ok"])
+        self.assertIn("Advanced", out["message"])
+        with urllib.request.urlopen(ADMIN_URL + "/api/grok", timeout=5) as r:
+            self.assertFalse(json.loads(r.read())["connect"]["available"])
 
 
 class TestWazePhone(unittest.TestCase):

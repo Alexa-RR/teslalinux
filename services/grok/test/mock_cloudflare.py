@@ -24,6 +24,74 @@ class State:
         self.records = {}
         self.configs = {}
         self.calls = []
+        # more zones the account has (an OAuth grant sees them all; the setup uses st.zone's id for each)
+        self.more_zones = []
+        # OAuth (dash.cloudflare.com/oauth2): codes issued by the consent page, live tokens, revoked ones
+        self.client_id = "test-client-id"
+        self.codes = {}          # code -> {challenge, redirect_uri, client_id, email}
+        self.oauth_tokens = {}   # token -> email
+        self.revoked = []
+        self.userinfo_email = "driver@example.com"
+
+    def consent(self, authorize_url, email=None):
+        """The browser's trip through Cloudflare's consent page: checks the request as Cloudflare would
+        and returns the callback parameters (a code for the state)."""
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(authorize_url).query).items()}
+        assert q["response_type"] == "code" and q["client_id"] == self.client_id, q
+        assert q["code_challenge_method"] == "S256" and q["code_challenge"][0].isalnum(), q
+        assert q["scope"].split() == ["argotunnel.write", "access.write", "access-acct.read", "zone.read", "dns.write", "openid", "email"], q
+        code = uuid.uuid4().hex
+        self.codes[code] = {"challenge": q["code_challenge"], "redirect_uri": q["redirect_uri"], "client_id": q["client_id"],
+                            "email": email or self.userinfo_email}
+        return {"code": code, "state": q["state"]}
+
+
+def make_oauth_handler(st):
+    import base64
+    import hashlib
+
+    class O(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _out(self, code, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            assert self.headers.get("Content-Type") == "application/x-www-form-urlencoded"
+            f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode()).items()}
+            st.calls.append(("POST", "oauth2" + self.path, f))
+            if self.path == "/oauth2/token":
+                c = st.codes.pop(f.get("code"), None)
+                if not c or f.get("grant_type") != "authorization_code" or f.get("client_id") != c["client_id"] \
+                        or f.get("redirect_uri") != c["redirect_uri"]:
+                    return self._out(400, {"error": "invalid_grant"})
+                v = f.get("code_verifier") or ""
+                if base64.urlsafe_b64encode(hashlib.sha256(v.encode()).digest()).decode().rstrip("=") != c["challenge"]:
+                    return self._out(400, {"error": "invalid_grant", "error_description": "PKCE verification failed"})
+                tok = "oauth-" + uuid.uuid4().hex
+                st.oauth_tokens[tok] = c["email"]
+                return self._out(200, {"access_token": tok, "token_type": "bearer", "expires_in": 3600, "scope": "argotunnel.write"})
+            if self.path == "/oauth2/revoke":
+                st.revoked.append(f.get("token"))
+                st.oauth_tokens.pop(f.get("token"), None)
+                return self._out(200, {})
+            self._out(404, {"error": "not_found"})
+
+        def do_GET(self):
+            if self.path == "/oauth2/userinfo":
+                tok = (self.headers.get("Authorization") or "")[7:]
+                if tok not in st.oauth_tokens:
+                    return self._out(401, {"error": "invalid_token"})
+                return self._out(200, {"sub": "u1", "email": st.oauth_tokens[tok], "email_verified": True})
+            self._out(404, {"error": "not_found"})
+    return O
 
 
 def make_handler(st):
@@ -48,12 +116,14 @@ def make_handler(st):
             path, q = u.path.replace("/client/v4", ""), urllib.parse.parse_qs(u.query)
             body = self._body() if method in ("POST", "PUT", "PATCH") else None
             st.calls.append((method, path, body))
-            if self.headers.get("Authorization") != "Bearer " + TOKEN:
+            auth = self.headers.get("Authorization") or ""
+            if auth != "Bearer " + TOKEN and auth[7:] not in st.oauth_tokens:
                 return self._out(403, None, [{"code": 10000, "message": "Authentication error"}])
             acc = "/accounts/%s" % ACCOUNT
             if path == "/zones" and method == "GET":
-                name = q.get("name", [""])[0]
-                return self._out(200, [{"id": ZONE, "name": st.zone, "account": {"id": ACCOUNT}}] if name == st.zone else [])
+                names = [n for n in [st.zone] + st.more_zones if n]
+                name = q.get("name", [None])[0]
+                return self._out(200, [{"id": ZONE, "name": n, "account": {"id": ACCOUNT}} for n in names if name is None or n == name])
             if path == acc + "/access/organizations" and method == "GET":
                 if not st.org:
                     return self._out(404, None, [{"code": 12130, "message": "access.api.error.not_found"}])
@@ -122,3 +192,10 @@ def start(st):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(st))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, "http://127.0.0.1:%d/client/v4" % srv.server_address[1]
+
+
+def start_oauth(st):
+    """Cloudflare's OAuth endpoints (token, revoke, userinfo; the consent page is State.consent)."""
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_oauth_handler(st))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, "http://127.0.0.1:%d/oauth2" % srv.server_address[1]

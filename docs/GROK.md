@@ -73,7 +73,33 @@ Not offered to Grok: PalGate gates (`docs/GATES.md`). They could become a separa
   Identity providers.
 - The device online (LTE or Wi-Fi) and a Grok account.
 
-## Set it up automatically
+## Set it up with Connect Cloudflare
+
+1. On the car page: **Settings > Grok > Connect Cloudflare**. Optionally type the domain to use (empty:
+   the only domain you allow, or you pick one afterwards), then **Continue with Cloudflare**. Cloudflare's
+   page opens in the browser. In the car you can scan the QR code with a phone on the car's Wi-Fi
+   and sign in there instead. The link works for 10 minutes.
+2. Sign in to Cloudflare. On the consent page, check that the app is **Teslalinux**, choose the account
+   with your domain, and allow it. It asks for exactly what the setup needs: Cloudflare Tunnel Write,
+   Access: Apps and Policies Write, Access: Organizations, Identity Providers, and Groups Read,
+   Zone Read, DNS Write, and your email address.
+3. Cloudflare sends you back to the device (`https://car.alexahub.dev/api/grok/oauth/callback`). The
+   device creates (or, run again, updates) a tunnel named `teslalinux-<hostname>`, the DNS record for
+   `mcp.<your-domain>`, and an Access application for it with Managed OAuth and one rule: the email
+   address of the Cloudflare login. It then revokes the sign-in at once and keeps only the tunnel's
+   token (root-only). If the login allows several domains, the page asks which one first.
+4. Connect Grok (below).
+
+If it fails, the page and Settings > Grok say why. Typical reasons: you declined on Cloudflare's page,
+the 10 minutes ran out, the login has no domain (choose the right account on the consent page), or
+the domain you typed is not in the accounts you allowed. You can also revoke the app yourself at any
+time in Cloudflare under **My Profile > Access Management > Connected Applications**. The device
+no longer needs it after the setup.
+
+## Advanced: set it up with an API token
+
+Use this when Connect Cloudflare is not available (a build without the project's OAuth client) or
+you prefer a token.
 
 1. In the Cloudflare dashboard: **My Profile > API Tokens > Create Token > Create Custom Token**.
    Give it exactly these permissions, with your account under Account Resources and your domain
@@ -88,7 +114,7 @@ Not offered to Grok: PalGate gates (`docs/GATES.md`). They could become a separa
    | Zone | DNS | Edit |
 
    A short TTL (an hour) is fine: the token is needed for this step only.
-2. On the car page: **Settings > Grok > Set up**. Enter your domain, a hostname in it (empty:
+2. On the car page: **Settings > Grok > Advanced: with an API token > Set up**. Enter your domain, a hostname in it (empty:
    `mcp.<your-domain>`), your email address and the token, then **Set up**.
    The device creates (or, run again, updates) a tunnel named `teslalinux-<hostname>`, the DNS
    record for the hostname, and an Access application for it with Managed OAuth and one rule:
@@ -186,3 +212,51 @@ handshake, `server/discover`, the version in every request) and the earlier ones
 2025-11-25: `initialize`, no session id issued). Tests: `python3 services/grok/test/test_grok.py`
 (local stand-ins for Cloudflare's API, Access's keys and Waze's car host; needs
 `python3-cryptography`). Raspberry Pi OS only: the Alpine image has no units for it yet.
+
+## For the maintainer: the Cloudflare OAuth client
+
+Connect Cloudflare uses one OAuth client for the whole project, a Cloudflare self-managed OAuth
+client (developers.cloudflare.com/fundamentals/oauth). It is a public client in the OAuth sense:
+Authorization Code with PKCE (S256), token endpoint authentication `none`, no secret. So its id can
+live in the repository: `DEFAULT_CLIENT_ID` in `services/grok/cfoauth.py`. Until that is set,
+Settings > Grok shows Connect Cloudflare as unavailable and the API-token path works as before.
+
+Creating it needs the dashboard (or an API token with OAuth Client Write: the `cf` CLI's own login
+cannot be granted that permission). In the Cloudflare account that owns the project's domain,
+**Manage Account > OAuth clients > Create**:
+
+| Field | Value |
+|---|---|
+| Client name | Teslalinux |
+| Client URL | `https://github.com/Alexa-RR/teslalinux` |
+| Redirect URIs | `https://car.alexahub.dev/api/grok/oauth/callback` |
+| Grant types | Authorization code (no refresh token: the device never keeps the sign-in) |
+| Response types | code |
+| Token endpoint authentication | None (public client, PKCE) |
+| Scopes, all required | `argotunnel.write`, `access.write`, `access-acct.read`, `zone.read`, `dns.write`, `openid`, `email` |
+
+The scope ids come from `GET https://api.cloudflare.com/client/v4/oauth/scopes` (`cf iam oauth-scopes
+list`): Cloudflare Tunnel Write, Access: Apps and Policies Write, Access: Organizations, Identity
+Providers, and Groups Read, Zone Read, DNS Write; `openid` and `email` give the login's email address
+for the Access policy. With an API token that has OAuth Client Write, the same in one call:
+
+```sh
+cf iam oauth-clients create --body '{"client_name":"Teslalinux","client_uri":"https://github.com/Alexa-RR/teslalinux",
+  "grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none",
+  "redirect_uris":["https://car.alexahub.dev/api/grok/oauth/callback"],
+  "scopes":["argotunnel.write","access.write","access-acct.read","zone.read","dns.write","openid","email"]}'
+```
+
+Then put the client's id into `DEFAULT_CLIENT_ID`. A new client is **private**: only members of the
+account that owns it can authorize it, which is enough to try it. To let every Teslalinux driver use
+it, make it **public**. That is permanent: it cannot be made private again.
+
+1. Verify the client URL's domain (Cloudflare's "client URL domain ownership verification").
+   `github.com` cannot be verified by the project, so set the client URL to a page on a domain the
+   project controls first.
+2. Give it a logo (a URL to the project's logo) and keep the name, client URL and scopes filled in.
+3. **Manage Account > OAuth clients**, the client's menu, **Change Visibility** to public.
+
+A fork that serves its car page under another `DEVICE_HOST` needs its own client with the redirect URI
+`https://<DEVICE_HOST>/api/grok/oauth/callback`, and sets `TESLALINUX_GROK_CF_CLIENT_ID` for
+teslalinux-grok.service (a systemd drop-in) or changes `DEFAULT_CLIENT_ID`.

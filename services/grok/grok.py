@@ -31,6 +31,7 @@ Admin routes (JSON; nginx forwards /api/grok* here):
   POST /api/grokSetup       {domain, hostname?, email, apiToken, redirectUris?}: the Cloudflare side
                             made with the driver's API token (used for these calls, never stored)
 """
+import html
 import json
 import os
 import subprocess
@@ -41,6 +42,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import accessjwt
+import cfoauth
 import cfsetup
 import mcp
 import waze
@@ -56,6 +58,9 @@ HELPER_SUDO = os.environ.get("TESLALINUX_GROK_HELPER_SUDO", "1") == "1"
 TUNNEL_UNIT = os.environ.get("TESLALINUX_GROK_TUNNEL_UNIT", "teslalinux-cloudflared.service")
 TUNNEL_METRICS = os.environ.get("TESLALINUX_GROK_TUNNEL_METRICS", "http://127.0.0.1:20241/ready")
 CF_API = os.environ.get("TESLALINUX_GROK_CF_API", cfsetup.API)
+# the device's settings: DEVICE_HOST, the name the car page and the hotspot's phones reach the
+# device by (Cloudflare's sign-in comes back to https://<DEVICE_HOST>/api/grok/oauth/callback)
+DEVICE_ENV = os.environ.get("TESLALINUX_ENV", "/etc/teslalinux/env")
 # Origins a browser-made request may come from (the MCP spec's DNS-rebinding guard); requests
 # without an Origin (Grok's servers) pass, every one still needs Access's token
 ORIGINS = os.environ.get("TESLALINUX_GROK_ORIGINS", "https://grok.com https://x.ai").split()
@@ -369,7 +374,9 @@ def status():
     return {"ok": True, "settings": cfg, "tunnel": tunnel_state(), "lastRequest": ACTIONS.last_request,
             "actions": ACTIONS.recent(), "interface": waze.interface(),
             "endpoint": ("https://%s/mcp" % cfg["hostname"]) if cfg["hostname"] else None,
-            "tokenPermissions": [" ".join(p) for p in cfsetup.TOKEN_PERMISSIONS]}
+            "tokenPermissions": [" ".join(p) for p in cfsetup.TOKEN_PERMISSIONS],
+            "connect": {"available": OAUTH.available(), "scopes": cfoauth.SCOPES, "last": OAUTH.last,
+                        "redirectUri": "https://%s%s" % (device_host(), cfoauth.CALLBACK_PATH)}}
 
 
 def post_settings(req):
@@ -412,6 +419,78 @@ def post_setup(req):
                  "steps": r["steps"], "note": note, "settings": settings()}
 
 
+# ------------------------------------------------------------------ Connect Cloudflare (OAuth)
+
+def device_host():
+    return read_env(DEVICE_ENV).get("DEVICE_HOST") or "car.alexahub.dev"
+
+
+OAUTH = cfoauth.Flow(client_id=os.environ.get("TESLALINUX_GROK_CF_CLIENT_ID", cfoauth.DEFAULT_CLIENT_ID),
+                     oauth_base=os.environ.get("TESLALINUX_GROK_CF_OAUTH", cfoauth.OAUTH_BASE), api_base=CF_API)
+
+
+def store_setup(r, email):
+    """What the tunnel needs, stored by teslalinux-set-grok (the tunnel token root-only); remote control on."""
+    return run_helper({"hostname": r["hostname"], "teamDomain": r["teamDomain"], "aud": r["aud"], "email": email,
+                       "tunnelToken": r["tunnelToken"], "enabled": True})
+
+
+def post_oauth_start(req):
+    OAUTH.device_host = device_host()
+    OAUTH.api_base = CF_API
+    try:
+        state, url = OAUTH.start(req.get("domain") if isinstance(req.get("domain"), str) else None,
+                                 req.get("hostname") if isinstance(req.get("hostname"), str) else None)
+    except cfoauth.OAuthError as e:
+        return 400, {"ok": False, "message": str(e)}
+    short = "https://%s/api/grok/oauth/go?s=%s" % (OAUTH.device_host, state)
+    out = {"ok": True, "url": url, "shortUrl": short, "expiresIn": cfoauth.STATE_TTL_S}
+    try:
+        import tlqr  # services/gates/tlqr.py, installed next to the gates service
+        out["qr"] = tlqr.svg(short, module=6)
+    except (ImportError, ValueError):
+        pass
+    return 200, out
+
+
+def page(title, body, ok=None):
+    """The small page the browser sees on the device after Cloudflare's sign-in."""
+    tone = "#1a7f37" if ok else "#b42318" if ok is False else "#333"
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>%s</title><style>body{font:18px/1.45 system-ui,sans-serif;margin:0;padding:24px;background:#f6f6f6;color:#222}"
+            "main{max-width:560px;margin:auto;background:#fff;border-radius:14px;padding:24px}h1{font-size:22px;color:%s}"
+            "button{font:inherit;padding:10px 18px;margin:6px 6px 0 0;border-radius:10px;border:1px solid #888;background:#fff}"
+            "li{margin:4px 0}.fine{color:#666;font-size:15px}</style></head><body><main><h1>%s</h1>%s"
+            "<p class=\"fine\">You can close this page. Settings &gt; Grok shows the result too.</p></main></body></html>"
+            % (html.escape(title), tone, html.escape(title), body)).encode()
+
+
+def result_page(res):
+    d = res["done"]
+    items = "".join("<li>%s</li>" % html.escape(s) for s in d["steps"])
+    note = "<p>%s</p>" % html.escape(d["note"]) if d.get("note") else ""
+    return page("Grok remote control is set up", "<p>%s</p><ol>%s</ol>%s" % (html.escape(d["message"]), items, note), True)
+
+
+def oauth_callback(params, chosen=None):
+    try:
+        if chosen is not None:
+            res = OAUTH.choose(params.get("state", ""), chosen, store_setup)
+        else:
+            res = OAUTH.callback(params, store_setup)
+    except cfoauth.OAuthError as e:
+        OAUTH.fail(str(e))
+        log("connect cloudflare: " + str(e))
+        return page("Not set up", "<p>%s</p>" % html.escape(str(e)), False)
+    if "choose" in res:
+        opts = "".join("<button name=\"zone\" value=\"%s\">%s</button>" % (html.escape(z), html.escape(z)) for z in res["choose"])
+        return page("Which domain?", "<p>Signed in as %s. Which domain should Grok use (mcp.&lt;domain&gt;)?</p>"
+                    "<form method=\"post\" action=\"/api/grok/oauth/choose\"><input type=\"hidden\" name=\"state\" value=\"%s\">%s</form>"
+                    % (html.escape(res["email"]), html.escape(res["state"]), opts))
+    log("connect cloudflare: set up %s" % res["done"]["hostname"])
+    return result_page(res)
+
+
 class AdminHandler(BaseHTTPRequestHandler):
     server_version = "teslalinux-grok"
     sys_version = ""
@@ -428,10 +507,30 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _html(self, code, body, location=None):
+        self.send_response(code)
+        if location:
+            self.send_header("Location", location)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        route = urllib.parse.urlsplit(self.path).path.rstrip("/")
+        u = urllib.parse.urlsplit(self.path)
+        route = u.path.rstrip("/")
+        params = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
         if route == "/api/grok":
             return self._send(200, status())
+        if route == "/api/grok/oauth/go":
+            try:
+                return self._html(302, b"", OAUTH.authorize_url(params.get("s", "")))
+            except cfoauth.OAuthError as e:
+                return self._html(410, page("Link expired", "<p>%s</p>" % html.escape(str(e)), False))
+        if route == "/api/grok/oauth/callback":
+            return self._html(200, oauth_callback(params))
         self._send(404, {"ok": False, "message": "not found"})
 
     def do_POST(self):
@@ -439,13 +538,17 @@ class AdminHandler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         if not 0 <= n <= 65536:
             return self._send(413, {"ok": False, "message": "too large"})
+        if route == "/api/grok/oauth/choose":
+            form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode(errors="replace")).items()}
+            return self._html(200, oauth_callback(form, chosen=form.get("zone", "")))
         try:
             req = json.loads(self.rfile.read(n).decode() or "{}") if n else {}
         except ValueError:
             return self._send(400, {"ok": False, "message": "not JSON"})
         if not isinstance(req, dict):
             return self._send(400, {"ok": False, "message": "not an object"})
-        routes = {"/api/grokSettings": post_settings, "/api/grokToken": post_token, "/api/grokSetup": post_setup}
+        routes = {"/api/grokSettings": post_settings, "/api/grokToken": post_token, "/api/grokSetup": post_setup,
+                  "/api/grokOAuthStart": post_oauth_start}
         fn = routes.get(route)
         if not fn:
             return self._send(404, {"ok": False, "message": "not found"})

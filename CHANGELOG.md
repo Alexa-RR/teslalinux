@@ -15,6 +15,14 @@ version's.
 
 ## [Unreleased]
 
+### Connect Cloudflare with one sign-in
+
+*Settings > Grok > Connect Cloudflare.*
+
+- Set up Grok remote control by signing in to Cloudflare, here or on a phone on the car's Wi-Fi.
+- No API token to make: the device sets everything up, then gives the permission back.
+- The API token way is still there, under Advanced.
+
 ### Ask Grok to report to Waze
 
 *Car mode. Say "report police" or "there's a pothole".*

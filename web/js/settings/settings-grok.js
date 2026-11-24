@@ -55,7 +55,96 @@
     return "";
   }
 
-  /** the automatic setup: the driver's domain, the hostname in it, who may sign in, and an API token */
+  /*
+   * The Connect Cloudflare button in Cloudflare's look (the rest of the section keeps the settings
+   * page's): Cloudflare's brand orange, a white bold label, their slightly rounded corners, 80 px
+   * tall. Text only: Cloudflare's trademark guidelines (cloudflare.com/trademark) allow the word
+   * "Cloudflare" to name its service but require written permission for its logos, so no cloud mark
+   * and no Cloudflare fonts or other assets. The styles live here so the section needs no
+   * stylesheet hook of its own.
+   */
+  const CF_STYLE = ".grok-cf-btn{display:flex;align-items:center;justify-content:center;width:100%;min-height:80px;padding:0 28px;"
+    + "border:0;border-radius:6px;background:#f38020;color:#fff;font:700 22px/1.2 inherit;letter-spacing:.01em;"
+    + "text-shadow:0 1px 1px rgba(0,0,0,.28);box-shadow:0 1px 2px rgba(0,0,0,.25);cursor:pointer;touch-action:manipulation}"
+    + ".grok-cf-btn:active:not(:disabled){background:#d9670e;box-shadow:inset 0 2px 4px rgba(0,0,0,.25);transform:translateY(1px)}"
+    + ".grok-cf-btn:focus-visible{outline:3px solid #fbad41;outline-offset:3px}"
+    + ".grok-cf-btn:disabled{background:#9a9a9a;color:#f2f2f2;text-shadow:none;box-shadow:none;cursor:not-allowed;opacity:.7}"
+    + ".grok-cf-btn.is-busy{background:#d9670e}";
+
+  function cfButton(label, onClick) {
+    const doc = global.document;
+    if (!doc.getElementById("grok-cf-style")) {
+      doc.head.append(h("style", { id: "grok-cf-style" }, CF_STYLE));
+    }
+    return h("button", { class: "grok-cf-btn", type: "button", onclick: onClick || null }, label);
+  }
+
+  /**
+   * Connect Cloudflare: the device starts a sign-in (OAuth, PKCE) and this sheet opens Cloudflare's
+   * consent page, here or on a phone on the hotspot (its QR code is the device's short link). Cloudflare
+   * sends the browser back to the device, which sets everything up and revokes the sign-in; this sheet
+   * watches /api/grok for the result.
+   */
+  async function connectSheet(ctrl, token, st) {
+    const domainIn = h("input", { id: "grok-c-domain", type: "text", placeholder: "Any of your domains", class: "settings-field-input",
+      autocomplete: "off", spellcheck: "false", autocapitalize: "off", autocorrect: "off" });
+    const status = h("div", { class: "field-help", "aria-live": "polite" });
+    const qr = h("div", { class: "gates-qr", "aria-label": "Sign-in link for a phone" });
+    const go = cfButton("Continue with Cloudflare");
+    const sheet = UI.openSheet({
+      title: "Connect Cloudflare",
+      body: [
+        h("p", { class: "group-note" }, "Sign in to Cloudflare and allow Teslalinux. The device then makes the tunnel, the address and the "
+          + "Access sign-in on your domain, and gives the permission back right away: it keeps only the tunnel's token."),
+        h("div", { class: "field" }, h("label", { for: "grok-c-domain" }, "Domain (optional)"), domainIn,
+          h("div", { class: "field-help" }, "Empty: the only domain the sign-in allows, or you pick one after.")),
+        go, qr, status,
+      ],
+      actions: [h("button", { class: "btn", type: "button", onclick: () => sheet.finish(null) }, "Close")],
+    });
+    let timer = null;
+    const since = Date.now() / 1000;
+    const watch = async () => {
+      let s;
+      try {
+        s = await API.get();
+      } catch (_e) {
+        s = null;
+      }
+      const last = s && s.connect && s.connect.last;
+      if (last && last.at >= since) {
+        status.textContent = last.message;
+        status.className = "field-help " + (last.ok ? "is-ok" : "field-err");
+        if (last.ok) return;
+      }
+      timer = global.setTimeout(watch, 2000);
+    };
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      go.classList.add("is-busy");
+      try {
+        const out = await API.post("grokOAuthStart", { domain: domainIn.value.trim() });
+        global.open(out.url, "_blank", "noopener");
+        if (out.qr) qr.innerHTML = out.qr;
+        status.className = "field-help";
+        status.textContent = "Cloudflare's page opened. On a phone on this car's Wi-Fi, scan the code instead. "
+          + "The link works for " + Math.round(out.expiresIn / 60) + " minutes.";
+        go.textContent = "Continue with Cloudflare again";
+        global.clearTimeout(timer);
+        watch();
+      } catch (e) {
+        status.className = "field-help field-err";
+        status.textContent = e.userMessage || String(e.message || e);
+      }
+      go.classList.remove("is-busy");
+      go.disabled = false;
+    });
+    await sheet;
+    global.clearTimeout(timer);
+    if (token === ctrl._renderToken) ctrl._rerender();
+  }
+
+  /** Advanced: the automatic setup with an API token: the driver's domain, the hostname, who may sign in */
   async function setupSheet(ctrl, token, st) {
     const field = (id, label, type, placeholder, help, value) => {
       const input = h("input", { id, type, placeholder: placeholder || "", class: "settings-field-input", autocomplete: type === "password" ? "new-password" : "off",
@@ -145,9 +234,16 @@
       ready ? "On grok.com: Connectors > New Connector > Custom, and the connector address above." : null));
 
     // the automatic setup
-    const auto = UI.row({ id: "grok.setup", title: ready ? "Set up again" : "Set up with Cloudflare", detail: "Your domain and a Cloudflare API token: the device does the rest" });
-    UI.setControl(auto, UI.button(ready ? "Set up again" : "Set up", () => setupSheet(this, token, st), ready ? null : "btn--primary", "cloud"));
-    groups.push(UI.group("Setup", [auto], "Needs a domain on your Cloudflare account and Zero Trust turned on there (its Free plan). docs/GROK.md has the steps by hand."));
+    const cn = st.connect || {};
+    const connect = UI.row({ id: "grok.connect", title: ready ? "Connect Cloudflare again" : "Connect Cloudflare", stack: true,
+      detail: cn.available ? "Sign in once; the device does the rest" : "Not available in this build (no Cloudflare OAuth client id): use Advanced" });
+    const cbtn = cfButton("Continue with Cloudflare", () => connectSheet(this, token, st));
+    cbtn.disabled = !cn.available;
+    UI.setControl(connect, cbtn);
+    if (cn.last && !cn.last.ok) UI.status(connect).err(cn.last.message);
+    const auto = UI.row({ id: "grok.setup", title: "Advanced: with an API token", detail: "Your domain and a Cloudflare API token you make" });
+    UI.setControl(auto, UI.button("Set up", () => setupSheet(this, token, st), null, "vpn_key"));
+    groups.push(UI.group("Setup", [connect, auto], "Needs a domain on your Cloudflare account and Zero Trust turned on there (its Free plan). docs/GROK.md has the steps by hand."));
 
     // by hand
     const tokRow = UI.row({ id: "grok.token", title: "Tunnel token", detail: s.tokenSet ? "Stored on the device, root only" + (s.tunnelId ? " · tunnel " + s.tunnelId.slice(0, 8) : "") : "Not set" });
@@ -222,7 +318,8 @@
       });
       ctrl.index.push(
         ["grok.enabled", "grok", "Let Grok control Waze", "grok assistant voice remote mcp control connector ai"],
-        ["grok.setup", "grok", "Set up Grok with Cloudflare", "grok cloudflare tunnel domain access token setup"],
+        ["grok.connect", "grok", "Connect Cloudflare", "grok cloudflare connect sign in login oauth setup domain"],
+        ["grok.setup", "grok", "Set up Grok with an API token", "grok cloudflare tunnel domain access api token setup advanced"],
         ["grok.token", "grok", "Grok tunnel token", "grok cloudflare tunnel token cloudflared"],
       );
     },

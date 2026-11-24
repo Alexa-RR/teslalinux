@@ -133,7 +133,7 @@ install -d -m 0700 -o tesla -g tesla /var/lib/teslalinux/gates
 # settings and tunnel token; cloudflared itself comes with the dist (tools/pios/install.sh)
 install -d /usr/local/lib/teslalinux/grok
 install -m 0644 "$REPO/services/grok/grok.py" "$REPO/services/grok/mcp.py" "$REPO/services/grok/accessjwt.py" \
-  "$REPO/services/grok/waze.py" "$REPO/services/grok/cfsetup.py" /usr/local/lib/teslalinux/grok/
+  "$REPO/services/grok/waze.py" "$REPO/services/grok/cfsetup.py" "$REPO/services/grok/cfoauth.py" /usr/local/lib/teslalinux/grok/
 install -d -m 0700 -o tesla -g tesla /var/lib/teslalinux/grok
 install -m 0755 "$REPO/host/teslalinux-set-grok" /usr/local/bin/teslalinux-set-grok
 install -m 0755 "$HERE/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display

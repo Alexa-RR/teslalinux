@@ -121,7 +121,7 @@ PAYLOAD=(
   host/teslalinux-app-log-watch.py
   services/gps/gps.py services/audio/audio.py services/api/api.py services/api/tlprops.py
   services/gates/gates.py services/gates/palgate.py services/gates/tlqr.py docs/GATES.md
-  services/grok/grok.py services/grok/mcp.py services/grok/accessjwt.py services/grok/waze.py services/grok/cfsetup.py
+  services/grok/grok.py services/grok/mcp.py services/grok/accessjwt.py services/grok/waze.py services/grok/cfsetup.py services/grok/cfoauth.py
   host/teslalinux-set-grok docs/GROK.md
   services/display/test/ws-client.py
   web

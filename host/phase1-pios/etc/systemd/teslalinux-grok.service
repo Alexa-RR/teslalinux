@@ -13,7 +13,11 @@ Environment=TESLALINUX_GROK_MCP_PORT=8083
 Environment=TESLALINUX_GROK_ADMIN_PORT=8084
 # the action log, 0600 in a 0700 directory of the service user
 Environment=TESLALINUX_GROK_DIR=/var/lib/teslalinux/grok
-Environment=PYTHONPATH=/usr/local/lib/teslalinux/grok
+# (and the QR encoder the gates service installs there, for Connect Cloudflare's phone link)
+Environment=PYTHONPATH=/usr/local/lib/teslalinux/grok:/usr/local/lib/teslalinux
+# the device's DEVICE_HOST (Connect Cloudflare's return address); a fork with its own Cloudflare
+# OAuth client sets TESLALINUX_GROK_CF_CLIENT_ID in a drop-in (docs/GROK.md)
+Environment=TESLALINUX_ENV=/etc/teslalinux/env
 UMask=0077
 ExecStart=/usr/bin/python3 /usr/local/lib/teslalinux/grok/grok.py
 Restart=always
