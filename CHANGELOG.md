@@ -15,6 +15,10 @@ version's.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-24
+
+A friendlier installer: it shows it is working during the long steps.
+
 ### The installer shows it is working
 
 *Installing or updating on the Pi.*
@@ -1098,7 +1102,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.1...v0.4.0
