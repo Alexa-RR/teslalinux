@@ -15,6 +15,18 @@ version's.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-24
+
+A fresh install of 0.6.3 stopped halfway; this one completes.
+
+### Fresh installs work again
+
+*Installing Teslalinux on a new device.*
+
+- 0.6.3's release left out one of its own files (the LTE stick's start-up fix), so a new install
+  stopped at its "files" step. The file is in the release now. Devices already on 0.6.3 were not
+  affected.
+
 ## [0.6.3] - 2026-11-24
 
 Grok can do what Waze's car screen does, the map no longer freezes while you move it, and the LTE
@@ -1175,7 +1187,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.1...v0.6.3
 [0.6.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.5.0...v0.6.0
