@@ -19,6 +19,14 @@ until that section becomes the next version's.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-24
+
+Open your PalGate gates from the car, and Waze keeps your position in tunnels with Waze Beacons.
+The map is as smooth as Full while you drive and uses half the Pi's time while it stands still,
+Waze is back on the map in seconds after a mode change instead of two minutes, and the car screen
+says what Waze is doing while it starts. Waze's own settings and a new speedometer are on the car
+screen, the settings page is new, and the turn card is smaller.
+
 ### Open PalGate gates from the car
 
 *Settings > Gates, and a gate button on the map in both interfaces.*
@@ -1138,7 +1146,8 @@ Wi-Fi and LTE, Audio, GPS, Language and region, Keyboard and App updates.
   and versionCode, keeps the previous version), `tools/appupdate/` (`tlplay`, `teslalinux-appupdate`).
 - The Alpine image (`tools/image/`, `docs/ALPINE-IMAGE.md`), a second, experimental target.
 
-[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Alexa-RR/teslalinux/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Alexa-RR/teslalinux/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Alexa-RR/teslalinux/compare/v0.1.2...v0.2.0

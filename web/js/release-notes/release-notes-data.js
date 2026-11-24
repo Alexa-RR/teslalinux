@@ -8,7 +8,7 @@
   TAHtml.releaseNotesData = {
     "versions": [
       {
-        "versionName": "Unreleased",
+        "versionName": "v0.4.0 · 2026-11-24",
         "changelogItems": [
           {
             "title": "Open PalGate gates from the car",
