@@ -296,6 +296,7 @@ STORAGE_STATE = os.environ.get("TESLALINUX_STORAGE_STATE", "/run/teslalinux/usb-
 STORAGE_AFTER = 10     # s in storage mode after it appeared; a good switch takes 1-2 s
 STORAGE_GAPS = (20, 60, 120, 300, 900)  # s from the end of one power cycle to the next, while they do not help
 STORAGE_POLL = 1
+HUBS_EVERY = 600       # s between two reads of the hubs uhubctl can switch
 USB_POWER = threading.Lock()  # one uhubctl power cycle at a time (the ladder and the storage-mode watch)
 
 
@@ -502,6 +503,7 @@ class ModemRecovery:
         self.said = set()
         self.public = {"type": "none"}
         self.worker, self.lock = None, threading.Lock()
+        self.hubs, self.hubs_at = set(), None  # what uhubctl can switch, read again every HUBS_EVERY s
 
     # -------------------------------------------------- helpers
 
@@ -798,8 +800,7 @@ class ModemRecovery:
                 only, others = self.only_usb_device(o["usb"])
                 if not only:
                     return "other USB devices are plugged in (%s): set LTE_RECOVERY_POWER_CYCLE=on to allow it" % ", ".join(others)
-            if not self.which("uhubctl"):
-                return "uhubctl is not installed"
+            return self.power_switchable(o["usb"])
         return None
 
     def act(self, name, o, cfg):
@@ -866,14 +867,34 @@ class ModemRecovery:
         """a power cycle cuts every USB device, not only the stick's port (a Pi 4)"""
         return "Raspberry Pi 4" in (read(self.sys("firmware", "devicetree", "base", "model")) or "")
 
+    def power_hubs(self, dev):
+        """the uhubctl locations (-l HUB [-p PORT]) a power cycle of DEV switches"""
+        if self.whole_usb():
+            return [["-l", "1-1"], ["-l", "2"]]
+        hub, port = dev.rsplit(".", 1) if "." in dev else dev.split("-", 1)
+        return [["-l", hub, "-p", port]]
+
+    def power_switchable(self, dev):
+        """None when uhubctl can switch the power a cycle of DEV needs, else why not in plain words: many
+        boards (CM4 carriers, hubs without per-port power switching) have no hub uhubctl can switch"""
+        if not self.which("uhubctl"):
+            return "uhubctl is not installed"
+        now = self.clock()
+        if self.hubs_at is None or now - self.hubs_at >= HUBS_EVERY:
+            # uhubctl without -a only lists the hubs it can switch ("Current status for hub 1-1 [...]")
+            _, out = self.run(["uhubctl"], timeout=20)
+            self.hubs, self.hubs_at = set(re.findall(r"^Current status for hub (\S+)", out or "", re.M)), now
+        missing = [h[1] for h in self.power_hubs(dev) if h[1] not in self.hubs]
+        if not missing:
+            return None
+        if not self.hubs:
+            return "this board cannot switch USB power (uhubctl finds no hub that can)"
+        return "this board cannot switch the USB power of the stick's port (no switchable hub %s)" % ", ".join(missing)
+
     def power_cycle(self, dev):
         """VBUS off and on with uhubctl. A Pi 4's VL805 switches all four ports together, and only when the
         USB 2 hub (1-1) and the USB 3 hub (2) are both off."""
-        if self.whole_usb():
-            hubs = [["-l", "1-1"], ["-l", "2"]]
-        else:
-            hub, port = dev.rsplit(".", 1) if "." in dev else dev.split("-", 1)
-            hubs = [["-l", hub, "-p", port]]
+        hubs = self.power_hubs(dev)
         with USB_POWER:
             try:
                 for h in hubs:
@@ -960,6 +981,7 @@ class ModemRecovery:
             "session": o.get("session"), "month": o.get("month"), "radio": o.get("radio"),
             "simState": o.get("simState"), "simProblem": o["sim"],
             "recovery": "on" if cfg["recovery"] else "off", "powerCycle": cfg["powerCycle"], "status": status,
+            "usbPower": self.power_switchable(o["usb"]) if o["usb"] else None,
             "step": LADDER[self.step] if o["type"] != "none" and self.step < len(LADDER) else None,
             "lastAction": self.last[0] if self.last else None, "lastActionAt": int(self.last[2]) if self.last else None,
             "lastResult": self.last[3] if self.last else None,
@@ -1086,14 +1108,12 @@ class StorageModeWatch:
                 out[n] = ("%s:%s" % (vid, pid), read(os.path.join(d, "devnum")) or "")
         return out
 
-    def blocked(self):
+    def blocked(self, dev):
         if not self.modem.settings()["lteEnabled"]:
             return "LTE is switched off in the settings"
         if env_get(read(self.conf) or "", "DisableSwitching", "0").strip() == "1":
             return "mode switching is off (DisableSwitching=1 in %s)" % self.conf
-        if not self.modem.which("uhubctl"):
-            return "uhubctl is not installed"
-        return None
+        return self.modem.power_switchable(dev)
 
     def next_allowed(self):
         s = self.saved
@@ -1126,7 +1146,7 @@ class StorageModeWatch:
         ident, devnum, since = self.seen[dev]
         wall = self.modem.wall()
         pub = {"usb": dev, "id": ident, "since": int(wall - (now - since)), "cycles": (self.saved or {}).get("cycles", 0)}
-        why = self.blocked()
+        why = self.blocked(dev)
         nxt = max(since + STORAGE_AFTER, self.next_allowed() or 0)
         if why:
             self.say_once("blocked-" + why, "LTE: %s (%s) is in its USB storage mode; no USB power cycle: %s" % (dev, ident, why))
@@ -1203,7 +1223,8 @@ class StorageModeWatch:
         s = self.saved
         st["storageCycle"] = {k: s.get(k) for k in ("at", "usb", "id", "reason", "result", "seconds", "cycles", "switchedAfter")} if s else None
         if self.public and st.get("type") in (None, "none"):
-            st.update(type="storage-mode", usb=self.public["usb"], status=self.public["status"])
+            st.update(type="storage-mode", usb=self.public["usb"], status=self.public["status"],
+                      usbPower=self.modem.power_switchable(self.public["usb"]))
         return st
 
     def start(self):

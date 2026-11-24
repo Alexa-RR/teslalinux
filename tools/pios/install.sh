@@ -250,7 +250,7 @@ inputs() {
     waze) echo "$WAZE_MODE ${APK:+$(hash_paths "$APK")} $(hash_paths "$APPS/com.waze/installed.json")" ;;
     prewarm) echo "$PREWARM $(readlink -f "$PREFIX") $(ls "$TESLA_HOME"/.cache/art/*/*boot*.art 2>/dev/null | head -1)" ;;
     trim) echo "-" ;;
-    boot) echo "$(model) $(rtc_detect) $(hash_paths "$PAYLOAD/host/rpi4")" ;;
+    boot) echo "$(model) $(rtc_detect) $(hash_paths "$PAYLOAD/host/rpi4" /usr/local/bin/teslalinux-usb-quirks /usr/share/usb_modeswitch /etc/usb_modeswitch.d)" ;;
     enable) echo "$(hash_paths /etc/systemd/system) $(tls_base_url) $TRIM" ;;
   esac
 }
@@ -535,7 +535,7 @@ step_files() {
   cp -r "$P/host/phase1-pios/etc/." /usr/share/teslalinux/templates/
   install -m 0644 "$P/host/phase1-pios/env" /usr/share/teslalinux/env.template
   for f in teslalinux-render teslalinux-restart-app teslalinux-set-locale teslalinux-set-keyboard teslalinux-set-app-interface teslalinux-network \
-           teslalinux-system-update teslalinux-uplink teslalinux-dexopt teslalinux-set-gpu-speed teslalinux-boottime; do
+           teslalinux-system-update teslalinux-uplink teslalinux-usb-quirks teslalinux-dexopt teslalinux-set-gpu-speed teslalinux-boottime; do
     put_file "$P/host/$f" "/usr/local/bin/$f" 0755
   done
   put_file "$P/host/phase1-pios/teslalinux-apply-display" /usr/local/bin/teslalinux-apply-display 0755
@@ -1151,13 +1151,17 @@ enable_uart=0"
   awk '/^# >>> teslalinux/ { skip = 1; next } /^# <<< teslalinux <<</ { skip = 0; next } !skip' "$cfgf" > "$tmp"
   printf '%s\n' "$block" >> "$tmp"
   put_boot "$tmp" "$cfgf"
-  # the kernel command line: only quiet + loglevel=3 (one line; everything else stays)
+  # the kernel command line: quiet + loglevel=3, and usb-storage leaves LTE sticks in their storage mode
+  # to usb_modeswitch (host/teslalinux-usb-quirks; one line, everything else stays)
   local line; line=$(head -1 "$cmdf")
   local new=$line t
   for t in quiet loglevel=3; do [[ " $new " == *" $t "* ]] || new="$new $t"; done
+  new=$(/usr/local/bin/teslalinux-usb-quirks cmdline "$new")
   printf '%s\n' "$new" > "$tmp"
   put_boot "$tmp" "$cmdf"
   rm -f "$tmp"
+  # now too, for a stick plugged in before the reboot
+  /usr/local/bin/teslalinux-usb-quirks apply || warn "usb-storage quirks take effect after the reboot"
   # the RTC sets the system clock at boot
   if [[ $rtc == yes ]]; then
     put_str /etc/udev/rules.d/85-teslalinux-hwclock.rules 0644 'KERNEL=="rtc0", RUN+="/usr/sbin/hwclock --hctosys --utc"\n'
@@ -1310,6 +1314,14 @@ doctor_static() {
   if /usr/local/bin/teslalinux-android-cacerts --check >/dev/null 2>&1; then ok "apps' CA store (/etc/ssl/certs/android)"
   else bad "apps' CA store missing or stale: every app HTTPS connection fails (teslalinux-android-cacerts)"; fi
   grep -q '^# >>> teslalinux' "$(boot_dir)/config.txt" && ok "boot config block" || meh "no teslalinux block in $(boot_dir)/config.txt"
+  if [[ -x /usr/local/bin/teslalinux-usb-quirks ]]; then
+    local miss
+    if ! miss=$(/usr/local/bin/teslalinux-usb-quirks check "$(head -1 "$(boot_dir)/cmdline.txt")"); then
+      meh "usb-storage may race usb_modeswitch for LTE sticks ($miss not in usb-storage.quirks of $(boot_dir)/cmdline.txt; run the installer again)"
+    elif ! miss=$(/usr/local/bin/teslalinux-usb-quirks check "$(cat /proc/cmdline)") && [[ "$(cat /sys/module/usb_storage/parameters/quirks 2>/dev/null)" != *"12d1:1f01:i"* ]]; then
+      meh "usb-storage quirks for LTE sticks are in cmdline.txt; they take effect after the reboot"
+    else ok "usb-storage leaves LTE sticks in their storage mode to usb_modeswitch"; fi
+  fi
 }
 
 doctor_live() {

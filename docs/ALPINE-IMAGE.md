@@ -70,7 +70,9 @@ a shared Let's Encrypt certificate via DNS-01 (issued in the cloud, fetched over
 2. Copy in: `/opt/atl` (a tarball of the VM's `~/atl-prefix` with the host-built api-impl.jar and
    the patched bionic libs), the apps directory, `web/` to `/var/www/teslalinux`, the service
    scripts, the OpenRC init scripts from `host/alpine/init.d`, `/etc/teslalinux/env`.
-3. Enable services for the default runlevel; write `/boot` (config.txt, cmdline.txt from `host/rpi4`).
+3. Enable services for the default runlevel; write `/boot` (config.txt, cmdline.txt from `host/rpi4`;
+   cmdline.txt gets `usb-storage.quirks` for LTE sticks in their storage mode from
+   `host/teslalinux-usb-quirks`, read from the rootfs's usb-modeswitch data).
 4. Assemble the image: a FAT boot partition + an ext4 root, `sfdisk` + loop mounts; first boot
    expands the root partition and installs the bundled certificate pairs (a self-signed fallback if
    none passes the checks).

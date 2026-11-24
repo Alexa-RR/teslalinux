@@ -207,8 +207,8 @@ class Clock:
 class Commands:
     """fake mmcli / nmcli / uhubctl"""
 
-    def __init__(self, mm=None, nm=False, have=("mmcli", "nmcli", "uhubctl")):
-        self.mm, self.nm, self.have, self.calls = mm, nm, set(have), []
+    def __init__(self, mm=None, nm=False, have=("mmcli", "nmcli", "uhubctl"), hubs=("2", "1-1", "1")):
+        self.mm, self.nm, self.have, self.calls, self.hubs = mm, nm, set(have), [], hubs
 
     def which(self, name):
         return "/usr/bin/" + name if name in self.have else None
@@ -223,10 +223,19 @@ class Commands:
             return 0, "running\n" if self.nm else "asleep\n"
         if cmd[:3] == ["nmcli", "-t", "-f"]:
             return 0, "teslalinux-lte\nother\n"
+        if cmd == ["uhubctl"]:
+            if not self.hubs:
+                return 1, "No compatible devices detected!\n"
+            return 0, "".join("Current status for hub %s [1d6b:0002 Hub, USB 2.00, 4 ports, ppps]\n  Port 1: 0100 power\n" % h
+                              for h in self.hubs)
         return 0, ""
 
     def acted(self):
-        return [c for c in self.calls if not (c[-1] == "-J" or c[:3] == ["nmcli", "-t", "-f"])]
+        return [c for c in self.calls if not (c[-1] == "-J" or c[:3] == ["nmcli", "-t", "-f"] or c == ["uhubctl"])]
+
+    def switched(self):
+        """the uhubctl power switching calls"""
+        return [c for c in self.calls if c[0] == "uhubctl" and "-a" in c]
 
 
 class Base(unittest.TestCase):
@@ -338,7 +347,7 @@ class HiLinkLadder(Base):
         r = self.recovery()
         ev = self.run_until(r, 1000 + 460)
         self.assertEqual(ev[450], "usb-power-cycle")
-        self.assertEqual([c for c in self.cmds.calls if c[0] == "uhubctl"], [
+        self.assertEqual(self.cmds.switched(), [
             ["uhubctl", "-l", "1-1", "-a", "off", "-r", "3"], ["uhubctl", "-l", "2", "-a", "off", "-r", "3"],
             ["uhubctl", "-l", "2", "-a", "on"], ["uhubctl", "-l", "1-1", "-a", "on"]])
 
@@ -348,7 +357,7 @@ class HiLinkLadder(Base):
         r = self.recovery(sysfs=sysfs)
         ev = self.run_until(r, 1000 + 460)
         self.assertNotIn(450, ev)
-        self.assertEqual([c for c in self.cmds.calls if c[0] == "uhubctl"], [])
+        self.assertEqual(self.cmds.switched(), [])
         self.assertTrue(any("other USB devices are plugged in (1-1.2)" in m for m in self.logs))
 
     def test_power_cycle_on_without_uhubctl(self):
@@ -358,12 +367,21 @@ class HiLinkLadder(Base):
         self.assertNotIn(450, ev)
         self.assertTrue(any("uhubctl is not installed" in m for m in self.logs))
 
+    def test_power_cycle_no_switchable_hub(self):
+        put(self.env, "LTE_RECOVERY_POWER_CYCLE=on\n")
+        r = self.recovery(cmds=Commands(have=("uhubctl",), hubs=("1",)))
+        ev = self.run_until(r, 1000 + 460)
+        self.assertNotIn(450, ev)
+        self.assertEqual(self.cmds.switched(), [])
+        self.assertTrue(any("cannot switch the USB power of the stick's port (no switchable hub 1-1, 2)" in m for m in self.logs))
+        self.assertIn("cannot switch", r.state()["usbPower"])
+
     def test_power_cycle_other_board(self):
         put(self.env, "LTE_RECOVERY_POWER_CYCLE=on\n")
         sysfs = make_sysfs(os.path.join(self.tmp, "sys"), model="Some Board")
         r = self.recovery(sysfs=sysfs)
         self.run_until(r, 1000 + 460)
-        self.assertEqual([c for c in self.cmds.calls if c[0] == "uhubctl"], [
+        self.assertEqual(self.cmds.switched(), [
             ["uhubctl", "-l", "1-1", "-p", "3", "-a", "off", "-r", "3"], ["uhubctl", "-l", "1-1", "-p", "3", "-a", "on"]])
 
     def test_ladder_resets_after_recovery(self):
@@ -659,7 +677,7 @@ class StorageMode(Base):
         self.clock.t += s
 
     def uhubctl(self):
-        return [c for c in self.cmds.calls if c[0] == "uhubctl"]
+        return self.cmds.switched()
 
     def cycles_at(self, w, end):
         """tick once a second up to END s after the start; the times (s) at which a power cycle began"""
@@ -758,6 +776,17 @@ class StorageMode(Base):
         self.cmds.have.discard("uhubctl")
         self.assertEqual(self.cycles_at(w, 120), [])
         self.assertIn("uhubctl is not installed", w.annotate({"type": "none"})["status"])
+
+    def test_board_without_switchable_hub(self):
+        """a CM4 carrier: uhubctl finds no hub it can switch; said plainly, nothing tried"""
+        w = self.watch()
+        self.cmds.hubs = ()
+        self.assertEqual(self.cycles_at(w, 120), [])
+        st = w.annotate({"type": "none"})
+        self.assertEqual(st["storageMode"]["state"], "blocked")
+        self.assertIn("this board cannot switch USB power", st["status"])
+        self.assertIn("this board cannot switch USB power", st["usbPower"])
+        self.assertEqual(self.cmds.calls.count(["uhubctl"]), 1)  # read once, kept for 10 minutes
 
     def test_stops_modeswitch_without_systemd(self):
         w = self.watch(have=("uhubctl",), comes_back=[("1f01", STORAGE)])

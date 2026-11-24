@@ -251,6 +251,9 @@ grep -q '^kernel=vmlinuz-rpi' "$ROOT/boot/config.txt" || printf '[pi4]\nkernel=v
 cat > "$ROOT/boot/cmdline.txt" <<EOF
 modules=sd-mod,usb-storage,ext4 root=/dev/mmcblk0p2 rootfstype=ext4 rw rootwait console=tty1 quiet coherent_pool=1M pcie_aspm=off
 EOF
+# usb-storage leaves LTE sticks in their storage mode to usb_modeswitch (host/teslalinux-usb-quirks)
+CMDLINE=$(sh "$REPO/host/teslalinux-usb-quirks" cmdline "$(head -1 "$ROOT/boot/cmdline.txt")" "$ROOT/usr/share/usb_modeswitch" "$ROOT/etc/usb_modeswitch.d")
+printf '%s\n' "$CMDLINE" > "$ROOT/boot/cmdline.txt"
 KVER=$(ls "$ROOT/lib/modules" | head -1)
 if [ -n "$KVER" ]; then
 	printf 'features="base mmc usb ext4 kms"\n' > "$ROOT/etc/mkinitfs/mkinitfs.conf"

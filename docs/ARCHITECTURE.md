@@ -135,7 +135,18 @@ Upstream has no RIL; modems are USB-Ethernet. Same here:
   whatever else is on USB (a Pi 4's backup Wi-Fi card drops for a few seconds). The next cycle comes
   at least 20 s after the previous one ended, growing to 15 minutes while cycles do not help
   (kept in `/run`, across service restarts). Not with LTE switched off in the settings or
-  `DisableSwitching=1`. Its state: `storageMode` / `storageCycle` in the `modem` object.
+  `DisableSwitching=1`. Its state: `storageMode` / `storageCycle` in the `modem` object. A board
+  where uhubctl finds no hub it can switch (many CM4 carriers) is reported as `usbPower` (shown
+  under Modem details) instead of failing silently.
+* **Why the switch fails, and the prevention:** in the bad boots the kernel's usb-storage driver was
+  probing the stick's CD-ROM and TF-card LUNs while `usb_modeswitch` sent its switch message, which
+  then timed out. `host/teslalinux-usb-quirks` puts `usb-storage.quirks=12d1:1f01:i,...` (ignore)
+  on the kernel command line (usb-storage is built into Pi OS's kernel) for the Huawei ids
+  usb-modeswitch-data switches to a HiLink id (14db/14dc): 12d1:1f01, 157d, 1f02, 1f03. USB drives
+  and the stick's TF card in its modem mode (another id) are untouched; foreign quirks stay first
+  (usb-storage keeps 127 characters). `tools/pios/install.sh` merges it into `cmdline.txt` and the
+  running kernel's parameter, `teslalinux doctor` checks it; the Alpine image writes it at build
+  time. The power cycle stays as the fallback.
 
 ## 4. Data path
 

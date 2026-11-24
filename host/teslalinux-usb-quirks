@@ -1,0 +1,110 @@
+#!/bin/sh
+# teslalinux-usb-quirks: keep the kernel's usb-storage driver off LTE sticks in their USB storage mode.
+#
+# A HiLink stick (Huawei E3372 and kin) starts as a virtual CD-ROM plus a TF card reader (12d1:1f01);
+# usb_modeswitch sends it a switch message and it comes back as a network card (12d1:14dc). When
+# usb-storage probes the stick's two LUNs at that moment, the stick can miss the message: usb_modeswitch
+# hangs about 100 s and the stick stays a USB drive until its power is cut (teslalinux-uplink then
+# power-cycles USB). usb-storage.quirks=VID:PID:i (ignore the device) leaves those ids to usb_modeswitch.
+# USB drives are not affected: only Huawei ids that usb-modeswitch-data switches to a HiLink id (14db,
+# 14dc) are listed, 12d1:1f01 always; the stick's TF card reader in its modem mode has another id.
+# usb-storage keeps at most 127 characters of quirks: entries that are not ours stay first, ours follow
+# as far as they fit. usb-storage is built into Pi OS's kernel, so the option goes on the kernel command
+# line (a module, as on Alpine, reads it from there too).
+#
+#   teslalinux-usb-quirks ids [DATA_DIR...]             the ids, one per line
+#   teslalinux-usb-quirks cmdline "LINE" [DATA_DIR...]  LINE with them merged into usb-storage.quirks=
+#   teslalinux-usb-quirks apply [DATA_DIR...]           the running kernel too, for sticks plugged in later (root)
+#   teslalinux-usb-quirks check "LINE" [DATA_DIR...]    exit 0 when LINE has every id; prints what is missing
+# DATA_DIR defaults to /usr/share/usb_modeswitch /etc/usb_modeswitch.d (configPack.tar.gz or single files).
+set -f
+SYSQ=${TESLALINUX_USB_STORAGE_QUIRKS:-/sys/module/usb_storage/parameters/quirks}
+
+ids() {
+	[ $# -gt 0 ] || set -- /usr/share/usb_modeswitch /etc/usb_modeswitch.d
+	tmp=$(mktemp -d) || exit 1
+	for d in "$@"; do
+		[ -d "$d" ] || continue
+		[ -f "$d/configPack.tar.gz" ] && tar xzf "$d/configPack.tar.gz" -C "$tmp" 2>/dev/null
+		set +f
+		for f in "$d"/12d1:*; do [ -f "$f" ] && cp "$f" "$tmp/"; done
+		set -f
+	done
+	{
+		echo 12d1:1f01
+		set +f
+		for f in "$tmp"/12d1:*; do
+			[ -f "$f" ] || continue
+			if grep -Eiq '^[[:space:]]*TargetVendor[[:space:]]*=[[:space:]]*(0x)?12d1' "$f" &&
+				grep -Eiq '^[[:space:]]*TargetProduct(List)?[[:space:]]*=.*14d[bc]' "$f"; then
+				basename "$f" | cut -d: -f1,2
+			fi
+		done
+		set -f
+	} | tr 'A-F' 'a-f' | grep -E '^[0-9a-f]{4}:[0-9a-f]{4}$' | awk '!seen[$0]++'
+	rm -rf "$tmp"
+}
+
+merge() { # CURRENT IDS: the quirks value with IDS (newline-separated) as ignore entries
+	cur=$1 want=$2 out=
+	old=$IFS
+	IFS=,
+	for e in $cur; do
+		[ -n "$e" ] || continue
+		k=$(printf '%s' "$e" | cut -d: -f1,2 | tr 'A-F' 'a-f')
+		printf '%s\n' "$want" | grep -qx "$k" && continue
+		out=${out:+$out,}$e
+	done
+	IFS=$old
+	for k in $want; do
+		n=${out:+$out,}$k:i
+		if [ ${#n} -gt 127 ]; then
+			echo "teslalinux-usb-quirks: usb-storage.quirks is full, $k left out" >&2
+			continue
+		fi
+		out=$n
+	done
+	printf '%s\n' "$out"
+}
+
+split() { # LINE: CUR (the usb-storage.quirks values) and REST (every other word)
+	CUR= REST=
+	for t in $1; do
+		case $t in
+			usb-storage.quirks=* | usb_storage.quirks=*) CUR=${CUR:+$CUR,}${t#*=} ;;
+			*) REST=${REST:+$REST }$t ;;
+		esac
+	done
+}
+
+cmd=$1
+[ $# -gt 0 ] && shift
+case $cmd in
+	ids) ids "$@" ;;
+	cmdline)
+		split "$1"
+		shift
+		printf '%s usb-storage.quirks=%s\n' "$REST" "$(merge "$CUR" "$(ids "$@")")"
+		;;
+	apply)
+		[ -w "$SYSQ" ] || { echo "teslalinux-usb-quirks: $SYSQ is not writable (usb-storage not loaded, or not root)" >&2; exit 1; }
+		cur=$(cat "$SYSQ")
+		new=$(merge "$cur" "$(ids "$@")")
+		[ "$cur" = "$new" ] || printf '%s' "$new" > "$SYSQ"
+		;;
+	check)
+		split "$1"
+		shift
+		miss=
+		for k in $(ids "$@"); do
+			case ",$CUR," in *",$k:i,"*) ;; *) miss="${miss:+$miss }$k" ;; esac
+		done
+		[ -z "$miss" ] && exit 0
+		echo "$miss"
+		exit 1
+		;;
+	*)
+		sed -n '2,/^set -f/p' "$0" | sed '$d; s/^# \{0,1\}//'
+		exit 2
+		;;
+esac

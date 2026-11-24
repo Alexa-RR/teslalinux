@@ -1011,6 +1011,8 @@
             ? ["Last step", (actionNames[m.lastAction] || m.lastAction) + ", " + fmt.dur(Math.max(0, st.time - m.lastActionAt)) + " ago" + (m.lastResult && m.lastResult !== "done" ? " (" + m.lastResult + ")" : "")]
             : null,
           typeof m.nextActionAt === "number" && m.nextActionAt > st.time ? ["Next step", "in " + fmt.dur(m.nextActionAt - st.time)] : null,
+          // the last recovery step and the stuck-stick fix need it; many boards (CM4 carriers) cannot
+          m.usbPower ? ["USB power cycle", "Not possible: " + m.usbPower, "warn"] : null,
           m.storageCycle && typeof m.storageCycle.at === "number"
             ? [
                 "USB restart",

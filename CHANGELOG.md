@@ -20,8 +20,10 @@ version's.
 *Settings > Connections.*
 
 - On some starts the LTE stick stayed a USB drive and the device had no LTE until it was unplugged.
-  The device now notices within about 10 seconds and switches the USB power off and on, which
-  starts the stick properly. The backup Wi-Fi drops for a few seconds while that happens.
+  The system no longer reads the stick as a drive while it starts, which was what got in the way.
+  Should it still get stuck, the device notices within about 10 seconds and switches the USB power
+  off and on; the backup Wi-Fi drops for a few seconds while that happens.
+- Modem details say so when this board cannot switch its USB power off and on.
 
 ### Street names in their usual weight again
 
