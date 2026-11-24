@@ -91,6 +91,22 @@ TTY_OK=0
 log() { printf '\033[1;36m[teslalinux]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[teslalinux] WARNING:\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[teslalinux] ERROR:\033[0m %s\n' "$*"; exit 1; }
+# The installer's hello, on a terminal only (the updater's log gets none): a little car with a bow
+banner() {
+  [[ -t 1 ]] || return 0
+  local p=$'\033[38;5;211m' h=$'\033[38;5;205m' l=$'\033[1;38;5;225m' r=$'\033[0m'
+  printf '%s\n' \
+    "" \
+    "${l}      ✧ ˚ ${h}♡${l} ˚ ✧         ${h}>(♡)<${l}         ✧ ˚ ${h}♡${l} ˚ ✧${r}" \
+    "${p}                    _____/^\\_____${r}" \
+    "${p}               _.--'   .-----.   '--._${r}" \
+    "${p}              /  ___  ( ${h}♡   ♡${p} )  ___  \\${r}" \
+    "${p}             |__/   \\__'-----'__/   \\__|${r}" \
+    "${p}                \\___/           \\___/${r}" \
+    "${l}       ♡ ₊˚ teslalinux · waze in your car ˚₊ ♡${r}" \
+    ""
+}
+
 # A step that would print nothing for minutes: runs "$@" with its output in $PROGRESS_OUT (NUL bytes
 # removed afterwards: ART's output can hold them) and shows the time so far, every second on a
 # terminal and every 30 s otherwise (the updater's log). Returns the command's status; the caller
@@ -1207,6 +1223,7 @@ summary() {
 cmd_install() {
   parse_install_args "$@"
   [[ $EUID -eq 0 ]] || die "run as root (sudo)"
+  banner
   mkdir -p "$LOG_DIR"
   LOG="$LOG_DIR/install-$RUN_TS.log"
   # root only: the summary at the end holds the hotspot password

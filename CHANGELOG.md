@@ -22,6 +22,7 @@ version's.
 - The long steps (the package lists, ART's boot image, compiling Waze) show a running timer instead
   of minutes of silence, and say how long they usually take.
 - No more "ignored null byte" warning while Waze is compiled.
+- It starts with a little pink car with a bow, on a terminal only.
 
 ## [0.6.0] - 2026-11-24
 
