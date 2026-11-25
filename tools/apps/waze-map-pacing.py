@@ -159,8 +159,14 @@ VERIFIED_AUTO = {
         },
     },
 }
+# Waze 5.28.0.0: the frame limiter is 5.27.5's byte for byte (class_text sha256 3ac7d81d...cd05a1 in
+# both); the map loop is the same code renamed com.waze.map.dh. Measured on a Pi 4 (1088x832 H.264,
+# road route, Nov 25 2026): moving 33.3-33.8 frames/s with Full against 30.1-30.2 with Waze's own.
+VERIFIED_AUTO[1030752] = dict(VERIFIED_AUTO[1030750], loop=dict(
+    VERIFIED_AUTO[1030750]["loop"],
+    **{"class": "Lcom/waze/map/dh;", "sha256": "eb27bfda70a18ff39f55c8bb17fc3527027096e2185de89c7d71c5da0b942f15"}))
 # the version names, for the settings page (services/api/api.py map_pacing_status)
-VERIFIED_NAMES = {1030750: "5.27.5.0"}
+VERIFIED_NAMES = {1030750: "5.27.5.0", 1030752: "5.28.0.0"}
 
 ATL_LIMITER = "Landroid/atl/ATLFrameRateLimiter;"
 OBJECT = "Ljava/lang/Object;"

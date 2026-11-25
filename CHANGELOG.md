@@ -15,6 +15,17 @@ version's.
 
 ## [Unreleased]
 
+### The faster map frame rate checked on Waze 5.28
+
+*Settings > Waze > Map frame rate.*
+
+- Waze 5.28.0.0, the newest, has the same frame limiter as 5.27.5, so **Full** and **Automatic**
+  work on it and no longer say "may not work". Measured on a Pi 4 at 1088x832 while driving: 33.5
+  frames/s with Full against Waze's own 30.
+- 5.28 can be chosen as the Waze version to stay on (Settings > Updates).
+- Waze 5.25 and 5.26 have a different frame limiter and keep Waze's own 30 frames/s. The car page's
+  speedometer is not available on 5.28 yet: Waze changed where it reports the speed.
+
 ### Pairing with the car, clearer
 
 *Settings > Tesla.*

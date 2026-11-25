@@ -262,6 +262,7 @@ class AppUpdate(unittest.TestCase):
                                           "playEnabled": False, "dispenserUrl": "", "pinVersionCode": 0, "pinVersionName": ""})
         # the versions offered to pin: the map frame rate's verified ones, then the installed one
         self.assertEqual(st["pinChoices"], [{"versionCode": 1030750, "versionName": "5.27.5.0", "reason": "mapPacing"},
+                                            {"versionCode": 1030752, "versionName": "5.28.0.0", "reason": "mapPacing"},
                                             {"versionCode": 1030736, "versionName": "5.25.0.1", "reason": "installed"}])
         self.assertEqual(st["maxUpload"], 4 << 20)
         self.assertEqual(st["installed"], {"versionCode": 1030736, "versionName": "5.25.0.1"})  # no signer, no history
