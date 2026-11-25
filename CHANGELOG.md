@@ -15,6 +15,15 @@ version's.
 
 ## [Unreleased]
 
+### Pairing with the car, clearer
+
+*Settings > Tesla.*
+
+- The car lists the device's key without a name ("Unknown key"): Tesla's key protocol carries
+  none. Pairing now says to rename it Teslalinux in the car's Controls > Locks (the pencil next to
+  it).
+- The link's messages read as sentences.
+
 ## [0.7.0] - 2026-11-25
 
 Waze follows the route you set on the car's own screen, updates stop taking Waze away for minutes,

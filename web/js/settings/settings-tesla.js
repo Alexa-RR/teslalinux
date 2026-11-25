@@ -83,6 +83,7 @@
       id: "tesla.link",
       title: "Link",
       detail: car.link === "connected" ? null : car.message,
+      more: car.link === "connected" ? "On the car, this device is a key in Controls > Locks. It has no name until you give it one there (the pencil next to it): Teslalinux." : null,
       control: UI.value(LINK_TEXT[car.link] || car.link),
     });
     const rows = [vinRow, linkRow];
@@ -90,11 +91,13 @@
       const pairRow = UI.row({
         id: "tesla.pair",
         title: "Pair with the car",
-        detail: car.pairRequestedAt ? "Request sent: tap your key card on the reader behind the cupholders, then confirm on the car's screen." : "Once: the car asks you to confirm with your key card",
+        detail: car.pairRequestedAt
+          ? "Request sent: tap your key card on the reader behind the cupholders, then confirm on the car's screen. Then rename the new key Teslalinux in Controls > Locks."
+          : "Once: the car asks you to confirm with your key card",
         more: [
           "This device becomes a read-only key of the car (role: vehicle monitor). It reads the car's route and position over Bluetooth; it cannot unlock, open or drive the car.",
           "Sit in the car with it on. The car's prompt waits about 30 seconds for the key card.",
-          "The key shows on the car's Controls > Locks screen, where you can remove it at any time.",
+          "The car lists the key in Controls > Locks without a name: Tesla's key protocol carries none. Tap the pencil next to it and name it Teslalinux. You can remove it there at any time.",
         ],
       });
       const pb = UI.button("Pair", null, "btn--primary", "key");

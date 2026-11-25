@@ -451,7 +451,7 @@ func (d *daemon) readLocation(ctx context.Context, car *vehicle.Vehicle) error {
 func (d *daemon) pair(ctx context.Context) (string, error) {
 	key := loadKey()
 	if key == nil || readVIN() == "" {
-		return "", errors.New("set the car's VIN first")
+		return "", errors.New("Set the car's VIN first.")
 	}
 	d.mu.Lock()
 	car, paired := d.car, d.paired
@@ -460,7 +460,7 @@ func (d *daemon) pair(ctx context.Context) (string, error) {
 		return "The car already knows this device's key.", nil
 	}
 	if car == nil {
-		return "", errors.New("the car is not connected over Bluetooth yet: sit in the car with it on, and try again in a moment")
+		return "", errors.New("The car is not connected over Bluetooth yet: sit in the car with it on, and try again in a moment.")
 	}
 	pub, err := ecdh.P256().NewPublicKey(key.PublicBytes())
 	if err != nil {
@@ -472,7 +472,7 @@ func (d *daemon) pair(ctx context.Context) (string, error) {
 	err = car.SendAddKeyRequestWithRole(pctx, pub, keys.Role_ROLE_VEHICLE_MONITOR, vcsec.KeyFormFactor_KEY_FORM_FACTOR_ANDROID_DEVICE)
 	d.carMu.Unlock()
 	if err != nil {
-		return "", fmt.Errorf("the car did not take the request: %w", err)
+		return "", fmt.Errorf("The car did not take the request: %w", err)
 	}
 	d.mu.Lock()
 	d.st.PairRequestedAt = time.Now().Unix()
@@ -482,13 +482,13 @@ func (d *daemon) pair(ctx context.Context) (string, error) {
 	default:
 	}
 	log.Printf("sent the add-key request")
-	return "Sent. Tap your key card on the reader behind the cupholders, then confirm on the car's screen.", nil
+	return "Sent. Tap your key card on the reader behind the cupholders, then confirm on the car's screen. The car lists the new key without a name: rename it Teslalinux in Controls > Locks (the pencil next to it).", nil
 }
 
 func (d *daemon) setVIN(vin string) error {
 	vin = strings.ToUpper(strings.TrimSpace(vin))
 	if !vinRe.MatchString(vin) {
-		return errors.New("a VIN has 17 letters and digits (no I, O or Q)")
+		return errors.New("A VIN has 17 letters and digits (no I, O or Q).")
 	}
 	if _, err := ensureKey(); err != nil {
 		return err

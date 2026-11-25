@@ -25,6 +25,10 @@ as its position instead of the car browser's.
    30 seconds). The link shows **Connected over Bluetooth** a few seconds later.
 3. **Waze follows the car's route** is on by default. **Use the car's GPS** is off by default.
 
+4. On the car, Controls > Locks lists the new key without a name ("Unknown key"): an add-key
+   request carries the key, its role and a form factor, nothing more. Tap the pencil next to it and
+   name it Teslalinux.
+
 **Forget the car** removes the VIN and the key from the device. The car keeps listing the key
 until it is removed on its Locks screen.
 
