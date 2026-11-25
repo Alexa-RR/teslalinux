@@ -15,6 +15,11 @@ version's.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-25
+
+The faster map frame rate works on Waze 5.28, the newest, and pairing with the car says how to
+give the device's key its name.
+
 ### The faster map frame rate checked on Waze 5.28
 
 *Settings > Waze > Map frame rate.*
