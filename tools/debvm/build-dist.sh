@@ -475,7 +475,9 @@ step_tlplay() {
 have_carkey_inputs() { command -v go >/dev/null 2>&1 && [[ -f "$CARKEY_SRC/go.mod" ]]; }
 step_carkey() {
   have_carkey_inputs || die "teslalinux-carkey needs Go (apt-get install golang-go) and the source in $CARKEY_SRC"
-  export GOPATH="$B/go" GOCACHE="$B/go-cache" GOFLAGS=-mod=readonly GOTOOLCHAIN=local CGO_ENABLED=0
+  # -buildvcs=false: no git stamp in the binary (CI's checkout belongs to another user, so git refuses
+  # it; the dist's MANIFEST already names the commit)
+  export GOPATH="$B/go" GOCACHE="$B/go-cache" GOFLAGS="-mod=readonly -buildvcs=false" GOTOOLCHAIN=local CGO_ENABLED=0
   install -d "$PREFIX/bin"
   (cd "$CARKEY_SRC" && go build -trimpath -ldflags='-s -w' -o "$PREFIX/bin/teslalinux-carkey" .)
 }

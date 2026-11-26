@@ -20,6 +20,10 @@ version's.
 The faster map frame rate works on Waze 5.28, the newest, and pairing with the car says how to
 give the device's key its name.
 
+This is also the first published build of everything in [0.7.0](CHANGELOG.md), whose build failed:
+Waze follows the route you set on the car's own screen, updates no longer take Waze away for
+minutes, logs can be saved to look at later, and the USB speaker keeps its volume after a restart.
+
 ### The faster map frame rate checked on Waze 5.28
 
 *Settings > Waze > Map frame rate.*
@@ -39,6 +43,14 @@ give the device's key its name.
   none. Pairing now says to rename it Teslalinux in the car's Controls > Locks (the pencil next to
   it).
 - The link's messages read as sentences.
+
+### Platform
+
+*For developers.*
+
+- `build-dist.sh` builds `teslalinux-carkey` with `-buildvcs=false`: in CI, git refuses the
+  checkout (another user owns it), so Go's VCS stamp failed the 0.7.0 and first 0.8.0 builds. The
+  dist's MANIFEST already names the commit.
 
 ## [0.7.0] - 2026-11-25
 
