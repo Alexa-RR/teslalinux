@@ -219,8 +219,9 @@ def offered(st):
 
 # ---------------------------------------------------------------------------- the download
 
-def download(st, rel, allow_metered, now):
-    """rel's four files into staging/TAG, verified, then moved to pending/TAG. True when pending."""
+def download(st, rel, allow_metered, now, via=None):
+    """rel's four files into staging/TAG, verified, then moved to pending/TAG. True when pending.
+    via: the network interface to download through (sysm.download_allowed), None for the default route."""
     tag = rel["tag"]
     need = rel["size"] * 12 + (1 << 30)  # the tarball, its unpacked dist, the old dist kept beside it
     if sysm.free_bytes(STATE_DIR) < rel["size"] * 2 or sysm.free_bytes(sysm.DISTS) < need:
@@ -244,7 +245,7 @@ def download(st, rel, allow_metered, now):
         if allow_metered or time.monotonic() - last_net[0] < 20:
             return None
         last_net[0] = time.monotonic()
-        ok, why, _m = sysm.download_allowed(False)
+        ok, why, _m, _via = sysm.download_allowed(False)
         return None if ok else why
 
     try:
@@ -256,7 +257,7 @@ def download(st, rel, allow_metered, now):
             start = done_before  # the files already complete; download_file counts this one's resumed part
             gh.download_file(gh.asset_url(st["repo"], tag, name), out, rel["assets"][name],
                              progress=lambda d, s=start: progress(tag, min(total, s + d), total),
-                             keep_going=keep_going, deadline=now + DOWNLOAD_DEADLINE)
+                             keep_going=keep_going, deadline=now + DOWNLOAD_DEADLINE, iface=via)
             done_before = sum(os.path.getsize(os.path.join(staging, n)) for n in order if os.path.exists(os.path.join(staging, n)))
         man = gh.verify_release(staging, rel)
     except gh.ReleaseError as e:
@@ -518,11 +519,15 @@ def cycle(st, flags, settings, now, booting=False):
             event(st, "up-to-date", "Teslalinux %s is the latest release" % inst_tag, now=now)
     if rel and not (st.get("pending") and st["pending"]["tag"] == rel["tag"]) and not booting:
         if settings["autoUpdate"] or "download" in flags or st.get("meteredFor") == rel["tag"]:
-            allowed, why, _metered = sysm.download_allowed(st.get("meteredFor") == rel["tag"])
+            # mobile data: the driver's tap for this release, or the "Update over mobile data" setting
+            allow = st.get("meteredFor") == rel["tag"] or sysm.metered_allowed()
+            allowed, why, _metered, via = sysm.download_allowed(allow)
             if not allowed:
                 event(st, "waiting-unmetered", "%s is available; %s" % (rel["tag"], why), now=now)
             else:
-                download(st, rel, st.get("meteredFor") == rel["tag"], now)
+                if via:
+                    log("downloading %s %s" % (rel["tag"], why))
+                download(st, rel, allow, now, via)
         else:
             event(st, "available", "%s is available; automatic updates are off" % rel["tag"], now=now)
     if st.get("pending") and not booting:

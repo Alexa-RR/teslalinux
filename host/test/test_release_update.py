@@ -103,9 +103,10 @@ ru.log = lambda m: None
 gh, sysm = ru.gh, ru.sysm
 # the unmetered/car rules come from the app updater; here they are switches
 NET = {"unmetered": True, "idle": True, "why": "test"}
-REAL_DOWNLOAD_ALLOWED = sysm.download_allowed
-sysm.download_allowed =lambda allow: ((True, "unmetered (test)", False) if NET["unmetered"]
-                                       else (bool(allow), "uplink is metered (test)", True))
+REAL_DOWNLOAD_ALLOWED, REAL_METERED_ALLOWED = sysm.download_allowed, sysm.metered_allowed
+sysm.download_allowed = lambda allow: ((True, "unmetered (test)", False, NET.get("via")) if NET["unmetered"]
+                                       else (bool(allow), "uplink is metered (test)", True, None))
+sysm.metered_allowed = lambda: bool(NET.get("meteredSetting"))
 sysm.car_idle = lambda: (NET["idle"], NET["why"])
 sysm.unavailable_reason_orig = sysm.unavailable_reason
 sysm.unavailable_reason = lambda: None if not NET.get("unavailable") else NET["unavailable"]
@@ -186,7 +187,7 @@ class Base(unittest.TestCase):
         del SRV_LOG[:]
         SRV_STATE["fail"] = None
         SRV_STATE["releases"] = [make_release(*NEW)]
-        NET.update(unmetered=True, idle=True, why="test", unavailable=None)
+        NET.update(unmetered=True, idle=True, why="test", unavailable=None, via=None, meteredSetting=False)
         for k in ("FAKE_INSTALL_FAIL", "FAKE_INSTALL_NO_SET", "FAKE_PREPARE_FAIL"):
             os.environ.pop(k, None)
         ru.CHECK_INTERVAL = 86400
@@ -307,6 +308,24 @@ class Cycle(Base):
         self.assertEqual(st["pending"]["tag"], "v0.6.0")
         self.assertEqual(st["lastResult"], "waiting-idle")
         self.assertEqual(self.prefix_release(), "v0.5.0")
+
+    def test_update_over_mobile_data_setting(self):
+        NET.update(unmetered=False, meteredSetting=True)
+        NET["idle"] = False
+        st = self.run_cycle()
+        self.assertEqual(st["pending"]["tag"], "v0.6.0", st["lastMessage"])
+
+    def test_download_through_the_uplink_beside_the_route(self):
+        seen = []
+        real = gh.download_file
+        gh.download_file = lambda *a, **kw: (seen.append(kw.get("iface")), real(*a, **dict(kw, iface=None)))[1]
+        try:
+            NET.update(via="wlan1", idle=False)
+            st = self.run_cycle()
+        finally:
+            gh.download_file = real
+        self.assertEqual(st["pending"]["tag"], "v0.6.0", st["lastMessage"])
+        self.assertEqual(set(seen), {"wlan1"})
 
     def test_resumed_download(self):
         rel = SRV_STATE["releases"][0]
@@ -563,6 +582,18 @@ class UplinkRule(unittest.TestCase):
             self.assertEqual(REAL_DOWNLOAD_ALLOWED(False)[:1], (True,))
             au.uplink_metered = lambda: (0, False, None)
             self.assertFalse(REAL_DOWNLOAD_ALLOWED(False)[0])  # unknown counts as metered
+            # the car's traffic on LTE, the backup Wi-Fi card joined and working beside it: through the card
+            au.uplink_metered = lambda: (4, True, "eth1")
+            au.side_uplink = lambda exclude=None: "wlan1"
+            self.assertEqual(REAL_DOWNLOAD_ALLOWED(False)[0::3], (True, "wlan1"))
+            self.assertEqual(REAL_DOWNLOAD_ALLOWED(True)[0::3], (True, "wlan1"))  # unmetered first, also with the setting
+            # the setting: the app updater's allowMetered
+            with open(P("au-settings.json"), "w") as f:
+                json.dump({"allowMetered": True}, f)
+            au.SETTINGS_FILE = P("au-settings.json")
+            self.assertTrue(REAL_METERED_ALLOWED())
+            au.SETTINGS_FILE = P("none.json")
+            self.assertFalse(REAL_METERED_ALLOWED())
         finally:
             sysm.APPUPDATE, sysm._appupdate = P("none"), None
 

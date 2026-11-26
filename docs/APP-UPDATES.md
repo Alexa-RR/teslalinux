@@ -148,8 +148,16 @@ Settings > App updates > **Upload an update** takes a `.apkm` (APKMirror), `.xap
    unmetered, counts as metered until its connection is set unmetered explicitly
    (`nmcli connection modify <name> connection.metered no`), as Android keeps mobile data metered
    unless the carrier configures it otherwise. `yes`, `guess-yes` (a modem) and unknown are metered.
-   "Allow updates over LTE" lifts all of that. Otherwise the run records "waiting for Wi-Fi or
-   Ethernet", and the next Wi-Fi uplink (the dispatcher hook) continues.
+   When the default route is metered, a working unmetered uplink beside it is used instead
+   (`side_uplink`): teslalinux-uplink keeps the car on LTE while LTE works (its default, prefer
+   "lte") even when the backup Wi-Fi card has joined a network or Ethernet is plugged in. Any
+   Wi-Fi or Ethernet candidate in `/run/teslalinux/uplink.json` that its last check found reaching
+   the internet and that passes the rule above itself qualifies; tlplay then binds every connection
+   to it (`--interface`, SO_BINDTODEVICE), and the car's own traffic stays where it is.
+   "Update over mobile data" (Settings > Updates, `allowMetered`; Teslalinux releases follow it too)
+   allows a metered uplink when there is no such one. Otherwise the run records "waiting for Wi-Fi
+   or Ethernet", and the next Wi-Fi uplink (the dispatcher hook, again 45 s later once
+   teslalinux-uplink has checked the new link) continues.
 3. **Download** into `/var/lib/teslalinux/appupdate/staging/<versionCode>/`, resumable across runs.
    Limits: 600 MB per file, 1 GB in total, a 90-minute deadline, and 2 minutes without data counts as a
    stall. Splits: `config.arm64_v8a`, the density (xhdpi, else the nearest), and the device language
@@ -257,7 +265,7 @@ pacing tool finds the same code in it ("may not work"), else falls back to Waze'
 
 * Settings > **App updates**: **Update source** (APKPure (automatic) / Manual uploads only / Google Play
   via Aurora (unavailable unless enabled)), **Update Waze automatically**, **Waze version** (the pin
-  above), **Allow updates over LTE**,
+  above), **Update over mobile data** (its own group, for Teslalinux releases too),
   the status ("Update server unavailable since ...", a verified update waiting for the car to
   disconnect, the running health check, the last result, the last notice), **Check for an update now**,
   **Upload an update** (progress, then the verification result), and **Advanced: Google Play via a token

@@ -574,6 +574,40 @@ class StateMachine(unittest.TestCase):
         au.cmd_run(False)
         self.assertEqual(self.state()["pending"]["versionCode"], VC, self.state()["lastMessage"])
 
+    def test_downloads_through_the_wifi_beside_lte(self):
+        # the car's traffic stays on LTE (teslalinux-uplink prefers it); the backup Wi-Fi card joined a network
+        self.metered, self.cellular = 3, True
+        self.connected = True
+        real = au.side_uplink
+        au.side_uplink = lambda exclude=None: "wlan1"
+        try:
+            au.cmd_run(False)
+        finally:
+            au.side_uplink = real
+        self.assertEqual(self.state()["pending"]["versionCode"], VC, self.state()["lastMessage"])
+        dl = [c for c in self.calls("tlplay.log") if "download" in c][0]
+        self.assertIn("--interface wlan1", dl)
+
+    def test_side_uplink(self):
+        saved = {k: getattr(au, k) for k in ("UPLINK_STATE", "nm_device", "sysfs_driver")}
+        try:
+            au.UPLINK_STATE = self.t("uplink.json")
+            self.assertIsNone(au.side_uplink("eth1"))  # no teslalinux-uplink state
+            cands = [{"iface": "eth1", "kind": "ethernet", "ok": True},    # the route itself (an LTE stick)
+                     {"iface": "wlan2", "kind": "wifi", "ok": False},      # joined, no internet
+                     {"iface": "usb0", "kind": "phone", "ok": True},       # tethering is mobile data
+                     {"iface": "wlan1", "kind": "wifi", "ok": True}]
+            with open(au.UPLINK_STATE, "w") as f:
+                json.dump({"candidates": cands}, f)
+            au.sysfs_driver = lambda iface: "brcmfmac"
+            au.nm_device = lambda iface: {"type": 2, "metered": 4, "driver": "brcmfmac"}
+            self.assertEqual(au.side_uplink("eth1"), "wlan1")
+            au.nm_device = lambda iface: {"type": 2, "metered": 3, "driver": "brcmfmac"}  # a hotspot NetworkManager calls metered
+            self.assertIsNone(au.side_uplink("eth1"))
+        finally:
+            for k, v in saved.items():
+                setattr(au, k, v)
+
     def test_allow_over_lte_setting(self):
         self.metered = 3
         self.connected = True

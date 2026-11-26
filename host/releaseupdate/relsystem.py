@@ -264,16 +264,27 @@ def appupdate():
 
 
 def download_allowed(allow_metered):
-    """(allowed, why, metered): the app updater's rule. LTE is metered; Wi-Fi and Ethernet that
-    NetworkManager calls unmetered are not. Without the app updater nothing counts as unmetered."""
+    """(allowed, why, metered, via): the app updater's rule (its download_route). LTE is metered;
+    Wi-Fi and Ethernet that NetworkManager calls unmetered are not, also when the car's traffic goes
+    over LTE beside them: via is then that interface, to bind the download to (None: the default
+    route). Without the app updater nothing counts as unmetered."""
     au = appupdate()
     if au is None:
-        return bool(allow_metered), "the uplink cannot be classified (no teslalinux-appupdate)", True
-    metered, cellular, _iface = au.uplink_metered()
-    ok, why = au.download_allowed(metered, False, cellular)
+        return bool(allow_metered), "the uplink cannot be classified (no teslalinux-appupdate)", True, None
+    ok, why, via = au.download_route(False)
     if ok:
-        return True, why, False
-    return bool(allow_metered), why, True
+        return True, why, False, via
+    return bool(allow_metered), why, True, None
+
+
+def metered_allowed():
+    """The "Update over mobile data" setting: the app updater's allowMetered (one setting for
+    Teslalinux and Waze updates)."""
+    au = appupdate()
+    try:
+        return bool(au and au.load_settings().get("allowMetered"))
+    except Exception:  # a broken settings file never stops the updater
+        return False
 
 
 def app_interface():

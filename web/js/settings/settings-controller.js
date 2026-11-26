@@ -181,7 +181,7 @@
         ["upd.source", "updates", "Update source", "apkpure google play aurora manual source"],
         ["upd.auto", "updates", "Update Waze automatically", "automatic update auto", () => this._autoUpdates()],
         ["upd.pin", "updates", "Waze version", "pin version stay latest", () => this._autoUpdates()],
-        ["upd.lte", "updates", "Download over LTE", "metered mobile data download", () => this._autoUpdates()],
+        ["upd.lte", "updates", "Update over mobile data", "metered mobile data download lte", () => this._autoUpdates()],
         ["upd.upload", "updates", "Upload an update", "upload apk apkm xapk file manual"],
         ["upd.play", "updates", "Google Play via a token dispenser", "google play dispenser advanced aurora"],
         ["upd.system", "updates", "System updates", "debian apt os system packages security kernel"],
@@ -1661,8 +1661,29 @@
       const out = [];
       if (st || ru) out.push(this._releaseUpdateGroup(token, st, ru));
       if (info) out.push(...this._wazeUpdateGroups(token, info));
+      if (info && this._autoUpdates()) out.push(this._mobileDataGroup(token, info));
       if (su) out.push(this._systemUpdateGroup(token, su));
       return out;
+    }
+
+    /**
+     * One setting for Teslalinux and Waze updates: download over LTE too (the app updater's
+     * allowMetered, which host/teslalinux-release-update reads as well). A Wi-Fi or Ethernet that is
+     * connected beside LTE is used first either way.
+     */
+    _mobileDataGroup(token, info) {
+      const set = info.settings || {};
+      const row = UI.row({
+        id: "upd.lte",
+        title: "Update over mobile data",
+        detail: "Teslalinux and Waze updates download over LTE too. Off: they wait for Wi-Fi or Ethernet.",
+        control: UI.toggle(set.allowMetered === true, (on) =>
+          UI.save(row, () => this.apiClient.setAppUpdateSettings({ allowMetered: on })).then((ok) => {
+            if (ok) global.setTimeout(() => token === this._renderToken && this._rerender(), 300);
+            return ok;
+          }), "Update over mobile data"),
+      });
+      return UI.group("Mobile data", [row]);
     }
 
     /**
@@ -1732,7 +1753,7 @@
       const auto = UI.row({
         id: "upd.releaseauto",
         title: "Update Teslalinux automatically",
-        detail: "Downloads a new release over Wi-Fi or Ethernet and installs it while the car is not connected.",
+        detail: "Downloads a new release and installs it while the car is not connected.",
         control: UI.toggle(ru.settings && ru.settings.autoUpdate !== false, (on) => UI.save(auto, () => this.apiClient.releaseUpdateAction({ autoUpdate: on }).then((r) => {
           if (!r.ok) throw UI.userError("Not saved: " + (r.message || "the device did not answer"));
           return true;
@@ -1970,13 +1991,7 @@
                   if (v != null && Number(v) !== pinCode) pinSave(v);
                 }),
         });
-        const lte = UI.row({
-          id: "upd.lte",
-          title: "Download over LTE",
-          detail: "About 200 MB. Off: waits for Wi-Fi or Ethernet",
-          control: UI.toggle(set.allowMetered === true, (on) => saveSet(lte, { allowMetered: on }), "Download over LTE"),
-        });
-        rows.push(au, pin, lte);
+        rows.push(au, pin);
       }
 
       // a manual upload (every source): an APKMirror .apkm, .xapk, .apks, zip of APKs or one APK

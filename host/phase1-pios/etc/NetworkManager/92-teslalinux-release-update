@@ -13,6 +13,10 @@ case "$ACTION" in
 		# only when a release is waiting for an unmetered uplink, or a download was cut short
 		grep -q '"lastResult": "\(waiting-unmetered\|download-failed\)"' "$STATE" 2>/dev/null || exit 0
 		systemctl start --no-block teslalinux-release-update.service >/dev/null 2>&1
+		# once more when teslalinux-uplink has checked the new link: a Wi-Fi card that joins beside LTE
+		# is used for downloads only after that check found it reaching the internet
+		systemd-run --quiet --collect --unit=teslalinux-release-update-relink --on-active=45 \
+			systemctl start --no-block teslalinux-release-update.service >/dev/null 2>&1
 		;;
 esac
 exit 0

@@ -77,6 +77,8 @@ TLPLAY = E("APPUPDATE_TLPLAY", "/usr/local/bin/tlplay")
 DEVICE_PROPERTIES = E("APPUPDATE_DEVICE_PROPERTIES", "/usr/local/share/teslalinux/appupdate/device.properties")
 APPS_TOOLS = E("APPUPDATE_APPS_TOOLS", "/usr/local/lib/teslalinux/apps")  # install-app.sh, apk-info.py, apk_verify.py
 ENV_FILE = E("TESLALINUX_ENV", "/etc/teslalinux/env")
+# host/teslalinux-uplink's view of every uplink (each one's kind and whether it reaches the internet)
+UPLINK_STATE = E("APPUPDATE_UPLINK_STATE", "/run/teslalinux/uplink.json")
 # A first install has no installed app to compare the signer with: it must carry the signer pinned
 # here (APPUPDATE_FIRST_SIGNER, SHA-256 of the signing certificate; tools/pios/install.sh writes it to
 # appupdate.env), else it is refused. Waze's is known: the one of every Waze set installed so far.
@@ -433,6 +435,44 @@ def download_allowed(metered, allow_metered, cellular=False):
         return False, "uplink is cellular (NetworkManager guesses unmetered); waiting for Wi-Fi or Ethernet"
     return False, "uplink is metered (%s%s); waiting for Wi-Fi or Ethernet" % (NM_METERED.get(metered, "unknown"),
                                                                                  ", cellular" if cellular else "")
+
+
+def side_uplink(exclude=None):
+    """A working unmetered uplink beside the default route, or None. teslalinux-uplink keeps the car on
+    LTE while LTE works (prefer "lte", its default) even when the backup Wi-Fi card has joined a
+    network or Ethernet is plugged in; a download then goes through that one instead of waiting (bound
+    to it: tlplay --interface, SO_BINDTODEVICE). Only an uplink teslalinux-uplink found reaching the
+    internet on its last check, of kind Wi-Fi or Ethernet, that passes download_allowed itself."""
+    try:
+        with open(UPLINK_STATE) as f:
+            cands = json.load(f).get("candidates") or []
+    except (OSError, ValueError, AttributeError):
+        return None
+    for c in cands:
+        iface = c.get("iface") if isinstance(c, dict) else None
+        if not iface or iface == exclude or not c.get("ok") or c.get("kind") not in ("wifi", "ethernet"):
+            continue
+        dev = nm_device(iface) or {}
+        cellular = is_cellular(iface, dev.get("type"), dev.get("driver") or sysfs_driver(iface))
+        if download_allowed(dev.get("metered"), False, cellular)[0]:
+            return iface
+    return None
+
+
+def download_route(allow_metered):
+    """(allowed, why, iface): whether a download may start now, and the interface to bind it to (None:
+    the default route). An unmetered default route first, then an unmetered uplink beside it, and only
+    then a metered one when allow_metered says so."""
+    metered, cellular, route_iface = uplink_metered()
+    ok, why = download_allowed(metered, False, cellular)
+    if ok:
+        return True, why, None
+    side = side_uplink(exclude=route_iface)
+    if side:
+        return True, "through %s, unmetered (the car's own traffic stays on %s)" % (side, route_iface or "the default route"), side
+    if allow_metered:
+        return True, "allowed over mobile data (setting)", None
+    return False, why, None
 
 
 # ---------------------------------------------------------------------------- car connected?
@@ -844,8 +884,9 @@ def watch_health(st):
 
 # ---------------------------------------------------------------------------- the cycle
 
-def stage_download(st, settings, vc, vn, now):
-    """Download vc into staging/, verify it, move it to pending/. True when pending holds vc afterwards."""
+def stage_download(st, settings, vc, vn, now, via=None):
+    """Download vc into staging/, verify it, move it to pending/. True when pending holds vc afterwards.
+    via: the network interface to download through (download_route), None for the default route."""
     staging = _p("staging", str(vc))
     for d in os.listdir(_p("staging")) if os.path.isdir(_p("staging")) else []:
         if d != str(vc):  # an older, abandoned download
@@ -858,6 +899,8 @@ def stage_download(st, settings, vc, vn, now):
             "--max-file-bytes", str(MAX_FILE_BYTES), "--max-total-bytes", str(MAX_TOTAL_BYTES),
             "--deadline", str(DOWNLOAD_DEADLINE)]
     args += ["--split", "|".join("config.%s" % q for q in lang_splits())]
+    if via:
+        args = ["--interface", via] + args
     res = tlplay(settings, *args, timeout=DOWNLOAD_DEADLINE + 600)
     if not res.get("ok"):
         record_failure(st, res.get("error", "download"), "download of %s: %s" % (vn, res.get("message")), now)
@@ -946,12 +989,13 @@ def cycle(force=False):
     elif now < int(st.get("nextTryAt") or 0):
         return st
     if st.get("wanted") and not st.get("pending"):
-        metered, cellular, _iface = uplink_metered()
-        allowed, why = download_allowed(metered, settings["allowMetered"], cellular)
+        allowed, why, via = download_route(settings["allowMetered"])
         if not allowed:
             event(st, "waiting-unmetered", "Waze %s is available; %s" % (st["wanted"]["versionName"], why), now)
             return st
-        stage_download(st, settings, st["wanted"]["versionCode"], st["wanted"]["versionName"], now)
+        if via:
+            log("downloading %s" % why)
+        stage_download(st, settings, st["wanted"]["versionCode"], st["wanted"]["versionName"], now, via)
     return st
 
 

@@ -6,9 +6,11 @@ install.sh, SHA256SUMS; resumable) and its verification against the release's ow
 Standard library only.
 """
 import hashlib
+import http.client
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -129,10 +131,59 @@ def asset_url(repo, tag, name):
     return "%s/%s/releases/download/%s/%s" % (DOWNLOAD_BASE, repo, tag, name)
 
 
-def download_file(url, out, size, progress=None, keep_going=None, deadline=None, timeout=30):
+def _bound_create_connection(iface):
+    """socket.create_connection, each socket bound to one network interface before it connects
+    (SO_BINDTODEVICE; unprivileged since Linux 5.7): the route through that interface is used whatever
+    the default route is."""
+    opt = getattr(socket, "SO_BINDTODEVICE", 25)
+
+    def create(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, *args, **kw):
+        host, port = address
+        err = None
+        for af, kind, proto, _name, sa in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+            s = socket.socket(af, kind, proto)
+            try:
+                s.setsockopt(socket.SOL_SOCKET, opt, iface.encode() + b"\0")
+                if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                    s.settimeout(timeout)
+                if source_address:
+                    s.bind(source_address)
+                s.connect(sa)
+                return s
+            except OSError as e:
+                err = e
+                s.close()
+        raise err or OSError("%s has no address" % host)
+    return create
+
+
+def _opener(iface):
+    """A urllib opener whose HTTP and HTTPS connections (redirects too) go through iface."""
+    create = _bound_create_connection(iface)
+
+    def conn(cls):
+        def make(host, **kw):
+            c = cls(host, **kw)
+            c._create_connection = create
+            return c
+        return make
+
+    class Http(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(conn(http.client.HTTPConnection), req)
+
+    class Https(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(conn(http.client.HTTPSConnection), req, context=self._context)
+
+    return urllib.request.build_opener(Http(), Https())
+
+
+def download_file(url, out, size, progress=None, keep_going=None, deadline=None, timeout=30, iface=None):
     """url into out, resuming out.part. size is the release's asset size: the file must have exactly
     that many bytes. progress(done) is called about once a second; keep_going() returning a reason
-    stops the download (the part stays for the next try): ReleaseError("paused", reason)."""
+    stops the download (the part stays for the next try): ReleaseError("paused", reason). iface:
+    the network interface to download through (None: the default route)."""
     limit = MAX_TARBALL if DIST_RE.fullmatch(os.path.basename(out)) else SMALL_MAX
     if not isinstance(size, int) or not 0 < size <= limit:
         raise ReleaseError("release", "%s: size %r is not plausible" % (os.path.basename(out), size))
@@ -144,7 +195,8 @@ def download_file(url, out, size, progress=None, keep_going=None, deadline=None,
     if done < size:
         headers = {"Range": "bytes=%d-" % done} if done else {}
         try:
-            r = urllib.request.urlopen(_request(url, headers), timeout=timeout)
+            opener = _opener(iface) if iface else urllib.request.build_opener()
+            r = opener.open(_request(url, headers), timeout=timeout)
         except urllib.error.HTTPError as e:
             if e.code == 416 and done:
                 os.unlink(part)

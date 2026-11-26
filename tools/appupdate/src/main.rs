@@ -19,6 +19,8 @@
 //!   tlplay --source play [options] auth   fetch a new dispensed login, cache it, print the account's email
 //!
 //! Options: --source apkpure|play (TLPLAY_SOURCE)  --timeout S (per request, default 60)
+//!          --interface IFACE (every connection through that network interface, SO_BINDTODEVICE:
+//!          teslalinux-appupdate passes the device's Wi-Fi or Ethernet while the default route is LTE)
 //!          play only: --auth-file F (default /etc/teslalinux/play/auth.json; 0600, the token is never
 //!          printed)  --dispenser URL  --device-properties F  --device NAME (default px_tablet)  --locale en_US
 //!
@@ -74,6 +76,7 @@ struct Opts {
     locale: String,
     timeout: Duration,
     user_agent: String,
+    interface: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -85,6 +88,15 @@ struct CachedAuth {
     device: String,
     #[serde(rename = "obtainedAt")]
     obtained_at: u64,
+}
+
+/// An HTTP client builder bound to --interface when one is given (SO_BINDTODEVICE on Linux)
+fn http_builder(opts: &Opts) -> reqwest::ClientBuilder {
+    let b = reqwest::Client::builder();
+    match &opts.interface {
+        Some(i) => b.interface(i),
+        None => b,
+    }
 }
 
 fn now() -> u64 {
@@ -147,7 +159,7 @@ fn java_unescape(s: &str) -> String {
 async fn fetch_dispensed(opts: &Opts) -> Res<CachedAuth> {
     let props = read_device_section(&opts.device_properties, &opts.device)?;
     let body = serde_json::to_vec(&props).expect("properties serialise");
-    let client = reqwest::Client::builder()
+    let client = http_builder(opts)
         .timeout(opts.timeout)
         .user_agent(opts.user_agent.clone())
         .build()
@@ -526,7 +538,7 @@ async fn cmd_download(opts: &Opts, pkg: &str, vc: i64, out: &Path, want: &[Strin
             None => missing.push(w.clone()),
         }
     }
-    let client = reqwest::Client::builder()
+    let client = http_builder(opts)
         .connect_timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| fail(EXIT_DOWNLOAD, "download", format!("http client: {}", e)))?;
@@ -548,7 +560,7 @@ const APKPURE_SDK: u32 = 32; // the SDK level ATL reports (x-sv)
 const APKPURE_ABIS: &str = "arm64-v8a";
 
 async fn apkpure_variants(opts: &Opts, pkg: &str) -> Res<(Vec<apkpure::Variant>, usize, apkpure::Http)> {
-    let http = apkpure::Http::new(&opts.user_agent, opts.timeout).map_err(|m| fail(EXIT_PLAY, "apkpure", m))?;
+    let http = apkpure::Http::new(&opts.user_agent, opts.timeout, opts.interface.as_deref()).map_err(|m| fail(EXIT_PLAY, "apkpure", m))?;
     let body = http.versions(pkg, APKPURE_SDK, APKPURE_ABIS).await.map_err(|(_, m)| fail(EXIT_PLAY, "apkpure", m))?;
     let n = body.len();
     let v = apkpure::parse_versions(&body, pkg).map_err(|m| fail(EXIT_NOT_AVAILABLE, "not_available", m))?;
@@ -618,7 +630,7 @@ async fn apkpure_download(opts: &Opts, pkg: &str, vc: i64, out: &Path, want: &[S
     let mut missing = Vec::new();
     if v.kind != "XAPK" {
         // a single APK (no splits): the whole file is base.apk
-        let client = reqwest::Client::builder().connect_timeout(Duration::from_secs(30)).build().map_err(|e| derr(e.to_string()))?;
+        let client = http_builder(opts).connect_timeout(Duration::from_secs(30)).build().map_err(|e| derr(e.to_string()))?;
         let mut total = 0u64;
         let n = fetch_file(&client, &v.url, out, "base.apk", &lim, &mut total).await?;
         files.push(json!({"file": "base.apk", "bytes": n}));
@@ -666,6 +678,7 @@ async fn run(args: Vec<String>) -> Res<Value> {
         timeout: Duration::from_secs(60),
         // who we are, always: never another client's identity (no option changes it)
         user_agent: format!("teslalinux-appupdate/{}", env!("CARGO_PKG_VERSION")),
+        interface: None,
     };
     let mut pos = Vec::new();
     let mut source = std::env::var("TLPLAY_SOURCE").unwrap_or_else(|_| "apkpure".into());
@@ -683,6 +696,7 @@ async fn run(args: Vec<String>) -> Res<Value> {
             "--locale" => opts.locale = val()?,
             "--timeout" => opts.timeout = Duration::from_secs(num(val()?)?),
             "--source" => source = val()?,
+            "--interface" => opts.interface = Some(val()?),
             "--version-code" => vc = Some(val()?.parse::<i64>().map_err(|_| usage())?),
             "--out" => out = Some(PathBuf::from(val()?)),
             "--split" => want.push(val()?),

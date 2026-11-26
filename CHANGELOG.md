@@ -15,6 +15,28 @@ version's.
 
 ## [Unreleased]
 
+### Updates use the Wi-Fi the device is on
+
+*Settings > Updates.*
+
+- When the device has joined a Wi-Fi network (Settings > Connections > Backup Wi-Fi) or has
+  Ethernet, Teslalinux and Waze updates download through it, also while the car's internet keeps
+  going over LTE. Before, they waited for Wi-Fi although it was connected.
+- **Update over mobile data**: one setting for Teslalinux and Waze updates, off by default. On,
+  they also download over LTE by themselves. It replaces Waze's own "Download over LTE".
+
+### Platform
+
+*For developers.*
+
+- `teslalinux-appupdate`'s `download_route`: an unmetered default route first, then a working
+  unmetered uplink beside it from teslalinux-uplink's state (`side_uplink`), then LTE when
+  `allowMetered` allows it. The download is bound to that interface: `tlplay --interface`
+  (reqwest's `ClientBuilder::interface`) and, in `teslalinux-release-update`, a urllib opener whose
+  sockets use SO_BINDTODEVICE. The release updater follows `allowMetered` too. The
+  NetworkManager hooks start the updaters again 45 s after a link comes up, once teslalinux-uplink
+  has checked it.
+
 ## [0.8.0] - 2026-11-25
 
 The faster map frame rate works on Waze 5.28, the newest, and pairing with the car says how to

@@ -162,8 +162,13 @@ pub struct Http {
 }
 
 impl Http {
-    pub fn new(ua: &str, timeout: Duration) -> Result<Http, String> {
-        let client = reqwest::Client::builder()
+    /// interface: every connection through that network interface (tlplay --interface)
+    pub fn new(ua: &str, timeout: Duration, interface: Option<&str>) -> Result<Http, String> {
+        let mut b = reqwest::Client::builder();
+        if let Some(i) = interface {
+            b = b.interface(i);
+        }
+        let client = b
             .connect_timeout(Duration::from_secs(30))
             .user_agent(ua.to_string())
             .build()
